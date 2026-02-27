@@ -56,6 +56,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     document.getElementById("btn-apply-filters").addEventListener("click", applyFilters);
     document.getElementById("btn-clear-filters").addEventListener("click", clearFilters);
 
+    // Coords source filter (auto-refresh map on change)
+    document.getElementById("coords-filter").addEventListener("change", () => {
+        if (state.activeTab === "map") {
+            if (state.mapMode === "heatmap") loadHeatmap();
+            else loadMapMarkers();
+        }
+    });
+
     // Search
     document.getElementById("btn-search").addEventListener("click", doSearch);
     document.getElementById("search-input").addEventListener("keydown", e => {
@@ -117,6 +125,7 @@ function getFilterParams() {
     const source = document.getElementById("filter-source").value;
     const hynek = document.getElementById("filter-hynek").value;
     const vallee = document.getElementById("filter-vallee").value;
+    const coords = document.getElementById("coords-filter").value;
 
     if (df) p.set("date_from", df);
     if (dt) p.set("date_to", dt);
@@ -125,6 +134,7 @@ function getFilterParams() {
     if (source) p.set("source", source);
     if (hynek) p.set("hynek", hynek);
     if (vallee) p.set("vallee", vallee);
+    if (coords && coords !== "all") p.set("coords", coords);
 
     return p;
 }
@@ -192,8 +202,10 @@ function showStats(data) {
     const badge = document.getElementById("stats-badge");
     const total = data.total_sightings.toLocaleString();
     const geo = data.geocoded_locations.toLocaleString();
+    const geoOrig = (data.geocoded_original || 0).toLocaleString();
+    const geoGN = (data.geocoded_geonames || 0).toLocaleString();
     const dupes = data.duplicate_candidates.toLocaleString();
-    badge.textContent = `${total} sightings | ${geo} geocoded | ${dupes} duplicate pairs`;
+    badge.textContent = `${total} sightings | ${geo} geocoded (${geoOrig} original + ${geoGN} GeoNames) | ${dupes} duplicate pairs`;
 }
 
 function sourceBadge(name) {

@@ -269,6 +269,21 @@ select:focus {
     color: #fff;
 }
 
+#coords-filter {
+    padding: 5px 8px;
+    font-size: 12px;
+    background: transparent;
+    color: var(--text-muted);
+    border: none;
+    border-left: 1px solid var(--border);
+    cursor: pointer;
+    outline: none;
+}
+
+#coords-filter:hover {
+    color: var(--text);
+}
+
 /* Fix Leaflet dark theme clashing */
 .leaflet-popup-content-wrapper {
     background: var(--bg-card);

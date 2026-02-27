@@ -77,6 +77,11 @@
             <div class="map-mode-toggle">
                 <button class="map-mode-btn active" data-mode="clusters">Clusters</button>
                 <button class="map-mode-btn" data-mode="heatmap">Heatmap</button>
+                <select id="coords-filter" title="Coordinate source">
+                    <option value="all">All Coords</option>
+                    <option value="original">Original Only</option>
+                    <option value="geocoded">Geocoded Only</option>
+                </select>
             </div>
             <div id="map-status" class="panel-status">Loading map...</div>
             <button id="btn-load-all" class="btn-load-all" style="display:none" onclick="loadAll()">Load All</button>
@@ -396,11 +401,26 @@
                     <li>Create schema (<code>create_schema.py</code>)</li>
                     <li>Import all 5 sources (UFOCAT with enrichment sidecar, NUFORC, MUFON, UPDB, UFO-search)</li>
                     <li>Apply data quality fixes (longitude sign, city field, country codes, MUFON dates)</li>
+                    <li>Geocode locations using GeoNames gazetteer (<code>geocode.py</code>)</li>
                     <li>Run enrichment (<code>enrich.py</code>)</li>
                     <li>Run three-tier deduplication (<code>dedup.py</code>)</li>
                     <li>Copy database to explorer (<code>ufo-explorer/ufo_unified.db</code>)</li>
                 </ol>
                 <p>Total build time: ~2 minutes.</p>
+
+                <!-- ============ Geocoding ============ -->
+                <h3>Geocoding</h3>
+                <p>Only UFOCAT provides latitude/longitude coordinates natively. The other four sources have text-only locations (city, state, country). To enable map visualization for all sources, locations are geocoded using the <strong>GeoNames cities15000 gazetteer</strong> (33,000+ cities with population &gt; 15,000).</p>
+
+                <p><strong>Matching strategy</strong> (decreasing specificity):</p>
+                <ol>
+                    <li><strong>Exact:</strong> UPPER(city) + state + country &rarr; highest confidence</li>
+                    <li><strong>City + country:</strong> No state available (e.g., UPDB) &rarr; picks largest matching city by population</li>
+                    <li><strong>City only:</strong> No country available (e.g., UFO-search raw text) &rarr; picks largest city globally</li>
+                    <li><strong>Raw text parsing:</strong> Regex extraction of city/state/country from free-text location strings</li>
+                </ol>
+
+                <p>The <code>geocode_src</code> column on the <code>location</code> table tracks provenance: <code>NULL</code> = coordinates from original source data, <code>geonames_exact</code> / <code>geonames_city_country</code> / <code>geonames_city_only</code> = geocoded via GeoNames. The map includes a dropdown to toggle between &ldquo;All Coords&rdquo;, &ldquo;Original Only&rdquo;, and &ldquo;Geocoded Only&rdquo;.</p>
 
                 <!-- ============ Collections ============ -->
                 <h3>Source Collection Provenance</h3>

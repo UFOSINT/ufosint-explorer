@@ -130,6 +130,14 @@ def add_common_filters(params, clauses, args, table_prefix="s"):
         clauses.append(f"{p}.date_event <= ?")
         args.append(date_to + "-12-31" if len(date_to) == 4 else date_to)
 
+    # Coordinate source filter (for map/heatmap)
+    coords = params.get("coords")
+    if coords == "original":
+        clauses.append("l.geocode_src IS NULL")
+    elif coords == "geocoded":
+        clauses.append("l.geocode_src IS NOT NULL")
+    # "all" or empty = no filter (show everything)
+
     return clauses, args
 
 
@@ -198,6 +206,18 @@ def api_stats():
     """)
     geocoded = cur.fetchone()[0]
 
+    cur.execute("""
+        SELECT COUNT(*) FROM location
+        WHERE latitude IS NOT NULL AND geocode_src IS NULL
+    """)
+    geocoded_original = cur.fetchone()[0]
+
+    cur.execute("""
+        SELECT COUNT(*) FROM location
+        WHERE geocode_src IS NOT NULL
+    """)
+    geocoded_geonames = cur.fetchone()[0]
+
     cur.execute("SELECT COUNT(*) FROM duplicate_candidate")
     dupes = cur.fetchone()[0]
 
@@ -209,6 +229,8 @@ def api_stats():
         "by_collection": by_collection,
         "date_range": {"min": date_min, "max": date_max},
         "geocoded_locations": geocoded,
+        "geocoded_original": geocoded_original,
+        "geocoded_geonames": geocoded_geonames,
         "duplicate_candidates": dupes,
     })
 
