@@ -144,7 +144,9 @@ def index():
 
 @app.route("/health")
 def health():
-    """Health check for Railway."""
+    """Health check for Railway. Returns 200 even without DB so deploys succeed."""
+    if not os.path.exists(DB_PATH):
+        return jsonify({"status": "waiting", "detail": "Database not yet uploaded to volume"})
     try:
         conn = get_db()
         cur = conn.cursor()
