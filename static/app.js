@@ -325,7 +325,7 @@ function initMap() {
 
 async function loadMapMarkers() {
     const status = document.getElementById("map-status");
-    status.textContent = "Loading markers...";
+    status.innerHTML = '<span class="loading-pulse">Loading markers...</span>';
 
     const bounds = state.map.getBounds();
     const params = getFilterParams();
@@ -474,7 +474,7 @@ function toggleMapMode(mode) {
 
 async function loadHeatmap() {
     const status = document.getElementById("map-status");
-    status.textContent = "Loading heatmap...";
+    status.innerHTML = '<span class="loading-pulse">Loading heatmap...</span>';
 
     const bounds = state.map.getBounds();
     const params = getFilterParams();
@@ -602,7 +602,7 @@ async function executeSearch(append = false) {
     const resultsEl = document.getElementById("search-results");
     const loadMoreBtn = document.getElementById("btn-load-more");
 
-    info.textContent = "Searching...";
+    info.innerHTML = '<span class="loading-pulse">Searching...</span>';
 
     try {
         const data = await fetchJSON(`/api/search?${params}`);
@@ -672,7 +672,7 @@ async function loadDuplicates(append = false) {
     const resultsEl = document.getElementById("dupes-results");
     const moreBtn = document.getElementById("btn-dupes-more");
 
-    info.textContent = "Loading duplicate pairs...";
+    info.innerHTML = '<span class="loading-pulse">Loading duplicate pairs... This may take a moment on large databases.</span>';
 
     const params = new URLSearchParams();
     params.set("page", state.dupesPage);

@@ -463,6 +463,17 @@ select:focus {
     color: #fff;
 }
 
+/* Loading animation */
+.loading-pulse {
+    animation: pulse 1.5s ease-in-out infinite;
+    color: var(--accent);
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
 /* ---- Modal ---- */
 .modal-overlay {
     position: fixed;
