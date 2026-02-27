@@ -6,8 +6,6 @@ Then: http://localhost:5000
 import sqlite3
 import os
 import json
-import urllib.request
-import shutil
 from flask import Flask, request, jsonify, send_from_directory
 
 app = Flask(__name__, static_folder="static")
@@ -157,30 +155,6 @@ def health():
         conn.close()
         return jsonify({"status": "ok", "sightings": count})
     except Exception as e:
-        return jsonify({"status": "error", "detail": str(e)}), 500
-
-
-@app.route("/setup-db")
-def setup_db():
-    """TEMPORARY: Download rebuilt DB from Google Drive. Remove after use."""
-    # Delete old DB so we can replace it
-    if os.path.exists(DB_PATH):
-        os.remove(DB_PATH)
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    gdrive_id = "1R-PrD8Ty9nET6nKBakC0c8nkn8Dl8t60"
-    url = f"https://drive.usercontent.google.com/download?id={gdrive_id}&export=download&confirm=t"
-    tmp = DB_PATH + ".tmp"
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req) as resp, open(tmp, "wb") as f:
-            shutil.copyfileobj(resp, f)
-        shutil.move(tmp, DB_PATH)
-        size = os.path.getsize(DB_PATH) / (1024*1024)
-        init_filters()
-        return jsonify({"status": "downloaded", "size_mb": round(size, 1)})
-    except Exception as e:
-        if os.path.exists(tmp):
-            os.remove(tmp)
         return jsonify({"status": "error", "detail": str(e)}), 500
 
 
