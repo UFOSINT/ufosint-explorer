@@ -741,7 +741,7 @@ async function loadDuplicates(append = false) {
         const hasMore = (state.dupesPage + 1) < data.pages;
         moreBtn.style.display = hasMore ? "block" : "none";
     } catch (err) {
-        info.textContent = "Error loading duplicates";
+        info.textContent = "Error loading duplicates: " + (err.message || err);
         console.error(err);
     }
 }
