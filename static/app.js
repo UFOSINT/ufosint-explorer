@@ -19,6 +19,7 @@ const state = {
     searchTotal: 0,
     dupesPage: 0,
     dupesTotal: 0,
+    insightsCharts: {},  // { radar, timeline, source, shape }
 };
 
 // Source colors for chart and badges
@@ -33,6 +34,19 @@ const SOURCE_COLORS = {
 function sourceColor(name) {
     return (SOURCE_COLORS[name] || { bg: "#999", border: "#777" });
 }
+
+// Emotion colors for sentiment charts
+const EMOTION_COLORS = {
+    joy:          { bg: "rgba(255, 206, 86, 0.7)",  border: "#ffce56" },
+    fear:         { bg: "rgba(153, 102, 255, 0.7)", border: "#9966ff" },
+    anger:        { bg: "rgba(255, 99, 132, 0.7)",  border: "#ff6384" },
+    sadness:      { bg: "rgba(54, 162, 235, 0.7)",  border: "#36a2eb" },
+    surprise:     { bg: "rgba(255, 159, 64, 0.7)",  border: "#ff9f40" },
+    disgust:      { bg: "rgba(75, 192, 192, 0.7)",  border: "#4bc0c0" },
+    trust:        { bg: "rgba(63, 185, 80, 0.7)",   border: "#3fb950" },
+    anticipation: { bg: "rgba(88, 166, 255, 0.7)",  border: "#58a6ff" },
+};
+const EMOTION_NAMES = ["joy", "fear", "anger", "sadness", "surprise", "disgust", "trust", "anticipation"];
 
 // =========================================================================
 // Init
@@ -249,6 +263,8 @@ function switchTab(tab) {
         }, 100);
     } else if (tab === "timeline") {
         loadTimeline();
+    } else if (tab === "insights") {
+        loadInsights();
     } else if (tab === "duplicates") {
         // Load on first visit
         if (document.getElementById("dupes-results").children.length === 0) {
@@ -264,6 +280,7 @@ function applyFilters() {
     }
     else if (state.activeTab === "timeline") loadTimeline();
     else if (state.activeTab === "search") doSearch();
+    else if (state.activeTab === "insights") loadInsights();
 }
 
 function clearFilters() {
@@ -761,6 +778,270 @@ async function loadDuplicates(append = false) {
 // =========================================================================
 // Detail Modal
 // =========================================================================
+// =========================================================================
+// Insights (Sentiment & Emotion)
+// =========================================================================
+async function loadInsights() {
+    const statusEl = document.getElementById("insights-status");
+    statusEl.textContent = "Loading sentiment data...";
+
+    const params = getFilterParams();
+    const qs = params.toString();
+
+    try {
+        const [overview, timeline, bySource, byShape] = await Promise.all([
+            fetchJSON(`/api/sentiment/overview?${qs}`),
+            fetchJSON(`/api/sentiment/timeline?${qs}`),
+            fetchJSON(`/api/sentiment/by-source?${qs}`),
+            fetchJSON(`/api/sentiment/by-shape?${qs}`),
+        ]);
+
+        if (!overview.total_analyzed || overview.total_analyzed === 0) {
+            document.getElementById("insights-grid").innerHTML =
+                '<div class="insights-empty" style="grid-column:1/-1">' +
+                'No sentiment data available for the current filters.<br>' +
+                'Sentiment analysis must be run during the ETL pipeline.</div>';
+            statusEl.textContent = "No data";
+            return;
+        }
+
+        // Restore grid if it was showing empty message
+        const grid = document.getElementById("insights-grid");
+        if (grid.querySelector(".insights-empty")) {
+            grid.innerHTML = `
+                <div class="insight-card"><h3>Emotion Distribution</h3><div class="insight-chart-wrap"><canvas id="emotion-radar-chart"></canvas></div></div>
+                <div class="insight-card"><h3>Sentiment Over Time</h3><div class="insight-chart-wrap"><canvas id="sentiment-timeline-chart"></canvas></div></div>
+                <div class="insight-card"><h3>Emotions by Source</h3><div class="insight-chart-wrap"><canvas id="emotion-source-chart"></canvas></div></div>
+                <div class="insight-card"><h3>Emotions by Shape (Top 10)</h3><div class="insight-chart-wrap"><canvas id="emotion-shape-chart"></canvas></div></div>
+            `;
+        }
+
+        statusEl.textContent = `${overview.total_analyzed.toLocaleString()} sightings analyzed | Avg sentiment: ${overview.avg_compound.toFixed(3)}`;
+
+        renderEmotionRadar(overview);
+        renderSentimentTimeline(timeline);
+        renderEmotionBySource(bySource);
+        renderEmotionByShape(byShape);
+    } catch (err) {
+        statusEl.textContent = "Error loading insights";
+        console.error("loadInsights error:", err);
+    }
+}
+
+function renderEmotionRadar(overview) {
+    if (state.insightsCharts.radar) state.insightsCharts.radar.destroy();
+
+    const values = EMOTION_NAMES.map(e => overview[e] || 0);
+    const total = values.reduce((a, b) => a + b, 1);
+    const normalized = values.map(v => v / total);
+
+    const ctx = document.getElementById("emotion-radar-chart").getContext("2d");
+    state.insightsCharts.radar = new Chart(ctx, {
+        type: "radar",
+        data: {
+            labels: EMOTION_NAMES.map(e => e.charAt(0).toUpperCase() + e.slice(1)),
+            datasets: [{
+                label: "Emotion Distribution",
+                data: normalized,
+                backgroundColor: "rgba(88, 166, 255, 0.2)",
+                borderColor: "rgba(88, 166, 255, 0.8)",
+                borderWidth: 2,
+                pointBackgroundColor: EMOTION_NAMES.map(e => EMOTION_COLORS[e].border),
+                pointBorderColor: "#fff",
+                pointRadius: 5,
+            }],
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                r: {
+                    beginAtZero: true,
+                    grid: { color: "rgba(48, 54, 61, 0.6)" },
+                    angleLines: { color: "rgba(48, 54, 61, 0.6)" },
+                    pointLabels: { color: "#e6edf3", font: { size: 12 } },
+                    ticks: { display: false },
+                },
+            },
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: (ctx) => {
+                            const raw = values[ctx.dataIndex];
+                            const pct = (normalized[ctx.dataIndex] * 100).toFixed(1);
+                            return `${raw.toLocaleString()} words (${pct}%)`;
+                        }
+                    }
+                }
+            },
+        },
+    });
+}
+
+function renderSentimentTimeline(timeline) {
+    if (state.insightsCharts.timeline) state.insightsCharts.timeline.destroy();
+
+    const data = timeline.data;
+    const years = data.map(d => d.year);
+    const compounds = data.map(d => d.avg_compound);
+    const counts = data.map(d => d.count);
+
+    const ctx = document.getElementById("sentiment-timeline-chart").getContext("2d");
+    state.insightsCharts.timeline = new Chart(ctx, {
+        type: "line",
+        data: {
+            labels: years,
+            datasets: [
+                {
+                    label: "Avg Sentiment (VADER)",
+                    data: compounds,
+                    borderColor: "#58a6ff",
+                    backgroundColor: "rgba(88, 166, 255, 0.1)",
+                    fill: true,
+                    tension: 0.3,
+                    pointRadius: 1,
+                    yAxisID: "y",
+                },
+                {
+                    label: "Records Analyzed",
+                    data: counts,
+                    borderColor: "rgba(139, 148, 158, 0.5)",
+                    backgroundColor: "rgba(139, 148, 158, 0.1)",
+                    fill: false,
+                    tension: 0.3,
+                    pointRadius: 0,
+                    borderDash: [4, 4],
+                    yAxisID: "y1",
+                }
+            ],
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: "index", intersect: false },
+            plugins: {
+                legend: { position: "top", labels: { color: "#e6edf3" } },
+            },
+            scales: {
+                x: { ticks: { color: "#8b949e", maxTicksLimit: 20 } },
+                y: {
+                    title: { display: true, text: "VADER Compound", color: "#8b949e" },
+                    min: -1, max: 1,
+                    ticks: { color: "#8b949e" },
+                    grid: { color: "rgba(48, 54, 61, 0.4)" },
+                },
+                y1: {
+                    position: "right",
+                    title: { display: true, text: "Record Count", color: "#8b949e" },
+                    ticks: { color: "#8b949e" },
+                    grid: { display: false },
+                },
+            },
+        },
+    });
+}
+
+function renderEmotionBySource(bySource) {
+    if (state.insightsCharts.source) state.insightsCharts.source.destroy();
+
+    const sources = bySource.data.map(d => d.source_name);
+
+    const datasets = EMOTION_NAMES.map(emo => {
+        const c = EMOTION_COLORS[emo];
+        return {
+            label: emo.charAt(0).toUpperCase() + emo.slice(1),
+            data: bySource.data.map(d => {
+                const total = EMOTION_NAMES.reduce((sum, e) => sum + (d[e] || 0), 0);
+                return total > 0 ? (d[emo] || 0) / total : 0;
+            }),
+            backgroundColor: c.bg,
+            borderColor: c.border,
+            borderWidth: 1,
+        };
+    });
+
+    const ctx = document.getElementById("emotion-source-chart").getContext("2d");
+    state.insightsCharts.source = new Chart(ctx, {
+        type: "bar",
+        data: { labels: sources, datasets },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { position: "top", labels: { color: "#e6edf3", boxWidth: 12 } },
+                tooltip: {
+                    callbacks: {
+                        label: (ctx) => `${ctx.dataset.label}: ${(ctx.raw * 100).toFixed(1)}%`
+                    }
+                }
+            },
+            scales: {
+                x: { ticks: { color: "#8b949e" }, stacked: false },
+                y: {
+                    beginAtZero: true,
+                    ticks: { color: "#8b949e", callback: (v) => (v * 100) + "%" },
+                    grid: { color: "rgba(48, 54, 61, 0.4)" },
+                    stacked: false,
+                },
+            },
+        },
+    });
+}
+
+function renderEmotionByShape(byShape) {
+    if (state.insightsCharts.shape) state.insightsCharts.shape.destroy();
+
+    const shapes = byShape.data.map(d => d.shape);
+
+    const datasets = EMOTION_NAMES.map(emo => {
+        const c = EMOTION_COLORS[emo];
+        return {
+            label: emo.charAt(0).toUpperCase() + emo.slice(1),
+            data: byShape.data.map(d => {
+                const total = EMOTION_NAMES.reduce((sum, e) => sum + (d[e] || 0), 0);
+                return total > 0 ? (d[emo] || 0) / total : 0;
+            }),
+            backgroundColor: c.bg,
+            borderColor: c.border,
+            borderWidth: 1,
+        };
+    });
+
+    const ctx = document.getElementById("emotion-shape-chart").getContext("2d");
+    state.insightsCharts.shape = new Chart(ctx, {
+        type: "bar",
+        data: { labels: shapes, datasets },
+        options: {
+            indexAxis: "y",
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: (ctx) => `${ctx.dataset.label}: ${(ctx.raw * 100).toFixed(1)}%`
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    stacked: true,
+                    ticks: { color: "#8b949e", callback: (v) => (v * 100) + "%" },
+                    grid: { color: "rgba(48, 54, 61, 0.4)" },
+                },
+                y: {
+                    stacked: true,
+                    ticks: { color: "#8b949e" },
+                },
+            },
+        },
+    });
+}
+
+// =========================================================================
+// Detail Modal
+// =========================================================================
 async function openDetail(id) {
     const overlay = document.getElementById("modal-overlay");
     const body = document.getElementById("modal-body");
@@ -825,6 +1106,31 @@ async function openDetail(id) {
             if (r.vallee) html += `<div class="detail-row"><span class="detail-label">Vallee:</span> ${escapeHtml(r.vallee)}</div>`;
             if (r.event_type) html += `<div class="detail-row"><span class="detail-label">Event type:</span> ${escapeHtml(r.event_type)}</div>`;
             if (r.svp_rating) html += `<div class="detail-row"><span class="detail-label">SVP:</span> ${escapeHtml(r.svp_rating)}</div>`;
+            html += `</div>`;
+        }
+
+        // Sentiment
+        if (r.sentiment) {
+            const s = r.sentiment;
+            html += `<div class="detail-section"><h3>Sentiment Analysis</h3>`;
+            const compoundColor = s.vader_compound >= 0 ? "var(--green)" : "var(--red)";
+            html += `<div class="detail-row"><span class="detail-label">VADER Compound:</span> <span style="color:${compoundColor};font-weight:600">${s.vader_compound.toFixed(3)}</span></div>`;
+            html += `<div class="detail-row"><span class="detail-label">Positive:</span> ${s.vader_positive.toFixed(3)} &nbsp; <span class="detail-label">Negative:</span> ${s.vader_negative.toFixed(3)} &nbsp; <span class="detail-label">Neutral:</span> ${s.vader_neutral.toFixed(3)}</div>`;
+            const emos = ["joy","fear","anger","sadness","surprise","disgust","trust","anticipation"];
+            const emoValues = emos.map(e => s["emo_" + e] || 0);
+            const maxEmo = Math.max(...emoValues, 1);
+            html += `<div style="margin-top:6px">`;
+            emos.forEach((e, i) => {
+                const width = Math.round(emoValues[i] / maxEmo * 100);
+                const c = EMOTION_COLORS[e];
+                html += `<div style="display:flex;align-items:center;gap:6px;font-size:12px;margin:2px 0">
+                    <span style="width:80px;text-align:right;color:var(--text-muted)">${e}</span>
+                    <span style="width:${width}px;height:10px;background:${c.border};border-radius:2px;display:inline-block"></span>
+                    <span style="color:var(--text-muted)">${emoValues[i]}</span>
+                </div>`;
+            });
+            html += `</div>`;
+            html += `<div style="font-size:11px;color:var(--text-muted);margin-top:4px">Analyzed from ${s.text_source} (${s.text_length.toLocaleString()} chars)</div>`;
             html += `</div>`;
         }
 

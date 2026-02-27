@@ -33,6 +33,7 @@
             <button class="tab" data-tab="timeline">Timeline</button>
             <button class="tab" data-tab="search">Search</button>
             <button class="tab" data-tab="duplicates">Duplicates</button>
+            <button class="tab" data-tab="insights">Insights</button>
             <button class="tab" data-tab="methodology">Methodology</button>
         </nav>
     </header>
@@ -136,6 +137,40 @@
             <div id="dupes-info" class="search-info"></div>
             <div id="dupes-results" class="dupes-results"></div>
             <button id="btn-dupes-more" class="btn btn-secondary" style="display:none">Load More</button>
+        </div>
+
+        <!-- Insights Panel -->
+        <div id="panel-insights" class="panel">
+            <div class="insights-header">
+                <span class="insights-title">Sentiment &amp; Emotion Insights</span>
+                <span id="insights-status" class="insights-status"></span>
+            </div>
+            <div class="insights-grid" id="insights-grid">
+                <div class="insight-card">
+                    <h3>Emotion Distribution</h3>
+                    <div class="insight-chart-wrap">
+                        <canvas id="emotion-radar-chart"></canvas>
+                    </div>
+                </div>
+                <div class="insight-card">
+                    <h3>Sentiment Over Time</h3>
+                    <div class="insight-chart-wrap">
+                        <canvas id="sentiment-timeline-chart"></canvas>
+                    </div>
+                </div>
+                <div class="insight-card">
+                    <h3>Emotions by Source</h3>
+                    <div class="insight-chart-wrap">
+                        <canvas id="emotion-source-chart"></canvas>
+                    </div>
+                </div>
+                <div class="insight-card">
+                    <h3>Emotions by Shape (Top 10)</h3>
+                    <div class="insight-chart-wrap">
+                        <canvas id="emotion-shape-chart"></canvas>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <!-- Methodology Panel -->

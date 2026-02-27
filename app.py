@@ -619,6 +619,19 @@ def api_sighting(sid):
             if coll:
                 record["collection_name"] = coll[0]
 
+        # Include sentiment data if available
+        cur.execute("""
+            SELECT vader_compound, vader_positive, vader_negative, vader_neutral,
+                   emo_joy, emo_fear, emo_anger, emo_sadness,
+                   emo_surprise, emo_disgust, emo_trust, emo_anticipation,
+                   text_source, text_length
+            FROM sentiment_analysis WHERE sighting_id = ?
+        """, (sid,))
+        sent_row = cur.fetchone()
+        if sent_row:
+            sent_keys = [desc[0] for desc in cur.description]
+            record["sentiment"] = dict(zip(sent_keys, sent_row))
+
         return jsonify(record)
 
     except Exception as e:
@@ -627,6 +640,172 @@ def api_sighting(sid):
         return jsonify({"error": str(e)}), 500
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Sentiment / Emotion Endpoints
+# ---------------------------------------------------------------------------
+
+@app.route("/api/sentiment/overview")
+def api_sentiment_overview():
+    """Aggregate emotion distribution across filtered sightings."""
+    conn = get_db()
+    cur = conn.cursor()
+
+    clauses = []
+    args = []
+    add_common_filters(request.args, clauses, args)
+
+    where = " AND ".join(clauses) if clauses else "1=1"
+
+    cur.execute(f"""
+        SELECT
+            COUNT(*) as total_analyzed,
+            AVG(sa.vader_compound) as avg_compound,
+            AVG(sa.vader_positive) as avg_positive,
+            AVG(sa.vader_negative) as avg_negative,
+            AVG(sa.vader_neutral)  as avg_neutral,
+            SUM(sa.emo_joy) as joy,
+            SUM(sa.emo_fear) as fear,
+            SUM(sa.emo_anger) as anger,
+            SUM(sa.emo_sadness) as sadness,
+            SUM(sa.emo_surprise) as surprise,
+            SUM(sa.emo_disgust) as disgust,
+            SUM(sa.emo_trust) as trust,
+            SUM(sa.emo_anticipation) as anticipation
+        FROM sighting s
+        JOIN sentiment_analysis sa ON s.id = sa.sighting_id
+        LEFT JOIN location l ON s.location_id = l.id
+        WHERE {where}
+    """, args)
+    row = cur.fetchone()
+    keys = [desc[0] for desc in cur.description]
+    result = dict(zip(keys, row))
+
+    conn.close()
+    return jsonify(result)
+
+
+@app.route("/api/sentiment/timeline")
+def api_sentiment_timeline():
+    """Average VADER compound score by year."""
+    conn = get_db()
+    cur = conn.cursor()
+
+    clauses = ["s.date_event IS NOT NULL", "LENGTH(s.date_event) >= 4",
+               "CAST(SUBSTR(s.date_event, 1, 4) AS INTEGER) >= 1900"]
+    args = []
+    add_common_filters(request.args, clauses, args)
+
+    where = " AND ".join(clauses)
+
+    cur.execute(f"""
+        SELECT SUBSTR(s.date_event, 1, 4) as year,
+               COUNT(*) as count,
+               AVG(sa.vader_compound) as avg_compound,
+               AVG(sa.vader_positive) as avg_positive,
+               AVG(sa.vader_negative) as avg_negative,
+               SUM(sa.emo_joy) as joy,
+               SUM(sa.emo_fear) as fear,
+               SUM(sa.emo_anger) as anger,
+               SUM(sa.emo_sadness) as sadness,
+               SUM(sa.emo_surprise) as surprise,
+               SUM(sa.emo_disgust) as disgust,
+               SUM(sa.emo_trust) as trust,
+               SUM(sa.emo_anticipation) as anticipation
+        FROM sighting s
+        JOIN sentiment_analysis sa ON s.id = sa.sighting_id
+        LEFT JOIN location l ON s.location_id = l.id
+        WHERE {where}
+        GROUP BY year
+        ORDER BY year
+    """, args)
+    rows = cur.fetchall()
+    keys = [desc[0] for desc in cur.description]
+    data = [dict(zip(keys, row)) for row in rows]
+
+    conn.close()
+    return jsonify({"data": data})
+
+
+@app.route("/api/sentiment/by-source")
+def api_sentiment_by_source():
+    """Emotion breakdown per source database."""
+    conn = get_db()
+    cur = conn.cursor()
+
+    clauses = []
+    args = []
+    add_common_filters(request.args, clauses, args)
+
+    where = " AND ".join(clauses) if clauses else "1=1"
+
+    cur.execute(f"""
+        SELECT sd.name as source_name,
+               COUNT(*) as count,
+               AVG(sa.vader_compound) as avg_compound,
+               SUM(sa.emo_joy) as joy,
+               SUM(sa.emo_fear) as fear,
+               SUM(sa.emo_anger) as anger,
+               SUM(sa.emo_sadness) as sadness,
+               SUM(sa.emo_surprise) as surprise,
+               SUM(sa.emo_disgust) as disgust,
+               SUM(sa.emo_trust) as trust,
+               SUM(sa.emo_anticipation) as anticipation
+        FROM sighting s
+        JOIN sentiment_analysis sa ON s.id = sa.sighting_id
+        JOIN source_database sd ON s.source_db_id = sd.id
+        LEFT JOIN location l ON s.location_id = l.id
+        WHERE {where}
+        GROUP BY sd.name
+        ORDER BY count DESC
+    """, args)
+    rows = cur.fetchall()
+    keys = [desc[0] for desc in cur.description]
+    data = [dict(zip(keys, row)) for row in rows]
+
+    conn.close()
+    return jsonify({"data": data})
+
+
+@app.route("/api/sentiment/by-shape")
+def api_sentiment_by_shape():
+    """Emotion breakdown per top 10 shapes."""
+    conn = get_db()
+    cur = conn.cursor()
+
+    clauses = ["s.shape IS NOT NULL", "s.shape != ''"]
+    args = []
+    add_common_filters(request.args, clauses, args)
+
+    where = " AND ".join(clauses)
+
+    cur.execute(f"""
+        SELECT s.shape,
+               COUNT(*) as count,
+               AVG(sa.vader_compound) as avg_compound,
+               SUM(sa.emo_joy) as joy,
+               SUM(sa.emo_fear) as fear,
+               SUM(sa.emo_anger) as anger,
+               SUM(sa.emo_sadness) as sadness,
+               SUM(sa.emo_surprise) as surprise,
+               SUM(sa.emo_disgust) as disgust,
+               SUM(sa.emo_trust) as trust,
+               SUM(sa.emo_anticipation) as anticipation
+        FROM sighting s
+        JOIN sentiment_analysis sa ON s.id = sa.sighting_id
+        LEFT JOIN location l ON s.location_id = l.id
+        WHERE {where}
+        GROUP BY s.shape
+        ORDER BY count DESC
+        LIMIT 10
+    """, args)
+    rows = cur.fetchall()
+    keys = [desc[0] for desc in cur.description]
+    data = [dict(zip(keys, row)) for row in rows]
+
+    conn.close()
+    return jsonify({"data": data})
 
 
 @app.route("/api/duplicates")
