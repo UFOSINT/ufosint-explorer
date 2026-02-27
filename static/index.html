@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UFO Explorer</title>
+
+    <!-- Leaflet -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+    <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+
+    <!-- App CSS -->
+    <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+    <!-- Header -->
+    <header id="header">
+        <div class="header-left">
+            <h1>UFO Explorer</h1>
+            <span id="stats-badge" class="stats-badge"></span>
+        </div>
+        <nav class="tabs">
+            <button class="tab active" data-tab="map">Map</button>
+            <button class="tab" data-tab="timeline">Timeline</button>
+            <button class="tab" data-tab="search">Search</button>
+            <button class="tab" data-tab="duplicates">Duplicates</button>
+            <button class="tab" data-tab="methodology">Methodology</button>
+        </nav>
+    </header>
+
+    <!-- Filters Bar -->
+    <div id="filters-bar">
+        <div class="filter-group">
+            <label>Date Range</label>
+            <input type="number" id="filter-date-from" placeholder="1900" min="1900" max="2026" />
+            <span class="filter-sep">&ndash;</span>
+            <input type="number" id="filter-date-to" placeholder="2026" min="1900" max="2026" />
+        </div>
+        <div class="filter-group">
+            <label>Shape</label>
+            <select id="filter-shape"><option value="">All</option></select>
+        </div>
+        <div class="filter-group">
+            <label>Collection</label>
+            <select id="filter-collection"><option value="">All</option></select>
+        </div>
+        <div class="filter-group">
+            <label>Source</label>
+            <select id="filter-source"><option value="">All</option></select>
+        </div>
+        <div class="filter-group">
+            <label>Hynek</label>
+            <select id="filter-hynek"><option value="">All</option></select>
+        </div>
+        <div class="filter-group">
+            <label>Vallee</label>
+            <select id="filter-vallee"><option value="">All</option></select>
+        </div>
+        <button id="btn-apply-filters" class="btn btn-primary">Apply</button>
+        <button id="btn-clear-filters" class="btn btn-secondary">Clear</button>
+    </div>
+
+    <!-- Main Content Panels -->
+    <main id="main">
+        <!-- Map Panel -->
+        <div id="panel-map" class="panel active">
+            <div id="map"></div>
+            <div class="map-mode-toggle">
+                <button class="map-mode-btn active" data-mode="clusters">Clusters</button>
+                <button class="map-mode-btn" data-mode="heatmap">Heatmap</button>
+            </div>
+            <div id="map-status" class="panel-status">Loading map...</div>
+            <button id="btn-load-all" class="btn-load-all" style="display:none" onclick="loadAll()">Load All</button>
+        </div>
+
+        <!-- Timeline Panel -->
+        <div id="panel-timeline" class="panel">
+            <div class="timeline-header">
+                <button id="timeline-back" class="btn btn-small" style="display:none">&larr; Back to Years</button>
+                <span id="timeline-title">Sightings by Year</span>
+            </div>
+            <div class="chart-container">
+                <canvas id="timeline-chart"></canvas>
+            </div>
+        </div>
+
+        <!-- Search Panel -->
+        <div id="panel-search" class="panel">
+            <div class="search-bar">
+                <input type="text" id="search-input" placeholder="Search descriptions (e.g. triangle, bright light, hovering)..." />
+                <button id="btn-search" class="btn btn-primary">Search</button>
+            </div>
+            <div id="search-info" class="search-info"></div>
+            <div id="search-results" class="search-results"></div>
+            <button id="btn-load-more" class="btn btn-secondary" style="display:none">Load More</button>
+        </div>
+
+        <!-- Duplicates Panel -->
+        <div id="panel-duplicates" class="panel">
+            <div class="dupes-toolbar">
+                <div class="filter-group">
+                    <label>Confidence</label>
+                    <select id="dupes-confidence">
+                        <option value="">All</option>
+                        <option value="0.9,1.01">Certain (0.9+)</option>
+                        <option value="0.7,0.9">Likely (0.7-0.9)</option>
+                        <option value="0.5,0.7">Possible (0.5-0.7)</option>
+                        <option value="0.3,0.5">Weak (0.3-0.5)</option>
+                        <option value="0.0,0.3">Unlikely (&lt;0.3)</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label>Method</label>
+                    <select id="dupes-method"><option value="">All</option></select>
+                </div>
+                <div class="filter-group">
+                    <label>Source</label>
+                    <select id="dupes-source"><option value="">All</option></select>
+                </div>
+                <button id="btn-dupes-apply" class="btn btn-primary">Apply</button>
+            </div>
+            <div id="dupes-info" class="search-info"></div>
+            <div id="dupes-results" class="dupes-results"></div>
+            <button id="btn-dupes-more" class="btn btn-secondary" style="display:none">Load More</button>
+        </div>
+
+        <!-- Methodology Panel -->
+        <div id="panel-methodology" class="panel">
+            <div class="methodology">
+
+                <h2>Unified UFO Sightings Database &mdash; Methodology</h2>
+                <p class="meth-intro">This document describes how <strong>614,505 sighting records</strong> were assembled from five major UFO/UAP databases, deduplicated across sources, and enriched with cross-source metadata. <strong>126,730 duplicate candidate pairs</strong> are flagged for review. No records are deleted.</p>
+
+                <!-- ============ Source Databases ============ -->
+                <h3>Source Databases</h3>
+                <table>
+                    <thead>
+                        <tr><th>Source</th><th>Raw Records</th><th>Imported</th><th>Skipped</th><th>Description</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><span class="source-badge" style="background:#4e79a7">UFOCAT</span></td>
+                            <td>320,412</td><td>197,108</td><td>123,304</td>
+                            <td>CUFOS UFOCAT 2023 catalog. Richest metadata: Hynek/Vallee classifications, lat/lon, witness counts, durations. 123K NUFORC-origin records (<code>SOURCE=UFOReportCtr</code>) skipped; metadata transferred via enrichment.</td>
+                        </tr>
+                        <tr>
+                            <td><span class="source-badge" style="background:#f28e2b">NUFORC</span></td>
+                            <td>159,320</td><td>159,320</td><td>0</td>
+                            <td>National UFO Reporting Center. Self-reported sightings with detailed free-text descriptions. Enriched post-import with 102K Hynek and 83K Vallee classifications from UFOCAT.</td>
+                        </tr>
+                        <tr>
+                            <td><span class="source-badge" style="background:#e15759">MUFON</span></td>
+                            <td>138,310</td><td>138,310</td><td>0</td>
+                            <td>Mutual UFO Network case reports. Short + long descriptions, investigator summaries.</td>
+                        </tr>
+                        <tr>
+                            <td><span class="source-badge" style="background:#76b7b2">UPDB</span></td>
+                            <td>1,885,757</td><td>65,016</td><td>1,820,741</td>
+                            <td>Unified Phenomena Database (phenomenAInon). 1.82M rows skipped (MUFON/NUFORC already imported from richer originals). Remaining 65K from UFODNA (38K), Blue Book (14K), NICAP (5.8K), etc.</td>
+                        </tr>
+                        <tr>
+                            <td><span class="source-badge" style="background:#59a14f">UFO-search</span></td>
+                            <td>54,751</td><td>54,751</td><td>0</td>
+                            <td>Majestic Timeline compilation from ufo-search.com. Historical records from 19 source compilations (Hatch, Eberhart, NICAP, Vallee, etc.).</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <p><strong>Total raw records across all sources: ~2.56 million.</strong> After removing known overlaps at import time: <strong>614,505</strong>.</p>
+
+                <!-- ============ UFOCAT Sub-Sources ============ -->
+                <h3>UFOCAT Sub-Source Landscape</h3>
+                <p>UFOCAT is itself an aggregator. Its <code>SOURCE</code> column identifies where each record originated:</p>
+                <table>
+                    <thead><tr><th>UFOCAT SOURCE</th><th>Records</th><th>Overlap With</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>UFOReportCtr</code></td><td>123,304</td><td>NUFORC (skipped, enriched)</td></tr>
+                        <tr><td><code>U</code> (Hatch)</td><td>17,184</td><td>UFO-search Hatch (18K)</td></tr>
+                        <tr><td><code>BlueBook1</code></td><td>13,101</td><td>UPDB Blue Book (14K)</td></tr>
+                        <tr><td><code>GEberhart1</code></td><td>11,643</td><td>UFO-search Eberhart (7.9K)</td></tr>
+                        <tr><td><code>CanadUFOSurv</code></td><td>10,785</td><td>&mdash;</td></tr>
+                        <tr><td><code>NICAP</code></td><td>2,315</td><td>UPDB NICAP (5.8K), UFO-search NICAP (5.5K)</td></tr>
+                        <tr><td><code>MUFONJournal</code> + MUFON*</td><td>2,861</td><td>MUFON</td></tr>
+                    </tbody>
+                </table>
+                <p>Only <code>UFOReportCtr</code> is skipped at import time. Other overlaps are handled by the deduplication engine.</p>
+
+                <!-- ============ Import Methodology ============ -->
+                <h3>Import Methodology</h3>
+                <p>Each source has a custom import script. Two aggregator sources skip known-duplicate sub-sources at import time:</p>
+                <ul>
+                    <li><strong>UFOCAT</strong> skips <code>SOURCE=UFOReportCtr</code> (123K NUFORC-origin records)</li>
+                    <li><strong>UPDB</strong> skips <code>name=MUFON</code> and <code>name=NUFORC</code> (1.82M records)</li>
+                </ul>
+
+                <h4>Source-Specific Handling</h4>
+                <ul>
+                    <li><strong>UFOCAT</strong> &mdash; 55-column CSV with split date fields (YEAR, MO, DAY, TIME). City stored in ALL CAPS in <code>raw_text</code>; copied to <code>city</code> post-import. Longitude negated for US/CA. <code>UFOReportCtr</code> records saved to enrichment sidecar.</li>
+                    <li><strong>NUFORC</strong> &mdash; Multi-line CSV with quoted descriptions. Dates: <code>1995-02-02 23:00 Local</code>. Locations: <code>City, ST, Country</code>.</li>
+                    <li><strong>MUFON</strong> &mdash; 7-column CSV with embedded <code>\n</code> in dates. Locations with escaped commas: <code>Newscandia\, MN\, US</code>.</li>
+                    <li><strong>UPDB</strong> &mdash; 1.9M rows; <code>name</code> column identifies sub-source. 1,820,741 MUFON/NUFORC rows skipped. Remaining 65,016 mapped to <code>source_origin</code> entries.</li>
+                    <li><strong>UFO-search</strong> &mdash; JSON array of 54,751 records from 19 historical compilations. Variable date formats ("Summer 1947", "4/34", "6/24/1947"). Regex-based date parser; free-text location parsing.</li>
+                </ul>
+
+                <h4>Data Quality Fixes</h4>
+                <p>Applied automatically by <code>rebuild_db.py</code>:</p>
+                <ul>
+                    <li><strong>UFOCAT longitude sign</strong> &mdash; 30,822 Western Hemisphere locations had positive longitude; negated for US/CA</li>
+                    <li><strong>UFOCAT city field</strong> &mdash; 73,766 locations had city only in <code>raw_text</code>; copied to <code>city</code> column</li>
+                    <li><strong>Country code normalization</strong> &mdash; USA&rarr;US, United Kingdom&rarr;GB, Canada&rarr;CA, Australia&rarr;AU</li>
+                    <li><strong>MUFON dates</strong> &mdash; Parsed <code>\n</code> separators and converted 12hr&rarr;24hr time</li>
+                </ul>
+
+                <!-- ============ Deduplication ============ -->
+                <h2>Deduplication Methodology</h2>
+                <p>Deduplication uses a <strong>two-phase strategy</strong>: known overlaps are eliminated at import time, then a three-tier matching engine flags remaining cross-source duplicates for review. <strong>No records are deleted</strong> &mdash; all 614,505 sightings remain, with 126,730 candidate pairs stored in the <code>duplicate_candidate</code> table.</p>
+
+                <h3>Phase 1: Import-Time Filtering</h3>
+                <p>Before deduplication runs, two aggregator sources skip sub-sources that would create known duplicates with higher-quality originals already imported:</p>
+                <table>
+                    <thead><tr><th>Source</th><th>Sub-Source Skipped</th><th>Records Skipped</th><th>Reason</th></tr></thead>
+                    <tbody>
+                        <tr><td><strong>UFOCAT</strong></td><td><code>SOURCE=UFOReportCtr</code></td><td>123,304</td><td>Copies of NUFORC sightings</td></tr>
+                        <tr><td><strong>UPDB</strong></td><td><code>name=MUFON</code></td><td>131,506</td><td>MUFON imported directly with richer descriptions</td></tr>
+                        <tr><td><strong>UPDB</strong></td><td><code>name=NUFORC</code></td><td>1,689,235</td><td>NUFORC imported directly with richer descriptions</td></tr>
+                    </tbody>
+                </table>
+                <p>This eliminates <strong>1,944,045 known duplicates</strong> before dedup begins, reducing the working set from ~2.56M to 614,505. The UFOCAT skip triggers enrichment to preserve valuable Hynek/Vallee metadata.</p>
+                <p>Other overlapping sub-sources (e.g. UFOCAT's Hatch records vs UFO-search's Hatch records) are kept and handled by the dedup engine, since both copies may carry unique metadata.</p>
+
+                <h3>Phase 1.5: Metadata Enrichment</h3>
+                <p>UFOCAT's 123K skipped UFOReportCtr records carry Hynek and Vallee classifications that NUFORC natively lacks. Rather than lose this data, <code>import_ufocat.py</code> writes skipped records to a sidecar file (<code>ufocat_enrichment.jsonl</code>), and <code>enrich.py</code> transfers the metadata to matching NUFORC sightings post-import.</p>
+                <p><strong>Matching:</strong> Date (YYYY-MM-DD) + normalized UPPER(city) + UPPER(state). City normalization strips parenthetical qualifiers, trailing punctuation, and collapses whitespace.</p>
+                <p><strong>Transfer rules:</strong> Only fills NULL fields &mdash; never overwrites existing NUFORC values.</p>
+                <table>
+                    <thead><tr><th>Field</th><th>NUFORC Records Enriched</th></tr></thead>
+                    <tbody>
+                        <tr><td>Hynek classification</td><td>102,554</td></tr>
+                        <tr><td>Vallee classification</td><td>83,710</td></tr>
+                        <tr><td>Shape</td><td>1,697</td></tr>
+                        <tr><td>Unmatched (no NUFORC hit)</td><td>19,637</td></tr>
+                    </tbody>
+                </table>
+
+                <h3>Phase 2: Three-Tier Cross-Source Matching</h3>
+                <p>After all imports and enrichment, the dedup engine (<code>dedup.py</code>) compares records across different sources using progressively broader matching strategies. Each tier builds on the previous, skipping pairs already flagged.</p>
+
+                <h4>Tier 1: MUFON &harr; NUFORC (7,694 pairs)</h4>
+                <p>The highest-overlap pair. Both sources cover modern US sightings with reliable date/location data.</p>
+                <ul>
+                    <li><strong>Match key:</strong> Exact date (YYYY-MM-DD) + UPPER(city) + UPPER(state)</li>
+                    <li><strong>Scoring:</strong> Full description similarity with source-specific preprocessing</li>
+                    <li><strong>Result:</strong> 7,694 candidate pairs</li>
+                </ul>
+
+                <h4>Tier 2: All Remaining Cross-Source Pairs (101,879 pairs)</h4>
+                <p>Four sub-tiers cover every remaining source combination, using the match key best suited to each source's location data quality:</p>
+                <table>
+                    <thead><tr><th>Sub-tier</th><th>Sources</th><th>Match Key</th><th>Why This Key</th><th>Pairs</th></tr></thead>
+                    <tbody>
+                        <tr><td><strong>2a</strong></td><td>MUFON &harr; UFOCAT</td><td>date + city + state</td><td>Both have structured state fields</td><td>2,295</td></tr>
+                        <tr><td><strong>2b</strong></td><td>NUFORC &harr; UFOCAT</td><td>date + city + state</td><td>Both have structured state fields</td><td>4,148</td></tr>
+                        <tr><td><strong>2c</strong></td><td>UPDB &harr; MUFON/NUFORC/UFOCAT</td><td>date + city <em>(no state)</em></td><td>UPDB has inconsistent state data</td><td>63,459</td></tr>
+                        <tr><td><strong>2d</strong></td><td>UFO-search &harr; MUFON/NUFORC/UFOCAT</td><td>date + city + state</td><td>UFO-search locations parsed via regex</td><td>31,977</td></tr>
+                    </tbody>
+                </table>
+                <p><strong>Source-specific notes:</strong></p>
+                <ul>
+                    <li>UFOCAT cities are stored in <code>raw_text</code> (ALL CAPS), not <code>city</code> &mdash; the loader reads <code>raw_text</code> instead</li>
+                    <li>UFO-search locations are free-text strings parsed by regex to extract <code>(city, state)</code> pairs; only locations matching the <code>City, ST</code> pattern with a valid US/Canadian state code are matchable</li>
+                    <li>UPDB sub-tier (2c) filters to US records only (<code>country='US'</code>) to reduce false positives from city-only matching</li>
+                    <li>All candidate pairs are normalized so <code>sighting_id_a &lt; sighting_id_b</code> to enforce the UNIQUE constraint</li>
+                </ul>
+
+                <h4>Tier 3: Description Fuzzy Matching (17,157 pairs)</h4>
+                <p>Catches duplicates that Tiers 1&ndash;2 miss due to location data differences (misspellings, missing state, different geocoding).</p>
+                <ul>
+                    <li><strong>Match key:</strong> Date only (no location requirement)</li>
+                    <li><strong>Scope:</strong> Only dates with records from 2+ sources AND &le;20 total records on that date</li>
+                    <li><strong>Skip:</strong> Pairs already found in Tiers 1&ndash;2 are excluded</li>
+                    <li><strong>Two-stage filtering:</strong>
+                        <ol>
+                            <li><strong>Token Jaccard &gt; 0.25</strong> &mdash; Fast set-intersection filter on lowercased word tokens</li>
+                            <li><strong>SequenceMatcher &ge; 0.5</strong> &mdash; Python's <code>difflib.SequenceMatcher</code> on the first 1,000 characters</li>
+                        </ol>
+                    </li>
+                    <li><strong>Result:</strong> 17,157 candidates from cross-source pairs sharing a date but not caught by location matching</li>
+                </ul>
+
+                <!-- ============ Similarity Scoring ============ -->
+                <h3>Similarity Scoring</h3>
+                <p>Every candidate pair receives a similarity score (0.0&ndash;1.0) computed by <code>compute_similarity()</code>:</p>
+                <ol>
+                    <li><strong>Source-specific preprocessing:</strong>
+                        <ul>
+                            <li>NUFORC: Strips <code>NUFORC UFO Sighting NNNNN</code> prefix</li>
+                            <li>MUFON: Strips <code>Submitted by razor via e-mail</code> boilerplate, extracts investigator notes</li>
+                        </ul>
+                    </li>
+                    <li><strong>"Starts with" shortcut:</strong> If both descriptions share the same first N characters (N &ge; 20), score = 0.95</li>
+                    <li><strong>Token Jaccard pre-filter:</strong> If token Jaccard &lt; 0.03, return that score immediately</li>
+                    <li><strong>Full alignment:</strong> <code>difflib.SequenceMatcher</code> on first 1,000 characters of each description</li>
+                </ol>
+                <p>Pairs with no description on either side receive score = 0.0 (still flagged as candidates based on location matching).</p>
+
+                <!-- ============ Results ============ -->
+                <h3>Results</h3>
+                <p><strong>126,730 duplicate candidate pairs</strong> across 127,440 unique sightings (20.7% of all records).</p>
+                <table>
+                    <thead><tr><th>Confidence</th><th>Score Range</th><th>Pairs</th><th>Interpretation</th></tr></thead>
+                    <tbody>
+                        <tr><td><span style="color:var(--green);font-weight:600">Certain</span></td><td>0.9 &ndash; 1.0</td><td>14,260</td><td>Near-identical descriptions; safe to auto-merge</td></tr>
+                        <tr><td><span style="color:var(--accent);font-weight:600">Likely</span></td><td>0.7 &ndash; 0.9</td><td>9,567</td><td>Strong match; minor wording differences</td></tr>
+                        <tr><td><span style="color:var(--orange);font-weight:600">Possible</span></td><td>0.5 &ndash; 0.7</td><td>13,303</td><td>Same event reported differently across sources</td></tr>
+                        <tr><td><span style="color:#b07d10;font-weight:600">Weak</span></td><td>0.3 &ndash; 0.5</td><td>11,144</td><td>Same date+location, descriptions partially overlap; needs review</td></tr>
+                        <tr><td><span style="color:var(--text-muted);font-weight:600">Unlikely</span></td><td>0.0 &ndash; 0.3</td><td>78,456</td><td>Same date+location but likely different events</td></tr>
+                    </tbody>
+                </table>
+
+                <h4>By Match Method</h4>
+                <table>
+                    <thead><tr><th>Method</th><th>Pairs</th><th>Avg Score</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>tier2c_updb_ufocat</code></td><td>59,620</td><td>0.225</td></tr>
+                        <tr><td><code>tier2d_ufosearch_ufocat</code></td><td>31,439</td><td>0.240</td></tr>
+                        <tr><td><code>tier3_desc_fuzzy</code></td><td>17,157</td><td>0.768</td></tr>
+                        <tr><td><code>tier1a_mufon_nuforc</code></td><td>7,694</td><td>0.226</td></tr>
+                        <tr><td><code>tier2b_nuforc_ufocat</code></td><td>4,148</td><td>0.129</td></tr>
+                        <tr><td><code>tier2c_updb_nuforc</code></td><td>3,519</td><td>0.234</td></tr>
+                        <tr><td><code>tier2a_mufon_ufocat</code></td><td>2,295</td><td>0.072</td></tr>
+                        <tr><td><code>tier2d_ufosearch_nuforc</code></td><td>397</td><td>0.044</td></tr>
+                        <tr><td><code>tier2c_updb_mufon</code></td><td>320</td><td>0.012</td></tr>
+                        <tr><td><code>tier2d_ufosearch_mufon</code></td><td>141</td><td>0.009</td></tr>
+                    </tbody>
+                </table>
+                <p><em>Note: The previous build flagged 242K candidates. The current build flags only 126K because the 123K UFOCAT-NUFORC duplicates (UFOReportCtr) are now prevented at import time rather than flagged after the fact.</em></p>
+
+                <!-- ============ Limitations ============ -->
+                <h3>What Dedup Does NOT Do</h3>
+                <ul>
+                    <li><strong>No records are deleted or merged.</strong> The <code>duplicate_candidate</code> table is advisory. All 614,505 sightings remain queryable.</li>
+                    <li><strong>No within-source dedup.</strong> The engine only flags cross-source pairs (different <code>source_db_id</code>). Duplicates within a single source are not flagged.</li>
+                    <li><strong>No transitive closure.</strong> If A&harr;B and B&harr;C are both flagged, A&harr;C is NOT automatically inferred. Each pair is independent.</li>
+                    <li><strong>Multiple witnesses are preserved.</strong> If the same event has genuinely separate witness reports in different sources, both records remain. The similarity score distinguishes true duplicates (high score) from independent reports of the same event (low score).</li>
+                </ul>
+
+                <!-- ============ Schema ============ -->
+                <h3>Database Schema</h3>
+                <h4><code>sighting</code> (614,505 rows, 42 columns)</h4>
+                <p>The main table. Each row is one reported sighting event.</p>
+                <table>
+                    <thead><tr><th>Category</th><th>Fields</th></tr></thead>
+                    <tbody>
+                        <tr><td>Provenance</td><td><code>source_db_id</code>, <code>source_record_id</code>, <code>origin_id</code>, <code>origin_record_id</code></td></tr>
+                        <tr><td>Dates</td><td><code>date_event</code> (ISO 8601), <code>date_event_raw</code>, <code>date_end</code>, <code>time_raw</code>, <code>timezone</code>, <code>date_reported</code>, <code>date_posted</code></td></tr>
+                        <tr><td>Location</td><td><code>location_id</code> (FK to <code>location</code> table)</td></tr>
+                        <tr><td>Description</td><td><code>summary</code>, <code>description</code></td></tr>
+                        <tr><td>Observation</td><td><code>shape</code>, <code>color</code>, <code>size_estimated</code>, <code>angular_size</code>, <code>distance</code>, <code>duration</code>, <code>duration_seconds</code>, <code>num_objects</code>, <code>num_witnesses</code>, <code>sound</code>, <code>direction</code>, <code>elevation_angle</code>, <code>viewed_from</code></td></tr>
+                        <tr><td>Witness</td><td><code>witness_age</code>, <code>witness_sex</code>, <code>witness_names</code></td></tr>
+                        <tr><td>Classification</td><td><code>hynek</code>, <code>vallee</code>, <code>event_type</code>, <code>svp_rating</code></td></tr>
+                        <tr><td>Resolution</td><td><code>explanation</code>, <code>characteristics</code></td></tr>
+                        <tr><td>Context</td><td><code>weather</code>, <code>terrain</code>, <code>source_ref</code>, <code>page_volume</code>, <code>notes</code></td></tr>
+                        <tr><td>Preservation</td><td><code>raw_json</code> &mdash; complete original record as JSON</td></tr>
+                    </tbody>
+                </table>
+
+                <h4>Supporting Tables</h4>
+                <ul>
+                    <li><strong><code>location</code></strong> &mdash; Deduplicated locations with <code>raw_text</code>, <code>city</code>, <code>county</code>, <code>state</code>, <code>country</code>, <code>region</code>, <code>latitude</code>, <code>longitude</code></li>
+                    <li><strong><code>source_database</code></strong> (5 rows) &mdash; UFOCAT, NUFORC, MUFON, UPDB, UFO-search</li>
+                    <li><strong><code>source_origin</code></strong> (31 rows) &mdash; Upstream sources within aggregator databases (Blue Book, NICAP, Hatch, etc.)</li>
+                    <li><strong><code>duplicate_candidate</code></strong> (126,730 rows) &mdash; Flagged duplicate pairs with similarity scores</li>
+                </ul>
+
+                <!-- ============ Pipeline ============ -->
+                <h3>Reproducible Build Pipeline</h3>
+                <p>The entire database can be rebuilt from source files with a single command:</p>
+                <pre>python rebuild_db.py</pre>
+                <p>This runs the full pipeline in order:</p>
+                <ol>
+                    <li>Create schema (<code>create_schema.py</code>)</li>
+                    <li>Import all 5 sources (UFOCAT with enrichment sidecar, NUFORC, MUFON, UPDB, UFO-search)</li>
+                    <li>Apply data quality fixes (longitude sign, city field, country codes, MUFON dates)</li>
+                    <li>Run enrichment (<code>enrich.py</code>)</li>
+                    <li>Run three-tier deduplication (<code>dedup.py</code>)</li>
+                    <li>Copy database to explorer (<code>ufo-explorer/ufo_unified.db</code>)</li>
+                </ol>
+                <p>Total build time: ~1.8 minutes.</p>
+
+            </div>
+        </div>
+    </main>
+
+    <!-- Detail Modal -->
+    <div id="modal-overlay" class="modal-overlay" style="display:none">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 id="modal-title">Sighting Detail</h2>
+                <button id="modal-close" class="modal-close">&times;</button>
+            </div>
+            <div id="modal-body" class="modal-body"></div>
+        </div>
+    </div>
+
+    <!-- App JS -->
+    <script src="/static/app.js"></script>
+</body>
+</html>
