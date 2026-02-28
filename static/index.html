@@ -42,9 +42,9 @@
     <div id="filters-bar">
         <div class="filter-group">
             <label>Date Range</label>
-            <input type="number" id="filter-date-from" placeholder="1900" min="1900" max="2026" />
+            <input type="number" id="filter-date-from" placeholder="1" min="1" max="2026" />
             <span class="filter-sep">&ndash;</span>
-            <input type="number" id="filter-date-to" placeholder="2026" min="1900" max="2026" />
+            <input type="number" id="filter-date-to" placeholder="2026" min="1" max="2026" />
         </div>
         <div class="filter-group">
             <label>Shape</label>
@@ -268,6 +268,10 @@
                     <li><strong>Month 00</strong> &mdash; 551 records with <code>YYYY-00-DD</code> truncated to <code>YYYY</code></li>
                     <li><strong>Day 00</strong> &mdash; 3,391 records with <code>YYYY-MM-00</code> truncated to <code>YYYY-MM</code></li>
                     <li><strong>Impossible calendar dates</strong> &mdash; 14 records with Feb 30+, Apr/Jun/Sep/Nov 31 truncated to <code>YYYY-MM</code></li>
+                    <li><strong>UFOCAT century-only <code>19//</code></strong> &mdash; 692 records with 2-digit raw year <code>19</code> (meaning &ldquo;19xx, year unknown&rdquo;) had <code>date_event</code> set to NULL. Audit logged in <code>date_correction</code> table</li>
+                    <li><strong>UFOCAT H-BOMB TEST <code>195//</code></strong> &mdash; 1 record with 3-digit year 195 and city &ldquo;H-BOMB TEST&rdquo; (clearly 1950s) set to NULL</li>
+                    <li><strong>NUFORC data entry errors</strong> &mdash; 2 records with wrong century corrected: <code>0205</code>&rarr;<code>2005</code> (Falmouth), <code>1721</code>&rarr;<code>2021</code> (Crescent City, Starlink-era sighting)</li>
+                    <li><strong>UPDB mangled years</strong> &mdash; 19 records with broken years from upstream UPDB export: 1 corrected (<code>0196</code>&rarr;<code>1962</code>, confirmed by description), 18 set to NULL (century-round years <code>0200</code>&ndash;<code>0900</code> and unconfirmed modern dates)</li>
                 </ul>
 
                 <h5>Shape / Classification Normalization</h5>
@@ -286,7 +290,7 @@
                 </ul>
 
                 <!-- ============ Historic Date Analysis ============ -->
-                <h3>Historic Date Analysis <span style="color:var(--orange);font-size:0.8em;">(IN PROGRESS)</span></h3>
+                <h3>Historic Date Analysis</h3>
                 <p>The database contains <strong>8,046 sighting records with dates before 1901</strong>, spanning from 34 AD (a white round object over China) to 1900. Most are legitimate historical sightings from academic catalogs, but several categories of date errors were identified through systematic analysis.</p>
 
                 <h4>Extraction &amp; Analysis Method</h4>
@@ -303,13 +307,13 @@
                         </tr>
                         <tr>
                             <td><code>ufocat_century_only</code></td><td>UFOCAT</td><td>692</td>
-                            <td><span style="color:var(--orange)">Review</span></td>
-                            <td>2-digit raw year <code>19//</code> = &ldquo;sometime in the 1900s, year unknown.&rdquo; ETL zero-padded to <code>0019</code>. Descriptions confirm modern events (abductions, radar, motion pictures). Year is genuinely unknown &mdash; only the century (20th) is known.</td>
+                            <td><span style="color:var(--green)">Fixed</span></td>
+                            <td>2-digit raw year <code>19//</code> = &ldquo;sometime in the 1900s, year unknown.&rdquo; ETL zero-padded to <code>0019</code>. Descriptions confirm modern events (abductions, radar, motion pictures). <strong>Resolution:</strong> <code>date_event</code> set to NULL (year genuinely unknown).</td>
                         </tr>
                         <tr>
                             <td><code>ufocat_3digit_review</code></td><td>UFOCAT</td><td>88</td>
-                            <td><span style="color:var(--orange)">Review</span></td>
-                            <td>3-digit raw years (034&ndash;999). Mostly legitimate ancient dates, but at least 2 confirmed modern mislabels: <code>195//</code> = &ldquo;H-BOMB TEST&rdquo; (1950s), <code>188//</code> with no descriptions (possibly 1880s).</td>
+                            <td><span style="color:var(--green)">Fixed</span></td>
+                            <td>3-digit raw years (034&ndash;999). Mostly legitimate ancient dates. 1 confirmed modern mislabel corrected: <code>195//</code> &ldquo;H-BOMB TEST&rdquo; (1950s) &rarr; NULL. 4 ambiguous <code>188//</code> records left as-is (no descriptions to disambiguate). Remaining 83 are legitimate ancient sightings.</td>
                         </tr>
                         <tr>
                             <td><code>other_source_review</code></td><td>UFO-search</td><td>1,984</td>
@@ -318,8 +322,8 @@
                         </tr>
                         <tr>
                             <td><code>other_source_review</code></td><td>UPDB</td><td>780</td>
-                            <td><span style="color:var(--orange)">Review</span></td>
-                            <td>~760 legitimate (1000&ndash;1900). ~20 records have mangled modern years from upstream data errors: <code>0196</code>=1962 (confirmed via description), <code>0200</code>=~2000, <code>0100</code>=modern, etc. Raw JSON confirms these are broken in the original UPDB export.</td>
+                            <td><span style="color:var(--green)">Fixed</span></td>
+                            <td>~760 legitimate (1000&ndash;1900). 19 records had mangled modern years from upstream data errors. <strong>Resolution:</strong> 1 corrected (<code>0196</code>&rarr;1962, confirmed by description), 18 set to NULL (century-round years <code>0200</code>&ndash;<code>0900</code> and unconfirmed modern dates).</td>
                         </tr>
                         <tr>
                             <td><code>other_source_review</code></td><td>MUFON</td><td>40</td>
@@ -328,8 +332,8 @@
                         </tr>
                         <tr>
                             <td><code>other_source_review</code></td><td>NUFORC</td><td>26</td>
-                            <td><span style="color:var(--orange)">Review</span></td>
-                            <td>~23 legitimate historic reports. ~3 data entry errors: <code>0205</code>=2005, <code>1071</code>=~2007, <code>1721</code>=~2021 (descriptions describe modern sightings).</td>
+                            <td><span style="color:var(--green)">Fixed</span></td>
+                            <td>~23 legitimate historic reports. 2 data entry errors corrected: <code>0205</code>&rarr;2005 (Falmouth), <code>1721</code>&rarr;2021 (Crescent City). 1 ambiguous record (<code>1071</code>) left as-is (could be 1971 or 2007).</td>
                         </tr>
                     </tbody>
                 </table>
@@ -343,14 +347,18 @@
                 </ul>
                 <p>The ETL&rsquo;s <code>parse_ufocat_date()</code> zero-pads all years to 4 digits (<code>f&quot;{y:04d}&quot;</code>), which correctly handles 3-digit ancient years but misinterprets 2-digit <code>19</code> as year 19 AD instead of &ldquo;19xx.&rdquo;</p>
 
-                <h4>Planned Resolution</h4>
-                <p>Fixes will be applied after manual review of the annotated analysis dataset. See <a href="https://github.com/UFOSINT/ufo-dedup/issues">GitHub issue tracker</a> for progress.</p>
-                <ul>
-                    <li><strong>692 UFOCAT century-only records:</strong> Set <code>date_event</code> to NULL (year genuinely unknown)</li>
-                    <li><strong>88 UFOCAT 3-digit years:</strong> Manual classification; correct confirmed modern mislabels</li>
-                    <li><strong>~20 UPDB mangled years:</strong> Manual correction from description context where possible</li>
-                    <li><strong>~3 NUFORC typos:</strong> Manual correction from description context</li>
-                </ul>
+                <h4>Applied Resolution</h4>
+                <p>After manual review of the annotated analysis dataset, <strong>714 records</strong> were corrected or nulled via Fixes 15&ndash;18 in <code>rebuild_db.py</code>. Every correction is logged in the <code>date_correction</code> audit table with the original date, corrected date, correction type, and reason. See <a href="https://github.com/UFOSINT/ufo-dedup/issues/1">GitHub issue #1</a>.</p>
+                <table>
+                    <thead><tr><th>Fix</th><th>Source</th><th>Action</th><th>Count</th></tr></thead>
+                    <tbody>
+                        <tr><td>Fix 15</td><td>UFOCAT</td><td>Century-only <code>19//</code> &rarr; NULL (year unknown)</td><td>692</td></tr>
+                        <tr><td>Fix 16</td><td>UFOCAT</td><td>H-BOMB TEST <code>195//</code> &rarr; NULL (1950s, not 195 AD)</td><td>1</td></tr>
+                        <tr><td>Fix 17</td><td>NUFORC</td><td>Data entry errors corrected (<code>0205</code>&rarr;2005, <code>1721</code>&rarr;2021)</td><td>2</td></tr>
+                        <tr><td>Fix 18</td><td>UPDB</td><td>Mangled years corrected/nulled (<code>0196</code>&rarr;1962, rest &rarr; NULL)</td><td>19</td></tr>
+                    </tbody>
+                </table>
+                <p>Conservative approach: only records with clear evidence were corrected. Ambiguous records (<code>188//</code> in UFOCAT, <code>1071</code> in NUFORC) were left unchanged. All fixes are idempotent and re-applied on each database rebuild.</p>
 
                 <!-- ============ Deduplication ============ -->
                 <h2>Deduplication Methodology</h2>
@@ -537,11 +545,11 @@
                 <p>Total build time: ~2 minutes.</p>
 
                 <h4>Test Suite</h4>
-                <p>The pipeline is validated by <strong>330 automated tests</strong> (<code>pytest tests/</code>):</p>
+                <p>The pipeline is validated by <strong>364 automated tests</strong> (<code>pytest tests/</code>):</p>
                 <ul>
                     <li><strong>115 dedup tests</strong> (<code>test_dedup.py</code>) &mdash; All dedup functions, tier logic, similarity scoring, and edge cases</li>
                     <li><strong>114 ETL tests</strong> (<code>test_etl.py</code>) &mdash; Schema creation, all 5 importers, data fix pipeline</li>
-                    <li><strong>101 data quality tests</strong> (<code>test_data_quality.py</code>) &mdash; Shape normalization, date validation, classification cleanup, description fixes</li>
+                    <li><strong>135 data quality tests</strong> (<code>test_data_quality.py</code>) &mdash; Shape normalization, date validation, classification cleanup, description fixes, historic date corrections, and audit trail</li>
                 </ul>
                 <p>All tests use an in-memory SQLite database with synthetic data &mdash; no production data required.</p>
 

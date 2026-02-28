@@ -179,7 +179,7 @@ def setup_db():
             if os.path.exists(p):
                 os.remove(p)
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    gdrive_id = "14FLkqBwEQXc1Qh-N3__P3D615TVihqQH"
+    gdrive_id = "11pOBDZIyl-aXB7BEX_Pn4F1ObE_1pj5_"
     url = f"https://drive.usercontent.google.com/download?id={gdrive_id}&export=download&confirm=t"
     tmp = DB_PATH + ".tmp"
     try:
@@ -449,8 +449,7 @@ def api_timeline():
             ORDER BY period
         """
     else:
-        # Yearly breakdown
-        clauses.append("CAST(SUBSTR(s.date_event, 1, 4) AS INTEGER) >= 1900")
+        # Yearly breakdown (includes pre-1900 historic sightings)
         where = " AND ".join(clauses)
 
         sql = f"""
@@ -722,8 +721,7 @@ def api_sentiment_timeline():
     conn = get_db()
     cur = conn.cursor()
 
-    clauses = ["s.date_event IS NOT NULL", "LENGTH(s.date_event) >= 4",
-               "CAST(SUBSTR(s.date_event, 1, 4) AS INTEGER) >= 1900"]
+    clauses = ["s.date_event IS NOT NULL", "LENGTH(s.date_event) >= 4"]
     args = []
     add_common_filters(request.args, clauses, args)
 
