@@ -251,12 +251,105 @@
                 </ul>
 
                 <h4>Data Quality Fixes</h4>
-                <p>Applied automatically by <code>rebuild_db.py</code>:</p>
+                <p>Applied automatically by <code>rebuild_db.py</code> in the <code>apply_data_fixes()</code> pipeline. All fixes are idempotent and preserve original values in <code>date_event_raw</code> and <code>raw_json</code> columns.</p>
+
+                <h5>Location Fixes</h5>
                 <ul>
-                    <li><strong>UFOCAT longitude sign</strong> &mdash; 30,822 Western Hemisphere locations had positive longitude; negated for US/CA</li>
+                    <li><strong>UFOCAT longitude sign</strong> &mdash; 30,822 Western Hemisphere locations had positive longitude; negated for US/CA records</li>
                     <li><strong>UFOCAT city field</strong> &mdash; 73,766 locations had city only in <code>raw_text</code>; copied to <code>city</code> column</li>
                     <li><strong>Country code normalization</strong> &mdash; USA&rarr;US, United Kingdom&rarr;GB, Canada&rarr;CA, Australia&rarr;AU</li>
-                    <li><strong>MUFON dates</strong> &mdash; Parsed <code>\n</code> separators and converted 12hr&rarr;24hr time</li>
+                </ul>
+
+                <h5>Date Fixes</h5>
+                <ul>
+                    <li><strong>MUFON literal <code>\n</code> in dates</strong> &mdash; 136,654 MUFON records contained a literal backslash-n (0x5C6E) in <code>date_event</code> (e.g., <code>2020-01-15\n3:00PM</code>). Time portion extracted to <code>time_raw</code>, date truncated to ISO date</li>
+                    <li><strong>Year 0000</strong> &mdash; Records with year <code>0000</code> have <code>date_event</code> set to NULL</li>
+                    <li><strong>Negative years</strong> &mdash; Records with <code>date_event</code> starting with <code>-</code> (e.g., <code>-009-02-10</code>) have <code>date_event</code> set to NULL</li>
+                    <li><strong>Month 00</strong> &mdash; 551 records with <code>YYYY-00-DD</code> truncated to <code>YYYY</code></li>
+                    <li><strong>Day 00</strong> &mdash; 3,391 records with <code>YYYY-MM-00</code> truncated to <code>YYYY-MM</code></li>
+                    <li><strong>Impossible calendar dates</strong> &mdash; 14 records with Feb 30+, Apr/Jun/Sep/Nov 31 truncated to <code>YYYY-MM</code></li>
+                </ul>
+
+                <h5>Shape / Classification Normalization</h5>
+                <ul>
+                    <li><strong>Shape case normalization</strong> &mdash; 24 case-duplicate groups collapsed via title-case (e.g., <code>circle</code>&rarr;<code>Circle</code>), including hyphenated shapes (e.g., <code>cigar-shaped</code>&rarr;<code>Cigar-Shaped</code>). 352&rarr;317 distinct values</li>
+                    <li><strong>Shape typo correction</strong> &mdash; 9 misspellings corrected (e.g., <code>Triangel</code>&rarr;<code>Triangle</code>, <code>Rectagle</code>&rarr;<code>Rectangle</code>)</li>
+                    <li><strong>Junk shapes removed</strong> &mdash; 3 non-shape values set to NULL (<code>WITNESS</code>, <code>0</code>, <code>12:45</code>)</li>
+                    <li><strong>Hynek uppercase</strong> &mdash; 3 case-duplicate Hynek codes normalized (e.g., <code>nl</code>&rarr;<code>NL</code>). 43&rarr;40 distinct values</li>
+                    <li><strong>Vallee uppercase</strong> &mdash; 2 case-duplicate Vallee codes normalized (e.g., <code>fb1</code>&rarr;<code>FB1</code>). 43&rarr;41 distinct values</li>
+                </ul>
+
+                <h5>Description Cleanup</h5>
+                <ul>
+                    <li><strong><code>[MISSING DATA]</code> removal</strong> &mdash; Records with description consisting solely of <code>[MISSING DATA]</code> or <code>[missing data]</code> set to NULL</li>
+                    <li><strong>MUFON boilerplate</strong> &mdash; <code>Submitted by razor via e-mail</code> and <code>Investigator Notes:</code> boilerplate stripped from descriptions</li>
+                </ul>
+
+                <!-- ============ Historic Date Analysis ============ -->
+                <h3>Historic Date Analysis <span style="color:var(--orange);font-size:0.8em;">(IN PROGRESS)</span></h3>
+                <p>The database contains <strong>8,046 sighting records with dates before 1901</strong>, spanning from 34 AD (a white round object over China) to 1900. Most are legitimate historical sightings from academic catalogs, but several categories of date errors were identified through systematic analysis.</p>
+
+                <h4>Extraction &amp; Analysis Method</h4>
+                <p>All pre-1901 records were extracted into a standalone analysis database (<code>temp/historic_pre1901.db</code>) using <code>extract_historic.py</code>. Each record was auto-classified based on its source, raw date format, and year digit count, then flagged for manual review where ambiguous.</p>
+
+                <h4>Categories Identified</h4>
+                <table>
+                    <thead><tr><th>Category</th><th>Source</th><th>Records</th><th>Status</th><th>Description</th></tr></thead>
+                    <tbody>
+                        <tr>
+                            <td><code>ufocat_ancient</code></td><td>UFOCAT</td><td>4,436</td>
+                            <td><span style="color:var(--green)">OK</span></td>
+                            <td>4-digit raw years (1001&ndash;1900). Legitimately pre-modern sightings. No action needed.</td>
+                        </tr>
+                        <tr>
+                            <td><code>ufocat_century_only</code></td><td>UFOCAT</td><td>692</td>
+                            <td><span style="color:var(--orange)">Review</span></td>
+                            <td>2-digit raw year <code>19//</code> = &ldquo;sometime in the 1900s, year unknown.&rdquo; ETL zero-padded to <code>0019</code>. Descriptions confirm modern events (abductions, radar, motion pictures). Year is genuinely unknown &mdash; only the century (20th) is known.</td>
+                        </tr>
+                        <tr>
+                            <td><code>ufocat_3digit_review</code></td><td>UFOCAT</td><td>88</td>
+                            <td><span style="color:var(--orange)">Review</span></td>
+                            <td>3-digit raw years (034&ndash;999). Mostly legitimate ancient dates, but at least 2 confirmed modern mislabels: <code>195//</code> = &ldquo;H-BOMB TEST&rdquo; (1950s), <code>188//</code> with no descriptions (possibly 1880s).</td>
+                        </tr>
+                        <tr>
+                            <td><code>other_source_review</code></td><td>UFO-search</td><td>1,984</td>
+                            <td><span style="color:var(--green)">OK</span></td>
+                            <td>Geldreich Majestic Timeline. Historical records from 61 AD to 1900. All appear legitimate.</td>
+                        </tr>
+                        <tr>
+                            <td><code>other_source_review</code></td><td>UPDB</td><td>780</td>
+                            <td><span style="color:var(--orange)">Review</span></td>
+                            <td>~760 legitimate (1000&ndash;1900). ~20 records have mangled modern years from upstream data errors: <code>0196</code>=1962 (confirmed via description), <code>0200</code>=~2000, <code>0100</code>=modern, etc. Raw JSON confirms these are broken in the original UPDB export.</td>
+                        </tr>
+                        <tr>
+                            <td><code>other_source_review</code></td><td>MUFON</td><td>40</td>
+                            <td><span style="color:var(--green)">OK</span></td>
+                            <td>All 1890&ndash;1900. Appear legitimate.</td>
+                        </tr>
+                        <tr>
+                            <td><code>other_source_review</code></td><td>NUFORC</td><td>26</td>
+                            <td><span style="color:var(--orange)">Review</span></td>
+                            <td>~23 legitimate historic reports. ~3 data entry errors: <code>0205</code>=2005, <code>1071</code>=~2007, <code>1721</code>=~2021 (descriptions describe modern sightings).</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h4>Root Cause: UFOCAT Variable-Length Year Field</h4>
+                <p>UFOCAT stores dates in separate YEAR, MO, DAY columns. The YEAR field uses <strong>variable-length encoding</strong>:</p>
+                <ul>
+                    <li><strong>4 digits</strong> (196,295 records): Standard years like <code>1966</code>, <code>2001</code></li>
+                    <li><strong>3 digits</strong> (90 records): Ancient years like <code>034</code> (34 AD), <code>776</code>, <code>919</code></li>
+                    <li><strong>2 digits</strong> (715 records): Century-only indicator <code>19</code> = &ldquo;19xx&rdquo; (20th century, unknown year)</li>
+                </ul>
+                <p>The ETL&rsquo;s <code>parse_ufocat_date()</code> zero-pads all years to 4 digits (<code>f&quot;{y:04d}&quot;</code>), which correctly handles 3-digit ancient years but misinterprets 2-digit <code>19</code> as year 19 AD instead of &ldquo;19xx.&rdquo;</p>
+
+                <h4>Planned Resolution</h4>
+                <p>Fixes will be applied after manual review of the annotated analysis dataset. See <a href="https://github.com/UFOSINT/ufo-dedup/issues">GitHub issue tracker</a> for progress.</p>
+                <ul>
+                    <li><strong>692 UFOCAT century-only records:</strong> Set <code>date_event</code> to NULL (year genuinely unknown)</li>
+                    <li><strong>88 UFOCAT 3-digit years:</strong> Manual classification; correct confirmed modern mislabels</li>
+                    <li><strong>~20 UPDB mangled years:</strong> Manual correction from description context where possible</li>
+                    <li><strong>~3 NUFORC typos:</strong> Manual correction from description context</li>
                 </ul>
 
                 <!-- ============ Deduplication ============ -->
@@ -435,13 +528,22 @@
                 <ol>
                     <li>Create schema (<code>create_schema.py</code>)</li>
                     <li>Import all 5 sources (UFOCAT with enrichment sidecar, NUFORC, MUFON, UPDB, UFO-search)</li>
-                    <li>Apply data quality fixes (longitude sign, city field, country codes, MUFON dates)</li>
+                    <li>Apply data quality fixes &mdash; 14 fix categories covering dates, locations, shapes, classifications, and descriptions</li>
                     <li>Geocode locations using GeoNames gazetteer (<code>geocode.py</code>)</li>
                     <li>Run enrichment (<code>enrich.py</code>)</li>
                     <li>Run three-tier deduplication (<code>dedup.py</code>)</li>
                     <li>Copy database to explorer (<code>ufo-explorer/ufo_unified.db</code>)</li>
                 </ol>
                 <p>Total build time: ~2 minutes.</p>
+
+                <h4>Test Suite</h4>
+                <p>The pipeline is validated by <strong>330 automated tests</strong> (<code>pytest tests/</code>):</p>
+                <ul>
+                    <li><strong>115 dedup tests</strong> (<code>test_dedup.py</code>) &mdash; All dedup functions, tier logic, similarity scoring, and edge cases</li>
+                    <li><strong>114 ETL tests</strong> (<code>test_etl.py</code>) &mdash; Schema creation, all 5 importers, data fix pipeline</li>
+                    <li><strong>101 data quality tests</strong> (<code>test_data_quality.py</code>) &mdash; Shape normalization, date validation, classification cleanup, description fixes</li>
+                </ul>
+                <p>All tests use an in-memory SQLite database with synthetic data &mdash; no production data required.</p>
 
                 <!-- ============ Geocoding ============ -->
                 <h3>Geocoding</h3>
