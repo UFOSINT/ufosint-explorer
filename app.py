@@ -15,11 +15,24 @@ import json
 import time
 from flask import Flask, request, jsonify, send_from_directory
 from flask_caching import Cache
+from flask_compress import Compress
 
 import psycopg
 from psycopg_pool import ConnectionPool
 
 app = Flask(__name__, static_folder="static")
+
+# gzip / brotli on every response > 500 bytes. The 4 MB world-map JSON
+# response shrinks to ~700 KB. Free win for everyone, biggest win for
+# mobile users on slow connections.
+app.config["COMPRESS_MIMETYPES"] = [
+    "application/json",
+    "text/html", "text/css", "text/javascript", "application/javascript",
+    "image/svg+xml",
+]
+app.config["COMPRESS_LEVEL"] = 6           # gzip default; balances CPU vs ratio
+app.config["COMPRESS_MIN_SIZE"] = 500
+Compress(app)
 
 # In-process LRU cache for expensive query responses. Per-worker
 # (not shared across gunicorn workers), keyed on the full query
@@ -106,6 +119,48 @@ def get_db():
     underlying connection to the pool) or using a `with` block.
     """
     return _PooledConn(_pool.getconn())
+
+
+# ---------------------------------------------------------------------------
+# HTTP cache headers
+# ---------------------------------------------------------------------------
+# Routes that are safe to cache in the browser/CDN for a few minutes.
+# Keep these in sync with the @cache.cached server-side decorators below.
+_BROWSER_CACHEABLE_PREFIXES = (
+    "/api/stats",
+    "/api/filters",
+    "/api/map",
+    "/api/heatmap",
+    "/api/timeline",
+    "/api/search",
+    "/api/sentiment/",
+    "/api/duplicates",
+)
+
+@app.after_request
+def add_cache_headers(response):
+    """Set Cache-Control on cacheable responses.
+
+    - /static/* is fingerprinted-by-content-hash via Flask's default ETag
+      so we can max-age them aggressively. Browsers revalidate on
+      navigation; the response cache layer above handles repeats.
+    - The cacheable /api/* endpoints get a short max-age (5 min) so the
+      browser doesn't even hit the server during a single user session of
+      panning around.
+    - /api/sighting/<id> and /health stay no-cache so detail lookups and
+      health checks are always fresh.
+    """
+    path = request.path or ""
+    if path.startswith("/static/"):
+        # 7 days. Static files are version-pinned in the deploy package;
+        # if a deploy changes them, the browser revalidates against the
+        # ETag (Flask sets one automatically on send_from_directory).
+        response.headers["Cache-Control"] = "public, max-age=604800"
+    elif any(path.startswith(p) for p in _BROWSER_CACHEABLE_PREFIXES):
+        response.headers["Cache-Control"] = "public, max-age=300"
+    elif path == "/" or path.startswith("/static"):
+        response.headers["Cache-Control"] = "public, max-age=60"
+    return response
 
 
 # ---------------------------------------------------------------------------

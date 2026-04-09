@@ -17,10 +17,28 @@ const state = {
     timelineYear: null,  // null = yearly view, "2005" = monthly drill-down
     searchPage: 0,
     searchTotal: 0,
+    searchSort: "date_desc",   // date_desc | date_asc
     dupesPage: 0,
     dupesTotal: 0,
     insightsCharts: {},  // { radar, timeline, source, shape }
+    // Set to true while we're loading state from the URL hash on
+    // navigation, so the hash-update side effect is suppressed.
+    hashLoading: false,
 };
+
+// Filter ID -> human label, used by the active-filter chip strip in the
+// search panel and as the source-of-truth for serializing filters to the
+// URL hash.
+const FILTER_FIELDS = [
+    { id: "filter-date-from", key: "date_from", label: "From" },
+    { id: "filter-date-to",   key: "date_to",   label: "To" },
+    { id: "filter-shape",     key: "shape",     label: "Shape" },
+    { id: "filter-collection",key: "collection",label: "Collection" },
+    { id: "filter-source",    key: "source",    label: "Source" },
+    { id: "filter-hynek",     key: "hynek",     label: "Hynek" },
+    { id: "filter-vallee",    key: "vallee",    label: "Vallee" },
+    { id: "coords-filter",    key: "coords",    label: "Coords" },
+];
 
 // Source colors for chart and badges
 const SOURCE_COLORS = {
@@ -83,7 +101,13 @@ document.addEventListener("DOMContentLoaded", async () => {
     document.getElementById("search-input").addEventListener("keydown", e => {
         if (e.key === "Enter") doSearch();
     });
-    document.getElementById("btn-load-more").addEventListener("click", loadMoreSearch);
+    const sortEl = document.getElementById("search-sort");
+    if (sortEl) {
+        sortEl.addEventListener("change", () => {
+            state.searchSort = sortEl.value;
+            executeSearch();
+        });
+    }
 
     // Modal
     document.getElementById("modal-close").addEventListener("click", closeModal);
@@ -115,6 +139,36 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     // Init map
     initMap();
+
+    // ----- URL hash routing: load any deep-linked tab + filters -----
+    const initial = readHash();
+    if (initial) {
+        applyHashToFilters(initial.params);
+        if (initial.tab && initial.tab !== "map") {
+            switchTab(initial.tab);
+            if (initial.tab === "search") {
+                doSearch();
+            }
+        } else if (initial.tab === "map") {
+            // applyHashToFilters above already populated the filter inputs;
+            // re-fire the map load with them
+            if (state.mapMode === "heatmap") loadHeatmap();
+            else loadMapMarkers();
+        }
+    }
+
+    // Back/forward navigation
+    window.addEventListener("hashchange", () => {
+        const h = readHash();
+        if (!h) return;
+        applyHashToFilters(h.params);
+        if (h.tab && h.tab !== state.activeTab) {
+            switchTab(h.tab);
+        } else {
+            // Same tab — re-run with new filters
+            applyFilters();
+        }
+    });
 });
 
 // =========================================================================
@@ -171,7 +225,11 @@ function populateFilterDropdowns(data) {
     });
 
     const sourceSelect = document.getElementById("filter-source");
+    // Lookup table used by the timeline click handler to map a source
+    // name (from the chart legend) back to its numeric id.
+    window.__sourceMap = {};
     (data.sources || []).forEach(s => {
+        window.__sourceMap[s.name] = s;
         const opt = document.createElement("option");
         opt.value = s.id;
         opt.textContent = s.name;
@@ -270,7 +328,10 @@ function switchTab(tab) {
         if (document.getElementById("dupes-results").children.length === 0) {
             loadDuplicates();
         }
+    } else if (tab === "search") {
+        renderActiveFilterChips();
     }
+    writeHash();
 }
 
 function applyFilters() {
@@ -281,6 +342,7 @@ function applyFilters() {
     else if (state.activeTab === "timeline") loadTimeline();
     else if (state.activeTab === "search") doSearch();
     else if (state.activeTab === "insights") loadInsights();
+    writeHash();
 }
 
 function clearFilters() {
@@ -292,6 +354,108 @@ function clearFilters() {
     document.getElementById("filter-hynek").value = "";
     document.getElementById("filter-vallee").value = "";
     applyFilters();
+}
+
+// =========================================================================
+// URL hash routing  (#/<tab>?key=value&key=value)
+// =========================================================================
+function writeHash() {
+    if (state.hashLoading) return;
+    const params = new URLSearchParams();
+    FILTER_FIELDS.forEach(({ id, key }) => {
+        const v = document.getElementById(id);
+        if (v && v.value && !(key === "coords" && v.value === "all")) {
+            params.set(key, v.value);
+        }
+    });
+    if (state.activeTab === "search") {
+        const q = document.getElementById("search-input")?.value?.trim();
+        if (q) params.set("q", q);
+        if (state.searchPage)  params.set("page", state.searchPage);
+        if (state.searchSort && state.searchSort !== "date_desc") params.set("sort", state.searchSort);
+    }
+    const qs = params.toString();
+    const newHash = `#/${state.activeTab}${qs ? "?" + qs : ""}`;
+    if (newHash !== window.location.hash) {
+        history.replaceState(null, "", newHash);
+    }
+}
+
+function readHash() {
+    const m = window.location.hash.match(/^#\/([^?]+)(?:\?(.*))?$/);
+    if (!m) return null;
+    const tab = m[1];
+    const params = new URLSearchParams(m[2] || "");
+    return { tab, params };
+}
+
+function applyHashToFilters(params) {
+    state.hashLoading = true;
+    try {
+        FILTER_FIELDS.forEach(({ id, key }) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            const v = params.get(key);
+            if (v != null) el.value = v;
+        });
+        if (params.get("q") !== null) {
+            const inp = document.getElementById("search-input");
+            if (inp) inp.value = params.get("q");
+        }
+        if (params.get("page") !== null) state.searchPage = parseInt(params.get("page"), 10) || 0;
+        if (params.get("sort") !== null) state.searchSort = params.get("sort");
+    } finally {
+        state.hashLoading = false;
+    }
+}
+
+/**
+ * Programmatically jump to the search tab with a given filter set.
+ *
+ * `filterUpdates` is an object of `{date_from, date_to, source, shape, ...}`
+ * (whatever subset you want to set). Anything not specified is left
+ * untouched. `clearFirst=true` resets all filters first.
+ *
+ * Used by:
+ *  - Timeline bar clicks (set date range and optionally source)
+ *  - Map popup "View all in this city" links (future)
+ */
+function navigateToSearch(filterUpdates, clearFirst = false) {
+    state.hashLoading = true;
+    try {
+        if (clearFirst) {
+            FILTER_FIELDS.forEach(({ id, key }) => {
+                if (key === "coords") return;
+                const el = document.getElementById(id);
+                if (el) el.value = "";
+            });
+            const inp = document.getElementById("search-input");
+            if (inp) inp.value = "";
+        }
+        Object.entries(filterUpdates || {}).forEach(([key, value]) => {
+            const field = FILTER_FIELDS.find(f => f.key === key);
+            if (field) {
+                const el = document.getElementById(field.id);
+                if (el) el.value = value == null ? "" : String(value);
+            } else if (key === "q") {
+                const inp = document.getElementById("search-input");
+                if (inp) inp.value = value || "";
+            }
+        });
+        state.searchPage = 0;
+    } finally {
+        state.hashLoading = false;
+    }
+    switchTab("search");
+    // doSearch is called below so we update both the panel and the hash.
+    doSearch();
+}
+
+/**
+ * Last day of the month for date_to= bounds. month is 1-12.
+ */
+function lastDayOfMonth(year, month) {
+    return new Date(parseInt(year, 10), parseInt(month, 10), 0).getDate();
 }
 
 // =========================================================================
@@ -538,6 +702,7 @@ async function loadTimeline() {
 
     const titleEl = document.getElementById("timeline-title");
     const backBtn = document.getElementById("timeline-back");
+    const viewBtn = document.getElementById("timeline-view-results");
 
     titleEl.textContent = year ? `Sightings in ${year} by Month` : "Sightings by Year";
     backBtn.style.display = year ? "inline-block" : "none";
@@ -550,8 +715,9 @@ async function loadTimeline() {
     periods.forEach(p => {
         Object.keys(data.data[p]).forEach(s => sourceNames.add(s));
     });
+    const sourceList = Array.from(sourceNames);
 
-    const datasets = Array.from(sourceNames).map(name => {
+    const datasets = sourceList.map(name => {
         const c = sourceColor(name);
         return {
             label: name,
@@ -572,10 +738,75 @@ async function loadTimeline() {
         return p;
     });
 
+    // Total across all visible bars (used by the "View N results" button label)
+    let visibleTotal = 0;
+    periods.forEach(p => {
+        Object.values(data.data[p]).forEach(v => { visibleTotal += v; });
+    });
+
+    // Configure the "View results" button to jump to search filtered to
+    // the currently displayed range. In yearly view, it filters by the
+    // currently active date_from/date_to (or "all years" if no filters).
+    // In monthly view, it filters to the whole displayed year.
+    if (viewBtn) {
+        if (visibleTotal > 0) {
+            viewBtn.textContent = `View ${visibleTotal.toLocaleString()} sightings →`;
+            viewBtn.style.display = "inline-block";
+            viewBtn.onclick = () => {
+                if (year) {
+                    navigateToSearch({ date_from: `${year}-01-01`, date_to: `${year}-12-31` });
+                } else {
+                    // Yearly view: just switch to search with current global filters
+                    navigateToSearch({});
+                }
+            };
+        } else {
+            viewBtn.style.display = "none";
+        }
+    }
+
     // Destroy old chart
     if (state.chart) {
         state.chart.destroy();
     }
+
+    // Use a closure to lift the data we need into the click handler
+    const onChartClick = (evt, elements) => {
+        if (!elements.length) return;
+        const el = elements[0];
+        const period = periods[el.index];
+        const sourceName = sourceList[el.datasetIndex];
+
+        if (data.mode === "yearly") {
+            // Click year bar -> drill down to monthly view (existing behavior).
+            // If user clicked a stacked source segment we ALSO remember to
+            // pre-filter the monthly drill-down by source via the global
+            // filter dropdown.
+            if (sourceName) {
+                const sourceObj = (window.__sourceMap || {})[sourceName];
+                if (sourceObj) {
+                    document.getElementById("filter-source").value = String(sourceObj.id);
+                }
+            }
+            state.timelineYear = period;
+            loadTimeline();
+        } else {
+            // Monthly view -> jump to filtered search for that month.
+            // period is "YYYY-MM"
+            const [y, m] = period.split("-");
+            const lastDay = lastDayOfMonth(y, m);
+            const filterUpdates = {
+                date_from: `${y}-${m}-01`,
+                date_to:   `${y}-${m}-${String(lastDay).padStart(2, "0")}`,
+            };
+            // If user clicked a stacked segment, also filter by that source.
+            if (sourceName) {
+                const sourceObj = (window.__sourceMap || {})[sourceName];
+                if (sourceObj) filterUpdates.source = sourceObj.id;
+            }
+            navigateToSearch(filterUpdates);
+        }
+    };
 
     const ctx = document.getElementById("timeline-chart").getContext("2d");
     state.chart = new Chart(ctx, {
@@ -591,7 +822,10 @@ async function loadTimeline() {
                     callbacks: {
                         footer: (items) => {
                             const total = items.reduce((s, i) => s + i.parsed.y, 0);
-                            return `Total: ${total.toLocaleString()}`;
+                            const hint = data.mode === "yearly"
+                                ? "Click to drill into months"
+                                : "Click to view records";
+                            return `Total: ${total.toLocaleString()}\n${hint}`;
                         }
                     }
                 }
@@ -600,12 +834,9 @@ async function loadTimeline() {
                 x: { stacked: true },
                 y: { stacked: true, beginAtZero: true },
             },
-            onClick: (evt, elements) => {
-                if (elements.length > 0 && data.mode === "yearly") {
-                    const idx = elements[0].index;
-                    state.timelineYear = periods[idx];
-                    loadTimeline();
-                }
+            onClick: onChartClick,
+            onHover: (evt, elements) => {
+                evt.native.target.style.cursor = elements.length ? "pointer" : "";
             },
         },
     });
@@ -616,70 +847,180 @@ async function loadTimeline() {
 // =========================================================================
 async function doSearch() {
     state.searchPage = 0;
-    const results = document.getElementById("search-results");
-    results.innerHTML = "";
     await executeSearch();
 }
 
-async function loadMoreSearch() {
-    state.searchPage++;
-    await executeSearch(true);
-}
-
-async function executeSearch(append = false) {
+async function executeSearch() {
+    renderActiveFilterChips();
     const q = document.getElementById("search-input").value.trim();
     const params = getFilterParams();
     if (q) params.set("q", q);
     params.set("page", state.searchPage);
 
-    const info = document.getElementById("search-info");
-    const resultsEl = document.getElementById("search-results");
-    const loadMoreBtn = document.getElementById("btn-load-more");
+    const info     = document.getElementById("search-info");
+    const resultsEl= document.getElementById("search-results");
+    const pagerEl  = document.getElementById("search-pager");
 
+    // Skeleton loading state
     info.innerHTML = '<span class="loading-pulse">Searching...</span>';
+    resultsEl.innerHTML = `
+        <div class="result-card skeleton"></div>
+        <div class="result-card skeleton"></div>
+        <div class="result-card skeleton"></div>
+    `;
+    pagerEl.innerHTML = "";
 
     try {
         const data = await fetchJSON(`/api/search?${params}`);
         state.searchTotal = data.total;
 
-        if (!append) {
-            resultsEl.innerHTML = "";
+        // Sort client-side if asked. Backend always returns date_desc.
+        const sorted = (state.searchSort === "date_asc")
+            ? data.results.slice().sort((a, b) => (a.date || "").localeCompare(b.date || ""))
+            : data.results;
+
+        if (data.total === 0) {
+            resultsEl.innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-state-icon">🛸</div>
+                    <div class="empty-state-title">No sightings found</div>
+                    <div class="empty-state-detail">
+                        Try clearing some filters above, or
+                        <a href="#" onclick="clearFilters(); document.getElementById('search-input').value=''; doSearch(); return false;">reset everything</a>.
+                    </div>
+                </div>
+            `;
+            info.textContent = `0 results${q ? ` for "${q}"` : ""}`;
+            return;
         }
 
-        info.textContent = `${data.total.toLocaleString()} results found` +
-            (q ? ` for "${q}"` : "") +
-            (data.total > 0 ? ` (page ${data.page + 1} of ${data.pages})` : "");
+        info.innerHTML = `<strong>${data.total.toLocaleString()}</strong> results` +
+            (q ? ` for <em>"${escapeHtml(q)}"</em>` : "") +
+            ` &middot; page ${data.page + 1} of ${data.pages.toLocaleString()}`;
 
-        data.results.forEach(r => {
+        const hl = q ? new RegExp(`(${escapeRegExp(q)})`, "gi") : null;
+        resultsEl.innerHTML = "";
+        sorted.forEach(r => {
             const card = document.createElement("div");
             card.className = "result-card";
             card.onclick = () => openDetail(r.id);
 
             const loc = formatLocation(r.city, r.state, r.country);
+            const desc = r.description || "";
+            const descHtml = hl
+                ? escapeHtml(desc).replace(hl, '<mark>$1</mark>')
+                : escapeHtml(desc);
+
+            const meta = [
+                r.hynek    ? `<span class="meta-pill">Hynek: ${escapeHtml(r.hynek)}</span>` : "",
+                r.witnesses? `<span class="meta-pill">${r.witnesses} witness${r.witnesses === 1 ? '' : 'es'}</span>` : "",
+                r.duration ? `<span class="meta-pill">${escapeHtml(r.duration)}</span>` : "",
+            ].filter(Boolean).join("");
+
             card.innerHTML = `
                 <div class="result-header">
-                    <span class="result-date">${r.date || "Unknown date"}</span>
+                    <span class="result-date">${escapeHtml(r.date || "Unknown date")}</span>
                     ${sourceBadge(r.source)}
                     ${r.shape ? `<span class="shape-tag">${escapeHtml(r.shape)}</span>` : ""}
                 </div>
-                <div class="result-loc">${escapeHtml(loc)}</div>
-                <div class="result-desc">${escapeHtml(r.description)}</div>
-                <div class="result-meta">
-                    ${r.hynek ? `Hynek: ${escapeHtml(r.hynek)}` : ""}
-                    ${r.witnesses ? ` | Witnesses: ${r.witnesses}` : ""}
-                    ${r.duration ? ` | Duration: ${escapeHtml(r.duration)}` : ""}
-                </div>
+                <div class="result-loc">${escapeHtml(loc) || "Unknown location"}</div>
+                <div class="result-desc">${descHtml}</div>
+                ${meta ? `<div class="result-meta">${meta}</div>` : ""}
             `;
             resultsEl.appendChild(card);
         });
 
-        // Show/hide load more
-        const hasMore = (state.searchPage + 1) < data.pages;
-        loadMoreBtn.style.display = hasMore ? "block" : "none";
+        renderPager(data.page, data.pages);
     } catch (err) {
         info.textContent = "Error searching";
+        resultsEl.innerHTML = `<div class="empty-state"><div class="empty-state-icon">⚠️</div><div class="empty-state-title">Search failed</div><div class="empty-state-detail">${escapeHtml(err.message || String(err))}</div></div>`;
         console.error(err);
     }
+}
+
+function escapeRegExp(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function renderActiveFilterChips() {
+    const el = document.getElementById("search-active-filters");
+    if (!el) return;
+    const chips = [];
+    FILTER_FIELDS.forEach(({ id, key, label }) => {
+        if (key === "coords") return;
+        const input = document.getElementById(id);
+        if (!input || !input.value) return;
+        let display = input.value;
+        // For <select>, use the selected option's text as the display label
+        if (input.tagName === "SELECT") {
+            const opt = input.options[input.selectedIndex];
+            display = opt && opt.text ? opt.text : input.value;
+        }
+        chips.push(`
+            <span class="chip" data-field="${id}">
+                <span class="chip-label">${label}: ${escapeHtml(display)}</span>
+                <button class="chip-x" title="Remove this filter" onclick="removeFilter('${id}')">&times;</button>
+            </span>
+        `);
+    });
+    if (chips.length === 0) {
+        el.innerHTML = "";
+        el.style.display = "none";
+    } else {
+        chips.push(`<button class="chip-clear" onclick="clearFilters(); doSearch();">Clear all</button>`);
+        el.innerHTML = chips.join("");
+        el.style.display = "flex";
+    }
+}
+
+function removeFilter(inputId) {
+    const el = document.getElementById(inputId);
+    if (el) el.value = "";
+    state.searchPage = 0;
+    doSearch();
+}
+
+function renderPager(currentPage, totalPages) {
+    const pagerEl = document.getElementById("search-pager");
+    if (!pagerEl) return;
+    if (totalPages <= 1) { pagerEl.innerHTML = ""; return; }
+
+    const buttons = [];
+    const cur = currentPage; // 0-indexed
+    const last = totalPages - 1;
+
+    function btn(label, page, disabled = false, active = false) {
+        const cls = ["pager-btn"];
+        if (disabled) cls.push("disabled");
+        if (active)   cls.push("active");
+        const onclick = (disabled || active) ? "" : `onclick="goToPage(${page})"`;
+        return `<button class="${cls.join(' ')}" ${onclick}>${label}</button>`;
+    }
+
+    buttons.push(btn("« First", 0, cur === 0));
+    buttons.push(btn("‹ Prev",  cur - 1, cur === 0));
+
+    // Sliding window of page numbers around the current page
+    const windowSize = 2;
+    const start = Math.max(0, cur - windowSize);
+    const end   = Math.min(last, cur + windowSize);
+    if (start > 0) buttons.push(`<span class="pager-ellipsis">…</span>`);
+    for (let i = start; i <= end; i++) {
+        buttons.push(btn(String(i + 1), i, false, i === cur));
+    }
+    if (end < last) buttons.push(`<span class="pager-ellipsis">…</span>`);
+
+    buttons.push(btn("Next ›", cur + 1, cur === last));
+    buttons.push(btn("Last »", last,    cur === last));
+
+    pagerEl.innerHTML = buttons.join("");
+}
+
+function goToPage(page) {
+    state.searchPage = page;
+    executeSearch();
+    // Scroll back to top of results so the user can see them
+    document.getElementById("search-results")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 // =========================================================================
@@ -1214,8 +1555,14 @@ async function openDetail(id) {
     }
 }
 
-// Make openDetail globally available (called from popup links)
-window.openDetail = openDetail;
+// Make functions globally available for inline onclick handlers in
+// dynamically-injected markup (popup links, filter chips, pager buttons,
+// empty-state CTAs, etc.).
+window.openDetail   = openDetail;
+window.removeFilter = removeFilter;
+window.goToPage     = goToPage;
+window.clearFilters = clearFilters;
+window.doSearch     = doSearch;
 
 function closeModal() {
     document.getElementById("modal-overlay").style.display = "none";

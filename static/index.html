@@ -3,7 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>UFO Explorer</title>
+    <title>UFO Explorer — UFOSINT</title>
+    <meta name="description" content="Browse 614,505 deduplicated UFO and UAP sighting records from five major databases on an interactive map, timeline, and full-text search." />
+
+    <!-- Inter font -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
 
     <!-- Leaflet -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -11,7 +17,7 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
 
     <!-- Chart.js -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 
     <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -42,9 +48,9 @@
     <div id="filters-bar">
         <div class="filter-group">
             <label>Date Range</label>
-            <input type="number" id="filter-date-from" placeholder="1" min="1" max="2026" />
+            <input type="text" id="filter-date-from" placeholder="YYYY or YYYY-MM-DD" size="14" />
             <span class="filter-sep">&ndash;</span>
-            <input type="number" id="filter-date-to" placeholder="2026" min="1" max="2026" />
+            <input type="text" id="filter-date-to" placeholder="YYYY or YYYY-MM-DD" size="14" />
         </div>
         <div class="filter-group">
             <label>Shape</label>
@@ -93,7 +99,10 @@
             <div class="timeline-header">
                 <button id="timeline-back" class="btn btn-small" style="display:none">&larr; Back to Years</button>
                 <span id="timeline-title">Sightings by Year</span>
+                <span class="timeline-spacer"></span>
+                <button id="timeline-view-results" class="btn btn-primary btn-small" style="display:none">View results</button>
             </div>
+            <div class="timeline-hint">Click a bar to drill into months or jump to records.</div>
             <div class="chart-container">
                 <canvas id="timeline-chart"></canvas>
             </div>
@@ -104,10 +113,15 @@
             <div class="search-bar">
                 <input type="text" id="search-input" placeholder="Search descriptions (e.g. triangle, bright light, hovering)..." />
                 <button id="btn-search" class="btn btn-primary">Search</button>
+                <select id="search-sort" class="search-sort" title="Sort order">
+                    <option value="date_desc">Newest first</option>
+                    <option value="date_asc">Oldest first</option>
+                </select>
             </div>
+            <div id="search-active-filters" class="active-filters"></div>
             <div id="search-info" class="search-info"></div>
             <div id="search-results" class="search-results"></div>
-            <button id="btn-load-more" class="btn btn-secondary" style="display:none">Load More</button>
+            <div id="search-pager" class="search-pager"></div>
         </div>
 
         <!-- Duplicates Panel -->
