@@ -12,15 +12,43 @@
     --border:     #2a3346;
     --border-strong: #3a455e;
     --text:       #e8edf5;
+    --text-strong: #ffffff;      /* used for H1/H3 headings and dates on result cards — signals hierarchy without burning another accent */
     --text-muted: #8a96ad;
     --text-faint: #8693ab;       /* bumped from #5e6a82 to pass WCAG AA on dark surfaces (~4.7:1 vs ~2.9:1) */
-    --accent:     #6ea8ff;       /* slightly softer than #58a6ff */
+    --accent:     #6ea8ff;       /* reserved for INTERACTIVE surfaces only: active tab, primary button, links, focus ring, pager active */
     --accent-hover: #8fbcff;
     --accent-bg:  rgba(110, 168, 255, 0.12);
-    --green:  #3fb950;
-    --orange: #f28e2b;
-    --red:    #e15759;
+
+    /* Categorical palette — used for source badges and future chart
+       series. Matches the values currently hardcoded in JS SOURCE_COLORS
+       so there is one semantic source of truth in CSS. Desaturated
+       Tableau-10 values tuned for dark backgrounds. */
+    --cat-1: #4e79a7;   /* UFOCAT blue */
+    --cat-2: #f28e2b;   /* NUFORC orange */
+    --cat-3: #e15759;   /* MUFON red */
+    --cat-4: #76b7b2;   /* UPDB teal */
+    --cat-5: #59a14f;   /* UFO-search green */
+    --cat-6: #ffce56;   /* spare yellow */
+    --cat-7: #9966ff;   /* spare purple */
+    --cat-8: #4bc0c0;   /* spare cyan */
+
+    /* Semantic palette — split from categorical so future code can
+       change one without cross-contamination. Currently values overlap
+       with the categorical palette, but the names are separate. */
+    --success: #3fb950;
+    --warning: #f28e2b;
+    --danger:  #e15759;
+    --info:    #6ea8ff;
+
+    /* Legacy aliases — kept so existing .dupe-score etc. don't break */
+    --green:  var(--success);
+    --orange: var(--warning);
+    --red:    var(--danger);
     --yellow: #ffce56;
+
+    /* Fonts */
+    --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
 
     /* Type scale */
     --fs-12: 12px;
@@ -124,6 +152,26 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
     filter: brightness(0.92);
 }
 
+/* ---- Inline SVG icons (Sprint 4) ----
+   Lucide-style stroke icons. Size follows font-size via em units so they
+   scale with the button/label they sit inside. stroke=currentColor so they
+   inherit the surrounding text color. */
+.icon {
+    display: inline-block;
+    width: 1em;
+    height: 1em;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    vertical-align: -0.15em;
+    flex-shrink: 0;
+}
+.icon-md { width: 1.15em; height: 1.15em; }
+.icon-lg { width: 1.35em; height: 1.35em; }
+.icon-xl { width: 48px; height: 48px; }
+
 /* ---- Header ---- */
 #header {
     display: flex;
@@ -142,10 +190,10 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
 }
 
 #header h1 {
-    font-size: var(--fs-18);
+    font-size: var(--fs-20);
     font-weight: 700;
-    letter-spacing: -0.01em;
-    color: var(--accent);
+    letter-spacing: -0.015em;
+    color: var(--accent);            /* brand exception — H1 stays accent */
 }
 
 .stats-badge {
@@ -197,6 +245,9 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
     min-width: 32px;
     font-size: var(--fs-16);
     line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
 .settings-menu {
     position: absolute;
@@ -242,9 +293,15 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
     border-color: var(--border);
 }
 .settings-menu-icon {
-    font-size: 20px;
+    font-size: 18px;
     line-height: 1;
     flex-shrink: 0;
+    color: var(--text-muted);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
     width: 24px;
     text-align: center;
 }
@@ -349,6 +406,9 @@ select:focus {
 .btn-small {
     padding: 3px 10px;
     font-size: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
 }
 
 /* ---- Main ---- */
@@ -494,7 +554,7 @@ select:focus {
 
 .popup-date {
     font-weight: 600;
-    color: var(--accent);
+    color: var(--text-strong);
 }
 
 .popup-loc {
@@ -599,6 +659,7 @@ select:focus {
     padding: var(--s-3) var(--s-4);
     margin-bottom: var(--s-2);
     cursor: pointer;
+    box-shadow: var(--shadow-sm);
     transition: background var(--t-fast), border-color var(--t-fast), transform var(--t-fast), box-shadow var(--t-fast);
 }
 
@@ -620,7 +681,7 @@ select:focus {
 .result-date {
     font-weight: 600;
     font-size: var(--fs-15);
-    color: var(--accent);
+    color: var(--text-strong);
 }
 
 .result-loc {
@@ -651,42 +712,39 @@ select:focus {
     gap: var(--s-2);
 }
 
-.meta-pill {
+/* ---- Unified chips (Sprint 4) ----
+   meta-pill, shape-tag, collection-tag share the same low-chrome token set.
+   Differences are kept minimal so they feel like one family. */
+.meta-pill,
+.shape-tag,
+.collection-tag {
     display: inline-block;
     padding: 2px var(--s-2);
     border: 1px solid var(--border);
     border-radius: var(--r-pill);
     font-size: var(--fs-12);
+    font-weight: 500;
     color: var(--text-muted);
-    background: rgba(255,255,255,0.02);
+    background: var(--bg-card);
+    line-height: 1.5;
 }
+
+/* collection-tag gets subtle accent tint to distinguish "dataset collection" from plain metadata */
+.collection-tag {
+    color: var(--text);
+    border-color: rgba(110, 168, 255, 0.22);
+    background: rgba(110, 168, 255, 0.08);
+}
+
+/* shape-tag intentionally identical to meta-pill — handled by the shared rule above */
 
 /* ---- Badges ---- */
 .source-badge {
     display: inline-block;
     padding: 2px 8px;
-    border-radius: 10px;
+    border-radius: var(--r-pill);
     font-size: 11px;
     font-weight: 600;
-    color: #fff;
-}
-
-.shape-tag {
-    display: inline-block;
-    padding: 1px 6px;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    font-size: 11px;
-    color: var(--text-muted);
-}
-
-.collection-tag {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 10px;
-    font-size: 11px;
-    font-weight: 600;
-    background: #6c5ce7;
     color: #fff;
 }
 
@@ -802,20 +860,22 @@ select:focus {
 .detail-section {
     background: var(--bg-card);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--r-md);
     padding: 12px;
+    box-shadow: var(--shadow-sm);
 }
 
 .detail-section h3 {
-    font-size: 13px;
-    color: var(--accent);
+    font-size: 12px;
+    color: var(--text-muted);     /* de-emphasized: rely on uppercase + tracking, not color */
     margin-bottom: 8px;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.06em;
+    font-weight: 600;
 }
 
 .detail-section h3 a {
-    color: var(--accent);
+    color: var(--accent);          /* links inside headings keep interactive accent */
     text-decoration: none;
 }
 
@@ -862,14 +922,16 @@ select:focus {
     align-items: center;
     gap: 10px;
     padding: 6px 8px;
-    border-radius: 4px;
+    border-radius: var(--r-sm);
     cursor: pointer;
     font-size: 13px;
-    transition: background 0.15s;
+    transition: background var(--t-fast), transform var(--t-fast), box-shadow var(--t-fast);
 }
 
 .dupe-row:hover {
-    background: var(--bg);
+    background: var(--bg-card-h);
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-sm);
 }
 
 .dupe-score {
@@ -907,9 +969,17 @@ select:focus {
 .dupe-card {
     background: var(--bg-card);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--r-md);
     margin-bottom: 8px;
     overflow: hidden;
+    box-shadow: var(--shadow-sm);
+    transition: border-color var(--t-fast), box-shadow var(--t-fast), transform var(--t-fast);
+}
+
+.dupe-card:hover {
+    border-color: var(--border-strong);
+    box-shadow: var(--shadow-md);
+    transform: translateY(-1px);
 }
 
 .dupe-card-header {
@@ -929,7 +999,7 @@ select:focus {
 .dupe-card-method {
     font-size: 11px;
     color: var(--text-muted);
-    font-family: monospace;
+    font-family: var(--font-mono);
 }
 
 .dupe-card-pair {
@@ -941,12 +1011,13 @@ select:focus {
     flex: 1;
     padding: 10px 14px;
     cursor: pointer;
-    transition: background 0.15s;
+    transition: background var(--t-fast), transform var(--t-fast);
     min-width: 0;
 }
 
 .dupe-card-side:hover {
-    background: rgba(88, 166, 255, 0.05);
+    background: var(--bg-card-h);
+    transform: translateY(-1px);
 }
 
 .dupe-card-side:first-child {
@@ -966,7 +1037,7 @@ select:focus {
 .dupe-card-date {
     font-size: 13px;
     font-weight: 600;
-    color: var(--accent);
+    color: var(--text-strong);
     margin-top: 4px;
 }
 
@@ -1010,10 +1081,12 @@ select:focus {
 
 .methodology h2 {
     font-size: 22px;
-    color: var(--accent);
+    color: var(--text-strong);
+    font-weight: 600;
+    letter-spacing: -0.01em;
     margin: 40px 0 12px;
     padding-bottom: 6px;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 2px solid var(--accent);
 }
 
 .methodology h2:first-child {
@@ -1093,24 +1166,24 @@ select:focus {
 }
 
 .methodology code {
-    font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+    font-family: var(--font-mono);
     font-size: 12px;
     background: var(--bg-input);
     padding: 1px 5px;
-    border-radius: 3px;
+    border-radius: var(--r-sm);
     color: var(--accent);
 }
 
 .methodology pre {
     background: var(--bg-input);
     padding: 12px 16px;
-    border-radius: 6px;
-    font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+    border-radius: var(--r-md);
+    font-family: var(--font-mono);
     font-size: 13px;
     overflow-x: auto;
     margin: 10px 0 16px;
     border: 1px solid var(--border);
-    color: var(--green);
+    color: var(--success);
 }
 
 .methodology em {
@@ -1176,18 +1249,20 @@ select:focus {
 .insight-card {
     background: var(--bg-card);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--r-md);
     padding: 14px;
     display: flex;
     flex-direction: column;
+    box-shadow: var(--shadow-sm);
 }
 
 .insight-card h3 {
-    font-size: 13px;
-    color: var(--accent);
+    font-size: 12px;
+    color: var(--text-muted);      /* de-emphasized from accent; uppercase + tracking carries the hierarchy */
     margin-bottom: 10px;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.06em;
+    font-weight: 600;
 }
 
 .insight-chart-wrap {
@@ -1353,10 +1428,13 @@ select:focus {
     color: var(--text-muted);
 }
 .empty-state-icon {
-    font-size: 56px;
     margin-bottom: var(--s-3);
-    opacity: 0.7;
+    opacity: 0.55;
+    color: var(--text-muted);
+    display: flex;
+    justify-content: center;
 }
+.empty-state-icon .icon { width: 64px; height: 64px; }
 .empty-state-title {
     font-size: var(--fs-18);
     color: var(--text);
@@ -1425,7 +1503,7 @@ select:focus {
         flex-wrap: wrap;
     }
     .empty-state { padding: var(--s-8) var(--s-4); }
-    .empty-state-icon { font-size: 44px; }
+    .empty-state-icon .icon { width: 48px; height: 48px; }
 }
 
 /* ---- Reduced-motion preference ---- */
@@ -1528,7 +1606,14 @@ select:focus {
     padding: var(--s-8) var(--s-4);
     color: var(--text-muted);
 }
-.ai-empty-icon { font-size: 48px; margin-bottom: var(--s-3); opacity: 0.7; }
+.ai-empty-icon {
+    margin-bottom: var(--s-3);
+    opacity: 0.55;
+    color: var(--text-muted);
+    display: flex;
+    justify-content: center;
+}
+.ai-empty-icon .icon { width: 56px; height: 56px; }
 .ai-empty-title { font-size: var(--fs-16); color: var(--text); margin-bottom: var(--s-3); font-weight: 600; }
 .ai-empty-detail { font-size: var(--fs-14); }
 .ai-empty-suggestions {
@@ -1590,7 +1675,7 @@ select:focus {
     background: var(--bg-input);
     padding: 1px 4px;
     border-radius: var(--r-sm);
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: var(--font-mono);
     font-size: 12px;
 }
 .ai-msg.system .ai-msg-body {
@@ -1616,7 +1701,7 @@ select:focus {
     border: 1px solid var(--border);
     color: var(--text-muted);
     font-size: var(--fs-12);
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: var(--font-mono);
     max-width: 100%;
 }
 .ai-msg.tool.error .ai-msg-body {
@@ -1675,7 +1760,7 @@ select:focus {
     margin-bottom: var(--s-1);
     flex-wrap: wrap;
 }
-.ai-result-date { color: var(--accent); font-weight: 600; font-size: var(--fs-14); }
+.ai-result-date { color: var(--text-strong); font-weight: 600; font-size: var(--fs-14); }
 .ai-result-loc {
     font-size: var(--fs-12);
     color: var(--text-muted);
@@ -1769,7 +1854,7 @@ select:focus {
     background: var(--accent-hover);
     transform: translateY(-2px);
 }
-.chat-fab-icon { font-size: 18px; }
+.chat-fab-icon { font-size: 18px; display: inline-flex; align-items: center; }
 
 .chat-popover {
     position: fixed;
@@ -1847,10 +1932,12 @@ select:focus {
 }
 .connect-page h2 {
     font-size: var(--fs-24);
-    color: var(--accent);
+    color: var(--text-strong);
     margin-bottom: var(--s-3);
     font-weight: 700;
     letter-spacing: -0.01em;
+    padding-bottom: var(--s-2);
+    border-bottom: 2px solid var(--accent);
 }
 .connect-page h3 {
     font-size: var(--fs-16);
@@ -1870,6 +1957,13 @@ select:focus {
     border-radius: var(--r-md);
     padding: var(--s-4) var(--s-5);
     margin-bottom: var(--s-4);
+    box-shadow: var(--shadow-sm);
+    transition: border-color var(--t-fast), box-shadow var(--t-fast);
+}
+
+.connect-card:hover {
+    border-color: var(--border-strong);
+    box-shadow: var(--shadow-md);
 }
 .connect-card p {
     color: var(--text-muted);
@@ -1893,7 +1987,7 @@ select:focus {
     margin: var(--s-2) 0;
 }
 .connect-code code {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: var(--font-mono);
     font-size: 12px;
     color: var(--text);
     line-height: 1.55;

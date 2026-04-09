@@ -45,18 +45,18 @@
             <button class="tab" data-tab="insights">Insights</button>
             <button class="tab" data-tab="methodology">Methodology</button>
             <div class="tabs-settings">
-                <button id="settings-btn" class="tab tab-icon" title="Settings &amp; AI tools" aria-label="Settings menu" aria-haspopup="menu" aria-expanded="false">⚙</button>
+                <button id="settings-btn" class="tab tab-icon" title="Settings &amp; AI tools" aria-label="Settings menu" aria-haspopup="menu" aria-expanded="false"><svg class="icon icon-md" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
                 <div id="settings-menu" class="settings-menu" role="menu" hidden>
                     <div class="settings-menu-section">AI tools</div>
                     <button class="settings-menu-item" role="menuitem" data-tab="ai">
-                        <span class="settings-menu-icon">💬</span>
+                        <span class="settings-menu-icon"><svg class="icon icon-md" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
                         <span>
                             <span class="settings-menu-label">Ask AI</span>
                             <span class="settings-menu-hint">Chat with the data using your own API key</span>
                         </span>
                     </button>
                     <button class="settings-menu-item" role="menuitem" data-tab="connect">
-                        <span class="settings-menu-icon">🔌</span>
+                        <span class="settings-menu-icon"><svg class="icon icon-md" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 2v6"/><path d="M15 2v6"/><path d="M6 8h12v5a6 6 0 0 1-12 0z"/><path d="M12 19v3"/></svg></span>
                         <span>
                             <span class="settings-menu-label">Connect</span>
                             <span class="settings-menu-hint">MCP server &amp; API for your own AI client</span>
@@ -129,7 +129,7 @@
                 <label class="sr-only" for="place-input">Find a place</label>
                 <input type="text" id="place-input" placeholder="Find a place — city, country, address..." autocomplete="off" />
                 <button id="btn-place-search" class="btn btn-primary btn-small" title="Search">Go</button>
-                <button id="btn-locate-me" class="btn btn-secondary btn-small" title="Use my current location">📍 Near me</button>
+                <button id="btn-locate-me" class="btn btn-secondary btn-small" title="Use my current location"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg> Near me</button>
             </div>
             <div class="map-mode-toggle">
                 <button class="map-mode-btn active" data-mode="clusters">Clusters</button>
@@ -172,9 +172,9 @@
                 </select>
             </div>
             <div class="search-actions">
-                <button id="btn-export-csv" class="btn btn-secondary btn-small" title="Download current results as CSV (max 5,000 rows)">⬇ CSV</button>
-                <button id="btn-export-json" class="btn btn-secondary btn-small" title="Download current results as JSON (max 5,000 rows)">⬇ JSON</button>
-                <button id="btn-copy-link" class="btn btn-secondary btn-small" title="Copy a shareable link to this filter view">🔗 Copy link</button>
+                <button id="btn-export-csv" class="btn btn-secondary btn-small" title="Download current results as CSV (max 5,000 rows)"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> CSV</button>
+                <button id="btn-export-json" class="btn btn-secondary btn-small" title="Download current results as JSON (max 5,000 rows)"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> JSON</button>
+                <button id="btn-copy-link" class="btn btn-secondary btn-small" title="Copy a shareable link to this filter view"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg> Copy link</button>
             </div>
             <div id="search-active-filters" class="active-filters" aria-live="polite"></div>
             <div id="search-info" class="search-info" aria-live="polite"></div>
@@ -284,7 +284,7 @@
                 </div>
                 <div id="ai-messages" class="ai-messages">
                     <div class="ai-empty">
-                        <div class="ai-empty-icon">🛸</div>
+                        <div class="ai-empty-icon"><svg class="icon icon-xl" viewBox="0 0 64 32" aria-hidden="true"><ellipse cx="32" cy="20" rx="28" ry="6"/><path d="M14 18 C14 10, 22 4, 32 4 C42 4, 50 10, 50 18"/><circle cx="32" cy="10" r="1.5" fill="currentColor" stroke="none"/><line x1="14" y1="26" x2="10" y2="30"/><line x1="32" y1="27" x2="32" y2="31"/><line x1="50" y1="26" x2="54" y2="30"/></svg></div>
                         <div class="ai-empty-title">Ask anything about the unified UFO database</div>
                         <div class="ai-empty-detail">
                             Try:
@@ -828,7 +828,7 @@ DATABASE_URL="postgresql://..." python mcp_server.py</code></pre>
          the orchestrator init still wires up cleanly; can be re-enabled
          later by removing the .hidden class. -->
     <button id="chat-fab" class="chat-fab hidden" title="Ask AI">
-        <span class="chat-fab-icon">💬</span>
+        <span class="chat-fab-icon"><svg class="icon icon-lg" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
         <span class="chat-fab-label">Ask AI</span>
     </button>
     <div id="chat-popover" class="chat-popover" style="display:none">
@@ -841,7 +841,7 @@ DATABASE_URL="postgresql://..." python mcp_server.py</code></pre>
         </div>
         <div id="chat-popover-body" class="chat-popover-body">
             <div class="ai-empty">
-                <div class="ai-empty-icon">🛸</div>
+                <div class="ai-empty-icon"><svg class="icon icon-xl" viewBox="0 0 64 32" aria-hidden="true"><ellipse cx="32" cy="20" rx="28" ry="6"/><path d="M14 18 C14 10, 22 4, 32 4 C42 4, 50 10, 50 18"/><circle cx="32" cy="10" r="1.5" fill="currentColor" stroke="none"/><line x1="14" y1="26" x2="10" y2="30"/><line x1="32" y1="27" x2="32" y2="31"/><line x1="50" y1="26" x2="54" y2="30"/></svg></div>
                 <div class="ai-empty-detail">
                     Ask anything about the database. You'll need an API key —
                     <a href="#/ai" onclick="switchTab('ai'); document.getElementById('chat-popover').style.display='none'; return false;">open the Ask AI tab</a>
