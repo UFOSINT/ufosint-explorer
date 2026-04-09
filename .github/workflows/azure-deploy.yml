@@ -133,53 +133,76 @@ jobs:
 
   # -----------------------------------------------------------------
   # 4. SMOKE — verify the live deploy is actually healthy
+  #
+  # Azure App Service container restarts are not instant (cold JIT +
+  # psycopg pool open + filter prewarm takes 20-90s). Every check in
+  # this job retries with backoff instead of trusting a single shot,
+  # so restart jitter can't cause spurious failures — but a genuinely
+  # broken deploy still fails within a bounded window.
   # -----------------------------------------------------------------
   smoke:
     runs-on: ubuntu-latest
     needs: deploy
     steps:
       - name: Wait for container restart
-        run: sleep 45
+        run: sleep 30
 
-      - name: Probe /health
+      - name: Probe /health with retry
         run: |
           set -euo pipefail
-          echo "Fetching $LIVE_URL/health"
-          body=$(curl -sS --fail --max-time 30 "$LIVE_URL/health")
-          echo "Got: $body"
-          echo "$body" | grep -q '"status":"ok"' || {
-            echo "::error::/health did not return status=ok"
-            exit 1
-          }
-          echo "$body" | grep -q '"sightings":[0-9]' || {
-            echo "::error::/health missing sightings count"
-            exit 1
-          }
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            echo "[$attempt/10] GET $LIVE_URL/health"
+            body=$(curl -sS --max-time 30 "$LIVE_URL/health" || echo "")
+            if echo "$body" | grep -q '"status":"ok"' && \
+               echo "$body" | grep -q '"sightings":[0-9]'; then
+              echo "OK: $body"
+              exit 0
+            fi
+            echo "  got: ${body:0:200}"
+            sleep 15
+          done
+          echo "::error::/health never returned status=ok after 10 attempts"
+          exit 1
 
-      - name: Probe / for versioned asset URLs
+      - name: Probe / for versioned asset URLs with retry
         run: |
           set -euo pipefail
-          echo "Fetching $LIVE_URL/"
-          html=$(curl -sS --fail --max-time 30 "$LIVE_URL/?smoke=$(date +%s)")
-          echo "$html" | grep -q 'style.css?v=' || {
-            echo "::error::rendered HTML missing versioned style.css URL (cache-bust broken)"
-            echo "--- first 40 lines of response ---"
-            echo "$html" | head -40
-            exit 1
-          }
-          echo "$html" | grep -q 'app.js?v=' || {
-            echo "::error::rendered HTML missing versioned app.js URL"
-            exit 1
-          }
-          if echo "$html" | grep -q '{{ASSET_VERSION}}'; then
-            echo "::error::ASSET_VERSION placeholder leaked into rendered HTML"
-            exit 1
-          fi
-          echo "OK: HTML contains versioned asset URLs"
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            echo "[$attempt/10] GET $LIVE_URL/"
+            html=$(curl -sS --max-time 30 "$LIVE_URL/?smoke=$(date +%s)" || echo "")
+            # All three conditions must hold at the same time, on the
+            # same response. Container-restart intermediate states can
+            # serve partial HTML — we only pass when it's all there.
+            if echo "$html" | grep -q 'style.css?v=' && \
+               echo "$html" | grep -q 'app.js?v=' && \
+               ! echo "$html" | grep -q '{{ASSET_VERSION}}'; then
+              version=$(echo "$html" | grep -oE 'style\.css\?v=[A-Za-z0-9]+' | head -1)
+              echo "OK: HTML contains versioned asset URLs ($version)"
+              exit 0
+            fi
+            echo "  HTML length: ${#html} bytes"
+            sleep 15
+          done
+          echo "::error::rendered HTML never contained valid versioned asset URLs"
+          echo "--- last response (first 80 lines) ---"
+          echo "$html" | head -80
+          exit 1
 
       - name: Probe /api/filters and /api/stats
         run: |
           set -euo pipefail
-          curl -sS --fail --max-time 30 "$LIVE_URL/api/filters" > /dev/null
-          curl -sS --fail --max-time 30 "$LIVE_URL/api/stats"   > /dev/null
+          for endpoint in /api/filters /api/stats; do
+            for attempt in 1 2 3 4 5; do
+              echo "[$attempt/5] GET $LIVE_URL$endpoint"
+              if curl -sS --fail --max-time 30 "$LIVE_URL$endpoint" > /dev/null; then
+                echo "  OK"
+                break
+              fi
+              if [ "$attempt" = "5" ]; then
+                echo "::error::$endpoint never responded 200"
+                exit 1
+              fi
+              sleep 10
+            done
+          done
           echo "OK: core API endpoints respond 200"
