@@ -182,14 +182,24 @@ document.addEventListener("DOMContentLoaded", async () => {
 // =========================================================================
 // Helpers
 // =========================================================================
-async function fetchJSON(url) {
-    const resp = await fetch(url);
+async function fetchJSON(url, options = {}) {
+    // Optional second argument forwards an AbortSignal so callers can
+    // cancel in-flight requests when the user pans the map again, types
+    // a new search, etc. Stale responses get an AbortError that the
+    // caller can suppress instead of overwriting fresh data.
+    const resp = await fetch(url, options);
     if (!resp.ok) {
         let detail = "";
         try { detail = await resp.text(); } catch (_) {}
         throw new Error(`HTTP ${resp.status}: ${detail.substring(0, 200)}`);
     }
     return resp.json();
+}
+
+// Returns true if the error was a deliberate abort (so callers can
+// silently ignore it instead of rendering an error state).
+function isAbortError(err) {
+    return err && (err.name === "AbortError" || err.code === 20);
 }
 
 function getFilterParams() {
@@ -344,15 +354,21 @@ function switchTab(tab) {
     writeHash();
 }
 
-function applyFilters() {
-    if (state.activeTab === "map") {
-        if (state.mapMode === "heatmap") loadHeatmap();
-        else loadMapMarkers();
+async function applyFilters() {
+    const applyBtn = document.getElementById("btn-apply-filters");
+    const restore = disableButtonWhilePending(applyBtn, "Applying…");
+    try {
+        if (state.activeTab === "map") {
+            if (state.mapMode === "heatmap") await loadHeatmap();
+            else await loadMapMarkers();
+        }
+        else if (state.activeTab === "timeline") await loadTimeline();
+        else if (state.activeTab === "search") await doSearch();
+        else if (state.activeTab === "insights") await loadInsights();
+    } finally {
+        restore();
+        writeHash();
     }
-    else if (state.activeTab === "timeline") loadTimeline();
-    else if (state.activeTab === "search") doSearch();
-    else if (state.activeTab === "insights") loadInsights();
-    writeHash();
 }
 
 function clearFilters() {
@@ -508,27 +524,41 @@ function initMap() {
         },
     });
 
-    // Load data on move end, but suppress while a popup is open
+    // Load data on move end, debounced + abortable. A casual pan fires
+    // multiple moveend events in rapid succession; without this each one
+    // triggered a full /api/map request and stale responses could arrive
+    // out of order, overwriting fresh data with old markers.
     let reloadSuppressed = false;
-    state.map.on("moveend", () => {
+    let mapReloadTimer = null;
+    let mapReloadAbort = null;
+
+    function scheduleMapReload() {
         if (reloadSuppressed) return;
-        if (state.mapMode === "heatmap") loadHeatmap();
-        else loadMapMarkers();
-    });
+        clearTimeout(mapReloadTimer);
+        mapReloadTimer = setTimeout(() => {
+            // Cancel any in-flight request from a previous pan
+            if (mapReloadAbort) mapReloadAbort.abort();
+            mapReloadAbort = new AbortController();
+            const signal = mapReloadAbort.signal;
+            if (state.mapMode === "heatmap") loadHeatmap(signal);
+            else loadMapMarkers(signal);
+        }, 200);
+    }
+
+    state.map.on("moveend", scheduleMapReload);
     state.map.on("popupopen", () => { reloadSuppressed = true; });
     state.map.on("popupclose", () => {
         reloadSuppressed = false;
-        if (state.mapMode === "heatmap") loadHeatmap();
-        else loadMapMarkers();
+        scheduleMapReload();
     });
 
     // Initial load
     loadMapMarkers();
 }
 
-async function loadMapMarkers() {
+async function loadMapMarkers(signal) {
     const status = document.getElementById("map-status");
-    status.innerHTML = '<span class="loading-pulse">Loading markers...</span>';
+    status.innerHTML = '<span class="loading-pulse">Plotting sightings...</span>';
 
     const bounds = state.map.getBounds();
     const params = getFilterParams();
@@ -542,7 +572,7 @@ async function loadMapMarkers() {
     params.set("zoom", state.map.getZoom());
 
     try {
-        const data = await fetchJSON(`/api/map?${params}`);
+        const data = await fetchJSON(`/api/map?${params}`, { signal });
         state.markerLayer.clearLayers();
 
         const markers = data.markers.map(m => {
@@ -570,7 +600,8 @@ async function loadMapMarkers() {
         state.markerLayer.addLayers(markers);
         updateMapStatus(data.count, data.total_in_view, "markers");
     } catch (err) {
-        document.getElementById("map-status").textContent = "Error loading markers";
+        if (isAbortError(err)) return;  // user moved the map again, fresh request will replace this
+        document.getElementById("map-status").textContent = "Couldn't load sightings — check your connection or pan again to retry.";
         document.getElementById("btn-load-all").style.display = "none";
         console.error(err);
     }
@@ -680,9 +711,9 @@ function toggleMapMode(mode) {
     }
 }
 
-async function loadHeatmap() {
+async function loadHeatmap(signal) {
     const status = document.getElementById("map-status");
-    status.innerHTML = '<span class="loading-pulse">Loading heatmap...</span>';
+    status.innerHTML = '<span class="loading-pulse">Building heatmap from sightings...</span>';
 
     const bounds = state.map.getBounds();
     const params = getFilterParams();
@@ -692,11 +723,12 @@ async function loadHeatmap() {
     params.set("east", bounds.getEast().toFixed(4));
 
     try {
-        const data = await fetchJSON(`/api/heatmap?${params}`);
+        const data = await fetchJSON(`/api/heatmap?${params}`, { signal });
         state.heatLayer.setLatLngs(data.points);
         updateMapStatus(data.count, data.total_in_view, "points");
     } catch (err) {
-        document.getElementById("map-status").textContent = "Error loading heatmap";
+        if (isAbortError(err)) return;
+        document.getElementById("map-status").textContent = "Couldn't build heatmap — check your connection or pan again to retry.";
         document.getElementById("btn-load-all").style.display = "none";
         console.error(err);
     }
@@ -870,6 +902,10 @@ async function executeSearch() {
     const info     = document.getElementById("search-info");
     const resultsEl= document.getElementById("search-results");
     const pagerEl  = document.getElementById("search-pager");
+    const searchBtn= document.getElementById("btn-search");
+
+    // Disable the submit button so a double-click doesn't fire two requests
+    const restoreSearchBtn = disableButtonWhilePending(searchBtn, "Searching…");
 
     // Skeleton loading state
     info.innerHTML = '<span class="loading-pulse">Searching...</span>';
@@ -942,10 +978,30 @@ async function executeSearch() {
 
         renderPager(data.page, data.pages);
     } catch (err) {
-        info.textContent = "Error searching";
-        resultsEl.innerHTML = `<div class="empty-state"><div class="empty-state-icon">⚠️</div><div class="empty-state-title">Search failed</div><div class="empty-state-detail">${escapeHtml(err.message || String(err))}</div></div>`;
+        info.textContent = "Couldn't run that search";
+        resultsEl.innerHTML = `<div class="empty-state"><div class="empty-state-icon">⚠️</div><div class="empty-state-title">Search failed</div><div class="empty-state-detail">Check your filters or try again. <br><span style="opacity:0.6">${escapeHtml(err.message || String(err))}</span></div></div>`;
         console.error(err);
+    } finally {
+        restoreSearchBtn();
     }
+}
+
+/**
+ * Disable a button while a request is in flight, replacing its label
+ * with a "loading" message. Returns a function that restores the original
+ * label and enables the button — call it from a finally block.
+ */
+function disableButtonWhilePending(btn, loadingLabel) {
+    if (!btn) return () => {};
+    const originalHTML = btn.innerHTML;
+    btn.disabled = true;
+    btn.setAttribute("aria-busy", "true");
+    btn.innerHTML = `<span class="loading-pulse">${loadingLabel}</span>`;
+    return function restore() {
+        btn.disabled = false;
+        btn.removeAttribute("aria-busy");
+        btn.innerHTML = originalHTML;
+    };
 }
 
 function escapeRegExp(s) {
@@ -1029,8 +1085,11 @@ function renderPager(currentPage, totalPages) {
 function goToPage(page) {
     state.searchPage = page;
     executeSearch();
-    // Scroll back to top of results so the user can see them
-    document.getElementById("search-results")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    // Scroll the results container back to the top — it's overflow-y:auto
+    // inside a full-height panel, so scrollIntoView on the window does
+    // nothing visible. Setting scrollTop directly is the right call.
+    const results = document.getElementById("search-results");
+    if (results) results.scrollTop = 0;
 }
 
 // =========================================================================
@@ -1056,8 +1115,10 @@ async function loadDuplicates(append = false) {
     const info = document.getElementById("dupes-info");
     const resultsEl = document.getElementById("dupes-results");
     const moreBtn = document.getElementById("btn-dupes-more");
+    const applyBtn = document.getElementById("btn-dupes-apply");
 
-    info.innerHTML = '<span class="loading-pulse">Loading duplicate pairs... This may take a moment on large databases.</span>';
+    const restoreApplyBtn = disableButtonWhilePending(applyBtn, "Loading…");
+    info.innerHTML = '<span class="loading-pulse">Finding possible duplicate pairs — this can take a few seconds.</span>';
 
     const params = new URLSearchParams();
     params.set("page", state.dupesPage);
@@ -1126,8 +1187,10 @@ async function loadDuplicates(append = false) {
         const hasMore = (state.dupesPage + 1) < data.pages;
         moreBtn.style.display = hasMore ? "block" : "none";
     } catch (err) {
-        info.textContent = "Error loading duplicates: " + (err.message || err);
+        info.textContent = "Couldn't load duplicate pairs — try again. (" + (err.message || err) + ")";
         console.error(err);
+    } finally {
+        restoreApplyBtn();
     }
 }
 
@@ -1139,7 +1202,7 @@ async function loadDuplicates(append = false) {
 // =========================================================================
 async function loadInsights() {
     const statusEl = document.getElementById("insights-status");
-    statusEl.textContent = "Loading sentiment data...";
+    statusEl.textContent = "Loading how witnesses felt...";
 
     const params = getFilterParams();
     const qs = params.toString();
@@ -1155,8 +1218,8 @@ async function loadInsights() {
         if (!overview.total_analyzed || overview.total_analyzed === 0) {
             document.getElementById("insights-grid").innerHTML =
                 '<div class="insights-empty" style="grid-column:1/-1">' +
-                'No sentiment data available for the current filters.<br>' +
-                'Sentiment analysis must be run during the ETL pipeline.</div>';
+                'No sentiment scores match these filters.<br>' +
+                'Sentiment is only computed for sightings with descriptions — try broadening your filters or picking a different date range.</div>';
             statusEl.textContent = "No data";
             return;
         }
@@ -1179,7 +1242,7 @@ async function loadInsights() {
         renderEmotionBySource(bySource);
         renderEmotionByShape(byShape);
     } catch (err) {
-        statusEl.textContent = "Error loading insights";
+        statusEl.textContent = "Couldn't load insights — try again or change filters.";
         console.error("loadInsights error:", err);
     }
 }
@@ -1398,13 +1461,29 @@ function renderEmotionByShape(byShape) {
 // =========================================================================
 // Detail Modal
 // =========================================================================
+// Track the element that opened the modal so focus can return there on close.
+let _modalReturnFocus = null;
+
+function _modalEscapeHandler(e) {
+    if (e.key === "Escape") closeModal();
+}
+
 async function openDetail(id) {
     const overlay = document.getElementById("modal-overlay");
     const body = document.getElementById("modal-body");
     const title = document.getElementById("modal-title");
 
+    // Remember where focus came from so we can restore it on close
+    _modalReturnFocus = document.activeElement;
+
     overlay.style.display = "flex";
-    body.innerHTML = "<p>Loading...</p>";
+    body.innerHTML = '<p class="loading-pulse" style="padding:24px;text-align:center">Loading sighting details...</p>';
+
+    // Move focus inside the modal (close button is the safest landing spot)
+    document.getElementById("modal-close")?.focus();
+
+    // Wire up Escape-to-close
+    document.addEventListener("keydown", _modalEscapeHandler);
 
     try {
         const r = await fetchJSON(`/api/sighting/${id}`);
@@ -2140,4 +2219,11 @@ window.doSearch     = doSearch;
 function closeModal() {
     document.getElementById("modal-overlay").style.display = "none";
     document.getElementById("modal-body").innerHTML = "";
+    document.removeEventListener("keydown", _modalEscapeHandler);
+    // Return focus to whatever element opened the modal so keyboard users
+    // don't get dropped at the top of the page.
+    if (_modalReturnFocus && typeof _modalReturnFocus.focus === "function") {
+        _modalReturnFocus.focus();
+    }
+    _modalReturnFocus = null;
 }

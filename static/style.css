@@ -13,7 +13,7 @@
     --border-strong: #3a455e;
     --text:       #e8edf5;
     --text-muted: #8a96ad;
-    --text-faint: #5e6a82;
+    --text-faint: #8693ab;       /* bumped from #5e6a82 to pass WCAG AA on dark surfaces (~4.7:1 vs ~2.9:1) */
     --accent:     #6ea8ff;       /* slightly softer than #58a6ff */
     --accent-hover: #8fbcff;
     --accent-bg:  rgba(110, 168, 255, 0.12);
@@ -84,6 +84,45 @@ body {
 ::selection { background: var(--accent-bg); color: var(--text); }
 a { color: var(--accent); text-decoration: none; }
 a:hover { color: var(--accent-hover); text-decoration: underline; }
+
+/* Global keyboard focus ring. Only applies for keyboard navigation —
+   :focus-visible avoids the ring on plain mouse clicks. Single biggest
+   accessibility improvement available. WCAG 2.4.7. */
+:focus { outline: none; }
+:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: inherit;
+}
+
+/* Visually hidden but available to screen readers — used to label
+   form controls without taking layout space. */
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+/* Pressed state on every button-like surface. Currently no .btn:active
+   rule exists, so clicks have invisible feedback until the request
+   resolves. One global rule covers everything. */
+.btn:active,
+.tab:active,
+.pager-btn:active,
+.map-mode-btn:active,
+.settings-menu-item:active,
+.btn-load-all:active,
+.chip-clear:active,
+.btn-icon:active {
+    transform: translateY(1px);
+    filter: brightness(0.92);
+}
 
 /* ---- Header ---- */
 #header {
