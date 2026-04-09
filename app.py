@@ -1,15 +1,22 @@
 """
-UFO Explorer — Lightweight web GUI for the unified UFO sightings database.
-Run:  python app.py
-Then: http://localhost:5000
+UFO Explorer — Flask web app for the unified UFO sightings database.
+
+Backed by PostgreSQL (Azure Database for PostgreSQL Flexible Server). The
+data is migrated from the canonical SQLite output of the ufo-dedup pipeline
+via scripts/migrate_sqlite_to_pg.py.
+
+Run locally:
+    export DATABASE_URL='postgresql://user:pass@host:5432/ufo_unified?sslmode=require'
+    python app.py
+    # http://localhost:5000
 """
-import sqlite3
 import os
 import json
-import shutil
-import urllib.request
 from flask import Flask, request, jsonify, send_from_directory
 from flask_caching import Cache
+
+import psycopg
+from psycopg_pool import ConnectionPool
 
 app = Flask(__name__, static_folder="static")
 
@@ -22,31 +29,82 @@ cache = Cache(app, config={
     "CACHE_THRESHOLD": 500,  # max number of cached items per worker
 })
 
-DB_PATH = os.environ.get(
-    "DB_PATH",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "ufo_unified.db"),
+# ---------------------------------------------------------------------------
+# Database connection (PostgreSQL via psycopg + connection pool)
+# ---------------------------------------------------------------------------
+
+DATABASE_URL = os.environ.get("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL env var is required. Example:\n"
+        "  postgresql://user:pass@host.postgres.database.azure.com:5432/ufo_unified?sslmode=require"
+    )
+
+# Pool sizing rule of thumb: at least one connection per gunicorn worker
+# thread. Procfile uses 2 workers x 4 threads = 8 concurrent slots, so
+# max_size=8 leaves one connection per slot. Burstable B1ms has a small
+# max_connections (~50) so we stay well under the per-server cap.
+_pool = ConnectionPool(
+    DATABASE_URL,
+    min_size=1,
+    max_size=8,
+    open=True,
+    timeout=30,
+    kwargs={
+        # Read-only workload: autocommit avoids the BEGIN/COMMIT overhead
+        # on every query, and default_transaction_read_only is a safety
+        # net in case anything ever tries to write.
+        "autocommit": True,
+        "options": "-c default_transaction_read_only=on",
+    },
 )
 
 
-def get_db():
-    """Get a read-only database connection.
+class _PooledConn:
+    """Thin proxy around a pooled psycopg connection.
 
-    PRAGMA tuning is critical on Azure App Service Linux where the
-    DB lives on the /home Azure Files mount — without mmap + a real
-    page cache, every query pays SMB round-trip latency.
+    Lets the existing call sites keep using `conn = get_db(); ...; conn.close()`
+    without rewriting every route. On `.close()` the underlying connection
+    is returned to the pool instead of being torn down.
     """
-    conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA query_only=ON")
-    # 64 MB SQLite page cache (negative value = KB; this is per connection
-    # but the underlying OS page cache is shared, so warm-up persists).
-    conn.execute("PRAGMA cache_size = -65536")
-    # 256 MB memory-mapped I/O. Once the DB pages are mmap'd, reads
-    # bypass the slow Azure Files mount and hit RAM directly.
-    conn.execute("PRAGMA mmap_size = 268435456")
-    # Keep ORDER BY / GROUP BY scratch in memory, not in temp files.
-    conn.execute("PRAGMA temp_store = MEMORY")
-    return conn
+
+    __slots__ = ("_real",)
+
+    def __init__(self, real_conn):
+        self._real = real_conn
+
+    def cursor(self, *args, **kwargs):
+        return self._real.cursor(*args, **kwargs)
+
+    def execute(self, *args, **kwargs):
+        return self._real.execute(*args, **kwargs)
+
+    def commit(self):
+        return self._real.commit()
+
+    def rollback(self):
+        return self._real.rollback()
+
+    def close(self):
+        if self._real is not None:
+            _pool.putconn(self._real)
+            self._real = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
+
+
+def get_db():
+    """Check out a pooled, read-only PostgreSQL connection.
+
+    Caller is responsible for calling .close() (which returns the
+    underlying connection to the pool) or using a `with` block.
+    """
+    return _PooledConn(_pool.getconn())
 
 
 # ---------------------------------------------------------------------------
@@ -102,57 +160,47 @@ def init_filters():
 # Helpers
 # ---------------------------------------------------------------------------
 
-def build_where(params, args, filters):
-    """Build WHERE clauses from common filters.
-
-    filters is a dict of param_name -> (sql_fragment, value_transform)
-    """
-    clauses = []
-    for param_name, (sql, transform) in filters.items():
-        val = params.get(param_name)
-        if val:
-            clauses.append(sql)
-            args.append(transform(val) if transform else val)
-    return clauses
-
-
 def add_common_filters(params, clauses, args, table_prefix="s"):
-    """Add common filter clauses shared across endpoints."""
+    """Add common filter clauses shared across endpoints.
+
+    PostgreSQL uses %s placeholders (vs SQLite's ?). All callers append
+    args via this helper so the placeholders match the args list ordering.
+    """
     p = table_prefix
 
     shape = params.get("shape")
     if shape:
-        clauses.append(f"{p}.shape = ?")
+        clauses.append(f"{p}.shape = %s")
         args.append(shape)
 
     source = params.get("source")
     if source:
-        clauses.append(f"{p}.source_db_id = ?")
+        clauses.append(f"{p}.source_db_id = %s")
         args.append(int(source))
 
     collection = params.get("collection")
     if collection:
-        clauses.append(f"{p}.source_db_id IN (SELECT id FROM source_database WHERE collection_id = ?)")
+        clauses.append(f"{p}.source_db_id IN (SELECT id FROM source_database WHERE collection_id = %s)")
         args.append(int(collection))
 
     hynek = params.get("hynek")
     if hynek:
-        clauses.append(f"{p}.hynek = ?")
+        clauses.append(f"{p}.hynek = %s")
         args.append(hynek)
 
     vallee = params.get("vallee")
     if vallee:
-        clauses.append(f"{p}.vallee = ?")
+        clauses.append(f"{p}.vallee = %s")
         args.append(vallee)
 
     date_from = params.get("date_from")
     if date_from:
-        clauses.append(f"{p}.date_event >= ?")
+        clauses.append(f"{p}.date_event >= %s")
         args.append(date_from)
 
     date_to = params.get("date_to")
     if date_to:
-        clauses.append(f"{p}.date_event <= ?")
+        clauses.append(f"{p}.date_event <= %s")
         args.append(date_to + "-12-31" if len(date_to) == 4 else date_to)
 
     # Coordinate source filter (for map/heatmap)
@@ -177,46 +225,19 @@ def index():
 
 @app.route("/health")
 def health():
-    """Health check for Railway. Returns 200 even without DB so deploys succeed."""
-    if not os.path.exists(DB_PATH):
-        return jsonify({"status": "waiting", "detail": "Database not yet uploaded to volume"})
+    """Health check. Tries to query the DB; returns 200 'waiting' if the
+    pool can't connect yet (e.g. during cold start), 200 'ok' otherwise."""
     try:
         conn = get_db()
-        cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM sighting")
-        count = cur.fetchone()[0]
-        conn.close()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM sighting")
+            count = cur.fetchone()[0]
+        finally:
+            conn.close()
         return jsonify({"status": "ok", "sightings": count})
     except Exception as e:
-        return jsonify({"status": "error", "detail": str(e)}), 500
-
-
-@app.route("/setup-db")
-def setup_db():
-    """TEMPORARY: Download rebuilt DB from Google Drive to volume. Remove after use."""
-    if os.path.exists(DB_PATH):
-        os.remove(DB_PATH)
-        # Also remove WAL/SHM files
-        for ext in ("-wal", "-shm"):
-            p = DB_PATH + ext
-            if os.path.exists(p):
-                os.remove(p)
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    gdrive_id = "11pOBDZIyl-aXB7BEX_Pn4F1ObE_1pj5_"
-    url = f"https://drive.usercontent.google.com/download?id={gdrive_id}&export=download&confirm=t"
-    tmp = DB_PATH + ".tmp"
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req) as resp, open(tmp, "wb") as f:
-            shutil.copyfileobj(resp, f)
-        shutil.move(tmp, DB_PATH)
-        size = os.path.getsize(DB_PATH) / (1024 * 1024)
-        init_filters()
-        return jsonify({"status": "downloaded", "size_mb": round(size, 1)})
-    except Exception as e:
-        if os.path.exists(tmp):
-            os.remove(tmp)
-        return jsonify({"status": "error", "detail": str(e)}), 500
+        return jsonify({"status": "waiting", "detail": str(e)})
 
 
 @app.route("/api/stats")
@@ -234,7 +255,7 @@ def api_stats():
         FROM source_database sd
         LEFT JOIN source_collection sc ON sd.collection_id = sc.id
         LEFT JOIN sighting s ON s.source_db_id = sd.id
-        GROUP BY sd.id ORDER BY COUNT(s.id) DESC
+        GROUP BY sd.id, sd.name, sc.name ORDER BY COUNT(s.id) DESC
     """)
     by_source = [{"name": r[0], "count": r[1], "collection": r[2]} for r in cur.fetchall()]
 
@@ -243,7 +264,7 @@ def api_stats():
         FROM source_collection sc
         JOIN source_database sd ON sd.collection_id = sc.id
         LEFT JOIN sighting s ON s.source_db_id = sd.id
-        GROUP BY sc.id ORDER BY COUNT(s.id) DESC
+        GROUP BY sc.id, sc.name ORDER BY COUNT(s.id) DESC
     """)
     by_collection = [{"name": r[0], "count": r[1]} for r in cur.fetchall()]
 
@@ -307,9 +328,9 @@ def api_map():
         function over a 50x50 grid of the bbox, returns up to K samples
         per cell so dense areas don't crowd out sparse ones.
 
-    Both modes are deterministic (same input → same output) so the
-    flask-caching layer above gets clean cache hits. Default cap is
-    25,000 markers; ?limit= overrides up to 100,000 for "Load All".
+    Both modes are deterministic so the flask-caching layer above gets
+    clean cache hits. Default cap is 25,000 markers; the limit query
+    parameter overrides up to 100,000 for "Load All".
     """
     conn = get_db()
     cur = conn.cursor()
@@ -332,9 +353,9 @@ def api_map():
         north_f = float(north)
         west_f = float(west)
         east_f = float(east)
-        clauses.append("l.latitude BETWEEN ? AND ?")
+        clauses.append("l.latitude BETWEEN %s AND %s")
         args.extend([south_f, north_f])
-        clauses.append("l.longitude BETWEEN ? AND ?")
+        clauses.append("l.longitude BETWEEN %s AND %s")
         args.extend([west_f, east_f])
     else:
         # Fall back to whole-world bbox so the grid-sampling math has
@@ -352,9 +373,9 @@ def api_map():
     except (ValueError, TypeError):
         req_limit = 25000
 
-    # Decide sampling strategy from explicit zoom (preferred) or
-    # bbox area as a fallback. Zoom 0 = whole world, ~7 = continent,
-    # 10+ = city. Threshold: zoom <= 7 → hash sample; >= 8 → grid.
+    # Decide sampling strategy from explicit zoom (preferred) or bbox
+    # area as a fallback. Zoom 0 = whole world, ~7 = continent, 10+ =
+    # city. Threshold: zoom <= 7 -> hash sample; >= 8 -> grid.
     zoom_param = request.args.get("zoom")
     if zoom_param is not None:
         try:
@@ -363,12 +384,12 @@ def api_map():
             use_grid = False
     else:
         bbox_area = max(0.0001, (north_f - south_f) * (east_f - west_f))
-        use_grid = bbox_area < 100.0  # < ~10° on a side
+        use_grid = bbox_area < 100.0  # < ~10 deg on a side
 
     if use_grid:
-        # 50x50 grid of the visible bbox, up to 10 most-recent samples per
-        # cell. Worst case 25k markers; usually far fewer because most
-        # cells are empty. Window function is fine on SQLite >= 3.25.
+        # 50x50 grid of the visible bbox, up to 10 most-recent samples
+        # per cell. Worst case 25k markers; usually far fewer because
+        # most cells are empty.
         GRID_SIZE = 50
         K_PER_CELL = 10
         lat_step = max((north_f - south_f) / GRID_SIZE, 1e-9)
@@ -383,8 +404,8 @@ def api_map():
                        COALESCE(sc.name, '') AS collection,
                        ROW_NUMBER() OVER (
                            PARTITION BY
-                               CAST((l.latitude  - ?) / ? AS INTEGER),
-                               CAST((l.longitude - ?) / ? AS INTEGER)
+                               CAST((l.latitude  - %s) / %s AS INTEGER),
+                               CAST((l.longitude - %s) / %s AS INTEGER)
                            ORDER BY s.date_event DESC
                        ) AS rn
                 FROM sighting s
@@ -396,8 +417,8 @@ def api_map():
             SELECT id, latitude, longitude, date_event, shape, source_name,
                    city, state, country, collection
             FROM cells
-            WHERE rn <= ?
-            LIMIT ?
+            WHERE rn <= %s
+            LIMIT %s
         """
         cur.execute(
             sql,
@@ -406,8 +427,7 @@ def api_map():
     else:
         # Hash-based pseudo-random sample. ORDER BY ((id * large prime) % M)
         # gives a deterministic shuffle over the bbox-filtered set; LIMIT
-        # then takes a representative slice. Same input = same output, so
-        # the response cache works perfectly.
+        # then takes a representative slice.
         sql = f"""
             SELECT s.id, l.latitude, l.longitude,
                    s.date_event, s.shape, sd.name AS source_name,
@@ -420,8 +440,8 @@ def api_map():
             JOIN source_database sd ON s.source_db_id = sd.id
             LEFT JOIN source_collection sc ON sd.collection_id = sc.id
             WHERE {where}
-            ORDER BY ((s.id * 2654435761) % 1000000)
-            LIMIT ?
+            ORDER BY ((s.id * 2654435761) %% 1000000)
+            LIMIT %s
         """
         cur.execute(sql, args + [req_limit])
 
@@ -466,7 +486,7 @@ def api_map():
 def api_heatmap():
     """Lightweight coordinate-only endpoint for heatmap rendering.
 
-    Returns [lat, lng] pairs. Default 50k limit, supports ?limit= for Load All.
+    Returns [lat, lng] pairs. Default 50k limit, supports limit param for Load All.
     Cached for 5 minutes per unique query string.
     """
     conn = get_db()
@@ -485,9 +505,9 @@ def api_heatmap():
     west = request.args.get("west")
     east = request.args.get("east")
     if all([south, north, west, east]):
-        clauses.append("l.latitude BETWEEN ? AND ?")
+        clauses.append("l.latitude BETWEEN %s AND %s")
         args.extend([float(south), float(north)])
-        clauses.append("l.longitude BETWEEN ? AND ?")
+        clauses.append("l.longitude BETWEEN %s AND %s")
         args.extend([float(west), float(east)])
 
     add_common_filters(request.args, clauses, args)
@@ -506,15 +526,13 @@ def api_heatmap():
         FROM sighting s
         JOIN location l ON s.location_id = l.id
         WHERE {where}
-        LIMIT {req_limit}
+        LIMIT %s
     """
 
-    cur.execute(sql, args)
+    cur.execute(sql, args + [req_limit])
     points = [[r[0], r[1]] for r in cur.fetchall()]
 
-    # Only run the COUNT(*) when we hit the limit; otherwise the total
-    # in view IS the number of points we just fetched. Saves a full
-    # scan on the common case.
+    # Only run COUNT when we hit the limit; otherwise len(points) IS the total.
     if len(points) < req_limit:
         total_in_view = len(points)
     else:
@@ -547,7 +565,7 @@ def api_timeline():
 
     if year:
         # Monthly breakdown for a specific year
-        clauses.append("SUBSTR(s.date_event, 1, 4) = ?")
+        clauses.append("SUBSTR(s.date_event, 1, 4) = %s")
         args.append(year)
         where = " AND ".join(clauses)
 
@@ -598,7 +616,12 @@ def api_timeline():
 
 @app.route("/api/search")
 def api_search():
-    """Search sightings by text and filters."""
+    """Search sightings by text and filters.
+
+    Uses ILIKE (case-insensitive substring match) backed by the
+    pg_trgm GIN indexes from pg_schema.sql so substring queries don't
+    require a full table scan.
+    """
     conn = get_db()
     cur = conn.cursor()
 
@@ -611,14 +634,13 @@ def api_search():
     args = []
 
     if q:
-        # Search in description and summary
-        clauses.append("(s.description LIKE ? OR s.summary LIKE ?)")
+        clauses.append("(s.description ILIKE %s OR s.summary ILIKE %s)")
         like = f"%{q}%"
         args.extend([like, like])
 
     add_common_filters(request.args, clauses, args)
 
-    where = " AND ".join(clauses) if clauses else "1=1"
+    where = " AND ".join(clauses) if clauses else "TRUE"
 
     # Count total
     count_sql = f"""
@@ -642,10 +664,9 @@ def api_search():
         LEFT JOIN location l ON s.location_id = l.id
         WHERE {where}
         ORDER BY s.date_event DESC
-        LIMIT ? OFFSET ?
+        LIMIT %s OFFSET %s
     """
-    args.extend([per_page, offset])
-    cur.execute(sql, args)
+    cur.execute(sql, args + [per_page, offset])
 
     results = []
     for r in cur.fetchall():
@@ -689,7 +710,7 @@ def api_sighting(sid):
             FROM sighting s
             JOIN source_database sd ON s.source_db_id = sd.id
             LEFT JOIN location l ON s.location_id = l.id
-            WHERE s.id = ?
+            WHERE s.id = %s
         """, (sid,))
 
         row = cur.fetchone()
@@ -719,11 +740,11 @@ def api_sighting(sid):
                    COALESCE(l2.state, '') as other_state
             FROM duplicate_candidate dc
             JOIN sighting s2 ON s2.id = CASE
-                WHEN dc.sighting_id_a = ? THEN dc.sighting_id_b
+                WHEN dc.sighting_id_a = %s THEN dc.sighting_id_b
                 ELSE dc.sighting_id_a END
             JOIN source_database sd2 ON s2.source_db_id = sd2.id
             LEFT JOIN location l2 ON s2.location_id = l2.id
-            WHERE dc.sighting_id_a = ? OR dc.sighting_id_b = ?
+            WHERE dc.sighting_id_a = %s OR dc.sighting_id_b = %s
             ORDER BY dc.similarity_score DESC
             LIMIT 10
         """, (sid, sid, sid))
@@ -746,7 +767,7 @@ def api_sighting(sid):
 
         # Get origin name if present
         if record.get("origin_id"):
-            cur.execute("SELECT name FROM source_origin WHERE id = ?", (record["origin_id"],))
+            cur.execute("SELECT name FROM source_origin WHERE id = %s", (record["origin_id"],))
             origin = cur.fetchone()
             if origin:
                 record["origin_name"] = origin[0]
@@ -756,7 +777,7 @@ def api_sighting(sid):
             cur.execute("""
                 SELECT sc.name FROM source_collection sc
                 JOIN source_database sd ON sd.collection_id = sc.id
-                WHERE sd.id = ?
+                WHERE sd.id = %s
             """, (record["source_db_id"],))
             coll = cur.fetchone()
             if coll:
@@ -768,7 +789,7 @@ def api_sighting(sid):
                    emo_joy, emo_fear, emo_anger, emo_sadness,
                    emo_surprise, emo_disgust, emo_trust, emo_anticipation,
                    text_source, text_length
-            FROM sentiment_analysis WHERE sighting_id = ?
+            FROM sentiment_analysis WHERE sighting_id = %s
         """, (sid,))
         sent_row = cur.fetchone()
         if sent_row:
@@ -800,7 +821,7 @@ def api_sentiment_overview():
     args = []
     add_common_filters(request.args, clauses, args)
 
-    where = " AND ".join(clauses) if clauses else "1=1"
+    where = " AND ".join(clauses) if clauses else "TRUE"
 
     cur.execute(f"""
         SELECT
@@ -883,7 +904,7 @@ def api_sentiment_by_source():
     args = []
     add_common_filters(request.args, clauses, args)
 
-    where = " AND ".join(clauses) if clauses else "1=1"
+    where = " AND ".join(clauses) if clauses else "TRUE"
 
     cur.execute(f"""
         SELECT sd.name as source_name,
@@ -971,27 +992,27 @@ def api_duplicates():
     # Score threshold filter
     min_score = request.args.get("min_score")
     if min_score:
-        clauses.append("dc.similarity_score >= ?")
+        clauses.append("dc.similarity_score >= %s")
         args.append(float(min_score))
 
     max_score = request.args.get("max_score")
     if max_score:
-        clauses.append("dc.similarity_score < ?")
+        clauses.append("dc.similarity_score < %s")
         args.append(float(max_score))
 
     # Match method filter
     method = request.args.get("method")
     if method:
-        clauses.append("dc.match_method = ?")
+        clauses.append("dc.match_method = %s")
         args.append(method)
 
     # Source filter — either sighting must be from this source
     source = request.args.get("source")
     if source:
-        clauses.append("(sa.source_db_id = ? OR sb.source_db_id = ?)")
+        clauses.append("(sa.source_db_id = %s OR sb.source_db_id = %s)")
         args.extend([int(source), int(source)])
 
-    where = " AND ".join(clauses) if clauses else "1=1"
+    where = " AND ".join(clauses) if clauses else "TRUE"
 
     # Count total
     count_sql = f"""
@@ -1023,10 +1044,9 @@ def api_duplicates():
         LEFT JOIN location lb ON sb.location_id = lb.id
         WHERE {where}
         ORDER BY dc.similarity_score DESC
-        LIMIT ? OFFSET ?
+        LIMIT %s OFFSET %s
     """
-    args.extend([per_page, offset])
-    cur.execute(sql, args)
+    cur.execute(sql, args + [per_page, offset])
 
     results = []
     for r in cur.fetchall():
@@ -1060,17 +1080,16 @@ def api_duplicates():
 
 def _init_app():
     """Initialize filter cache (called once on startup)."""
-    print(f"Database: {DB_PATH}")
-    if os.path.exists(DB_PATH):
-        print(f"Size: {os.path.getsize(DB_PATH) / (1024*1024):.1f} MB")
-    else:
-        print("WARNING: Database file not found — /health will fail until DB is available")
-        return
-    print("Loading filter values...")
-    init_filters()
-    print(f"  {len(FILTER_CACHE.get('shapes', []))} shapes, "
-          f"{len(FILTER_CACHE.get('hynek', []))} hynek codes, "
-          f"{len(FILTER_CACHE.get('sources', []))} sources")
+    print(f"DATABASE_URL host: {DATABASE_URL.split('@')[-1].split('/')[0]}")
+    try:
+        print("Loading filter values...")
+        init_filters()
+        print(f"  {len(FILTER_CACHE.get('shapes', []))} shapes, "
+              f"{len(FILTER_CACHE.get('hynek', []))} hynek codes, "
+              f"{len(FILTER_CACHE.get('sources', []))} sources")
+    except Exception as e:
+        print(f"WARNING: Could not load filters at startup: {e}")
+        print("/health and routes will retry on first request.")
 
 
 _init_app()
