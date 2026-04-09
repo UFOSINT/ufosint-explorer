@@ -9,8 +9,18 @@ import json
 import shutil
 import urllib.request
 from flask import Flask, request, jsonify, send_from_directory
+from flask_caching import Cache
 
 app = Flask(__name__, static_folder="static")
+
+# In-process LRU cache for expensive query responses. Per-worker
+# (not shared across gunicorn workers), keyed on the full query
+# string. 5-minute default TTL.
+cache = Cache(app, config={
+    "CACHE_TYPE": "SimpleCache",
+    "CACHE_DEFAULT_TIMEOUT": 300,
+    "CACHE_THRESHOLD": 500,  # max number of cached items per worker
+})
 
 DB_PATH = os.environ.get(
     "DB_PATH",
@@ -19,10 +29,23 @@ DB_PATH = os.environ.get(
 
 
 def get_db():
-    """Get a read-only database connection."""
+    """Get a read-only database connection.
+
+    PRAGMA tuning is critical on Azure App Service Linux where the
+    DB lives on the /home Azure Files mount — without mmap + a real
+    page cache, every query pays SMB round-trip latency.
+    """
     conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA query_only=ON")
+    # 64 MB SQLite page cache (negative value = KB; this is per connection
+    # but the underlying OS page cache is shared, so warm-up persists).
+    conn.execute("PRAGMA cache_size = -65536")
+    # 256 MB memory-mapped I/O. Once the DB pages are mmap'd, reads
+    # bypass the slow Azure Files mount and hit RAM directly.
+    conn.execute("PRAGMA mmap_size = 268435456")
+    # Keep ORDER BY / GROUP BY scratch in memory, not in temp files.
+    conn.execute("PRAGMA temp_store = MEMORY")
     return conn
 
 
@@ -197,6 +220,7 @@ def setup_db():
 
 
 @app.route("/api/stats")
+@cache.cached(timeout=600, query_string=True)
 def api_stats():
     """Dashboard statistics."""
     conn = get_db()
@@ -272,8 +296,21 @@ def api_filters():
 
 
 @app.route("/api/map")
+@cache.cached(timeout=300, query_string=True)
 def api_map():
-    """Map markers with bbox and filters. Default 5000, supports ?limit= for Load All."""
+    """Map markers with bbox + filters, with zoom-aware spatial sampling.
+
+    Sampling strategy:
+      - Low zoom (wide view): hash-based pseudo-random sample, gives an
+        even spread across the dataset instead of biasing to recent dates.
+      - High zoom (narrow view): grid-bucket sample using a window
+        function over a 50x50 grid of the bbox, returns up to K samples
+        per cell so dense areas don't crowd out sparse ones.
+
+    Both modes are deterministic (same input → same output) so the
+    flask-caching layer above gets clean cache hits. Default cap is
+    25,000 markers; ?limit= overrides up to 100,000 for "Load All".
+    """
     conn = get_db()
     cur = conn.cursor()
 
@@ -289,48 +326,105 @@ def api_map():
     north = request.args.get("north")
     west = request.args.get("west")
     east = request.args.get("east")
-    if all([south, north, west, east]):
+    have_bbox = all([south, north, west, east])
+    if have_bbox:
+        south_f = float(south)
+        north_f = float(north)
+        west_f = float(west)
+        east_f = float(east)
         clauses.append("l.latitude BETWEEN ? AND ?")
-        args.extend([float(south), float(north)])
+        args.extend([south_f, north_f])
         clauses.append("l.longitude BETWEEN ? AND ?")
-        args.extend([float(west), float(east)])
+        args.extend([west_f, east_f])
+    else:
+        # Fall back to whole-world bbox so the grid-sampling math has
+        # something to divide by.
+        south_f, north_f, west_f, east_f = -90.0, 90.0, -180.0, 180.0
 
     add_common_filters(request.args, clauses, args)
 
     where = " AND ".join(clauses)
 
-    # Total count in view (for "X of Y" display)
-    cur.execute(f"""
-        SELECT COUNT(*) FROM sighting s
-        JOIN location l ON s.location_id = l.id
-        WHERE {where}
-    """, args)
-    total_in_view = cur.fetchone()[0]
-
-    # Configurable limit (default 5000, max 100000)
-    req_limit = request.args.get("limit", 5000)
+    # Configurable limit (default 25000, max 100000)
+    req_limit = request.args.get("limit", 25000)
     try:
         req_limit = min(int(req_limit), 100000)
     except (ValueError, TypeError):
-        req_limit = 5000
+        req_limit = 25000
 
-    sql = f"""
-        SELECT s.id, l.latitude, l.longitude,
-               s.date_event, s.shape, sd.name as source_name,
-               COALESCE(l.city, '') as city,
-               COALESCE(l.state, '') as state,
-               COALESCE(l.country, '') as country,
-               COALESCE(sc.name, '') as collection
-        FROM sighting s
-        JOIN location l ON s.location_id = l.id
-        JOIN source_database sd ON s.source_db_id = sd.id
-        LEFT JOIN source_collection sc ON sd.collection_id = sc.id
-        WHERE {where}
-        ORDER BY s.date_event DESC
-        LIMIT {req_limit}
-    """
+    # Decide sampling strategy from explicit zoom (preferred) or
+    # bbox area as a fallback. Zoom 0 = whole world, ~7 = continent,
+    # 10+ = city. Threshold: zoom <= 7 → hash sample; >= 8 → grid.
+    zoom_param = request.args.get("zoom")
+    if zoom_param is not None:
+        try:
+            use_grid = int(zoom_param) >= 8
+        except (ValueError, TypeError):
+            use_grid = False
+    else:
+        bbox_area = max(0.0001, (north_f - south_f) * (east_f - west_f))
+        use_grid = bbox_area < 100.0  # < ~10° on a side
 
-    cur.execute(sql, args)
+    if use_grid:
+        # 50x50 grid of the visible bbox, up to 10 most-recent samples per
+        # cell. Worst case 25k markers; usually far fewer because most
+        # cells are empty. Window function is fine on SQLite >= 3.25.
+        GRID_SIZE = 50
+        K_PER_CELL = 10
+        lat_step = max((north_f - south_f) / GRID_SIZE, 1e-9)
+        lng_step = max((east_f - west_f) / GRID_SIZE, 1e-9)
+        sql = f"""
+            WITH cells AS (
+                SELECT s.id, l.latitude, l.longitude,
+                       s.date_event, s.shape, sd.name AS source_name,
+                       COALESCE(l.city, '') AS city,
+                       COALESCE(l.state, '') AS state,
+                       COALESCE(l.country, '') AS country,
+                       COALESCE(sc.name, '') AS collection,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY
+                               CAST((l.latitude  - ?) / ? AS INTEGER),
+                               CAST((l.longitude - ?) / ? AS INTEGER)
+                           ORDER BY s.date_event DESC
+                       ) AS rn
+                FROM sighting s
+                JOIN location l ON s.location_id = l.id
+                JOIN source_database sd ON s.source_db_id = sd.id
+                LEFT JOIN source_collection sc ON sd.collection_id = sc.id
+                WHERE {where}
+            )
+            SELECT id, latitude, longitude, date_event, shape, source_name,
+                   city, state, country, collection
+            FROM cells
+            WHERE rn <= ?
+            LIMIT ?
+        """
+        cur.execute(
+            sql,
+            [south_f, lat_step, west_f, lng_step] + args + [K_PER_CELL, req_limit],
+        )
+    else:
+        # Hash-based pseudo-random sample. ORDER BY ((id * large prime) % M)
+        # gives a deterministic shuffle over the bbox-filtered set; LIMIT
+        # then takes a representative slice. Same input = same output, so
+        # the response cache works perfectly.
+        sql = f"""
+            SELECT s.id, l.latitude, l.longitude,
+                   s.date_event, s.shape, sd.name AS source_name,
+                   COALESCE(l.city, '') AS city,
+                   COALESCE(l.state, '') AS state,
+                   COALESCE(l.country, '') AS country,
+                   COALESCE(sc.name, '') AS collection
+            FROM sighting s
+            JOIN location l ON s.location_id = l.id
+            JOIN source_database sd ON s.source_db_id = sd.id
+            LEFT JOIN source_collection sc ON sd.collection_id = sc.id
+            WHERE {where}
+            ORDER BY ((s.id * 2654435761) % 1000000)
+            LIMIT ?
+        """
+        cur.execute(sql, args + [req_limit])
+
     markers = []
     for r in cur.fetchall():
         markers.append({
@@ -346,19 +440,34 @@ def api_map():
             "collection": r[9],
         })
 
+    # Total-in-view count: only run the COUNT(*) when we hit the limit,
+    # since otherwise len(markers) IS the total. Saves a full filtered
+    # scan on the common case.
+    if len(markers) < req_limit:
+        total_in_view = len(markers)
+    else:
+        cur.execute(
+            f"SELECT COUNT(*) FROM sighting s JOIN location l ON s.location_id = l.id WHERE {where}",
+            args,
+        )
+        total_in_view = cur.fetchone()[0]
+
     conn.close()
     return jsonify({
         "markers": markers,
         "count": len(markers),
         "total_in_view": total_in_view,
+        "sample_strategy": "grid" if use_grid else "hash",
     })
 
 
 @app.route("/api/heatmap")
+@cache.cached(timeout=300, query_string=True)
 def api_heatmap():
     """Lightweight coordinate-only endpoint for heatmap rendering.
 
     Returns [lat, lng] pairs. Default 50k limit, supports ?limit= for Load All.
+    Cached for 5 minutes per unique query string.
     """
     conn = get_db()
     cur = conn.cursor()
@@ -384,14 +493,6 @@ def api_heatmap():
     add_common_filters(request.args, clauses, args)
 
     where = " AND ".join(clauses)
-
-    # Total count in view
-    cur.execute(f"""
-        SELECT COUNT(*) FROM sighting s
-        JOIN location l ON s.location_id = l.id
-        WHERE {where}
-    """, args)
-    total_in_view = cur.fetchone()[0]
 
     # Configurable limit (default 50000, max 200000 for heatmap since it's just coords)
     req_limit = request.args.get("limit", 50000)
@@ -411,6 +512,18 @@ def api_heatmap():
     cur.execute(sql, args)
     points = [[r[0], r[1]] for r in cur.fetchall()]
 
+    # Only run the COUNT(*) when we hit the limit; otherwise the total
+    # in view IS the number of points we just fetched. Saves a full
+    # scan on the common case.
+    if len(points) < req_limit:
+        total_in_view = len(points)
+    else:
+        cur.execute(
+            f"SELECT COUNT(*) FROM sighting s JOIN location l ON s.location_id = l.id WHERE {where}",
+            args,
+        )
+        total_in_view = cur.fetchone()[0]
+
     conn.close()
     return jsonify({
         "points": points,
@@ -420,6 +533,7 @@ def api_heatmap():
 
 
 @app.route("/api/timeline")
+@cache.cached(timeout=600, query_string=True)
 def api_timeline():
     """Sighting counts grouped by year (or by month if year param given)."""
     conn = get_db()
@@ -676,6 +790,7 @@ def api_sighting(sid):
 # ---------------------------------------------------------------------------
 
 @app.route("/api/sentiment/overview")
+@cache.cached(timeout=600, query_string=True)
 def api_sentiment_overview():
     """Aggregate emotion distribution across filtered sightings."""
     conn = get_db()
@@ -716,6 +831,7 @@ def api_sentiment_overview():
 
 
 @app.route("/api/sentiment/timeline")
+@cache.cached(timeout=600, query_string=True)
 def api_sentiment_timeline():
     """Average VADER compound score by year."""
     conn = get_db()
@@ -757,6 +873,7 @@ def api_sentiment_timeline():
 
 
 @app.route("/api/sentiment/by-source")
+@cache.cached(timeout=600, query_string=True)
 def api_sentiment_by_source():
     """Emotion breakdown per source database."""
     conn = get_db()
@@ -797,6 +914,7 @@ def api_sentiment_by_source():
 
 
 @app.route("/api/sentiment/by-shape")
+@cache.cached(timeout=600, query_string=True)
 def api_sentiment_by_shape():
     """Emotion breakdown per top 10 shapes."""
     conn = get_db()
@@ -837,6 +955,7 @@ def api_sentiment_by_shape():
 
 
 @app.route("/api/duplicates")
+@cache.cached(timeout=600, query_string=True)
 def api_duplicates():
     """Browse duplicate candidate pairs with filtering."""
     conn = get_db()

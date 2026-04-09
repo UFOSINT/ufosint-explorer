@@ -362,6 +362,10 @@ async function loadMapMarkers() {
     params.set("north", bounds.getNorth().toFixed(4));
     params.set("west", bounds.getWest().toFixed(4));
     params.set("east", bounds.getEast().toFixed(4));
+    // Zoom drives the backend's sampling strategy: hash sample at low
+    // zoom (even spread across the dataset), grid sample at high zoom
+    // (even visual coverage across the viewport).
+    params.set("zoom", state.map.getZoom());
 
     try {
         const data = await fetchJSON(`/api/map?${params}`);
@@ -437,6 +441,7 @@ async function loadAll() {
     params.set("north", bounds.getNorth().toFixed(4));
     params.set("west", bounds.getWest().toFixed(4));
     params.set("east", bounds.getEast().toFixed(4));
+    params.set("zoom", state.map.getZoom());
     params.set("limit", total);
 
     try {
