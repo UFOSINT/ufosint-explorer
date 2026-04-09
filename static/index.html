@@ -33,7 +33,7 @@
         <div class="header-left">
             <h1>UFO Explorer</h1>
             <div class="stats-badge-wrap">
-                <button id="stats-badge" class="stats-badge" type="button" aria-haspopup="dialog" aria-expanded="false" title="Click for detailed counts">Loading…</button>
+                <button id="stats-badge" class="stats-badge" type="button" aria-haspopup="dialog" aria-expanded="false" title="Click for detailed counts"><span class="stats-badge-boot"><span class="term-prompt">&gt;</span> <span class="stats-boot-msg">BOOT SEQUENCE INITIATED</span><span class="term-cursor" aria-hidden="true"></span></span></button>
                 <div id="stats-popover" class="stats-popover" role="dialog" aria-label="Database statistics" hidden></div>
             </div>
         </div>
@@ -141,7 +141,7 @@
                     <option value="geocoded">Geocoded Only</option>
                 </select>
             </div>
-            <div id="map-status" class="panel-status" aria-live="polite">Loading map...</div>
+            <div id="map-status" class="panel-status" aria-live="polite"><span class="loading-pulse">INITIALIZING MAP</span></div>
             <button id="btn-load-all" class="btn-load-all" style="display:none" onclick="loadAll()">Load All</button>
         </div>
 

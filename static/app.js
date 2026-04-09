@@ -72,6 +72,10 @@ const EMOTION_NAMES = ["joy", "fear", "anger", "sadness", "surprise", "disgust",
 // Init
 // =========================================================================
 document.addEventListener("DOMContentLoaded", async () => {
+    // Start the stats-badge boot sequence immediately so the user sees
+    // something moving while /api/filters + /api/stats fetch in parallel.
+    const _stopBadgeBoot = startStatsBadgeBoot();
+
     // Load filters and stats in parallel
     const [filtersData, statsData] = await Promise.all([
         fetchJSON("/api/filters"),
@@ -79,6 +83,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     ]);
 
     populateFilterDropdowns(filtersData);
+    _stopBadgeBoot();
     showStats(statsData);
     initStatsBadge();
 
@@ -191,6 +196,153 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
     });
 });
+
+// =========================================================================
+// Hackery loading terminal
+// -------------------------------------------------------------------------
+// Renders a monospace terminal "card" that cycles through a set of
+// intelligence-agency-flavored status messages while something loads.
+// Uses a typewriter CSS animation for each message + a blinking cursor
+// + a drifting scanline (both CSS). The JS just swaps text every ~900ms
+// and tears the whole thing down when unmountLoadingTerminal() is called.
+//
+// Respects prefers-reduced-motion by cycling text without restarting
+// the typewriter animation on each message.
+// =========================================================================
+
+const TERMINAL_MESSAGE_BANKS = {
+    // Generic fallback used when a caller doesn't pass a bank name.
+    generic: [
+        "ESTABLISHING SECURE CHANNEL",
+        "AUTHENTICATING CREDENTIALS",
+        "DECRYPTING PAYLOAD",
+        "STREAMING RECORDS",
+        "APPLYING FILTERS",
+        "RENDERING RESULTS",
+    ],
+    search: [
+        "TOKENIZING QUERY",
+        "SCANNING 614,505 SIGHTING RECORDS",
+        "CROSS-REFERENCING DESCRIPTIONS",
+        "APPLYING SHAPE + DATE FILTERS",
+        "RANKING BY RELEVANCE",
+        "DECLASSIFYING RESULTS",
+    ],
+    map: [
+        "ACQUIRING TILE SATELLITE FEED",
+        "GEOCODING 105,836 LOCATIONS",
+        "CLUSTERING COORDINATES",
+        "PROJECTING WORLD MERCATOR",
+        "PLOTTING SIGHTINGS",
+    ],
+    timeline: [
+        "AGGREGATING BY YEAR",
+        "BUILDING STACK FROM 5 SOURCES",
+        "COMPUTING MONTHLY BREAKDOWN",
+        "RENDERING CHART",
+    ],
+    duplicates: [
+        "LOADING 126,730 DUPLICATE PAIRS",
+        "COMPUTING CROSS-SOURCE SIMILARITY",
+        "RANKING BY CONFIDENCE",
+        "SURFACING TOP CANDIDATES",
+    ],
+    insights: [
+        "ACCESSING SENTIMENT ANALYSIS",
+        "AGGREGATING EMOTION VECTORS",
+        "COMPUTING TRENDS",
+        "RENDERING DASHBOARD",
+    ],
+    boot: [
+        "BOOT SEQUENCE INITIATED",
+        "CONTACTING CORTEX NODE",
+        "DECRYPTING FILTER CACHE",
+        "LOADING 614,505 SIGHTINGS",
+        "READY",
+    ],
+};
+
+const _activeTerminals = new WeakMap();
+
+/**
+ * Render a hackery loading terminal into `el`. Returns a handle with a
+ * `.stop()` method that cancels the cycle and clears the DOM.
+ *
+ * @param {HTMLElement} el  — target container; its innerHTML is replaced
+ * @param {string} bank     — key into TERMINAL_MESSAGE_BANKS
+ * @param {object} opts     — { header?, compact?, interval? }
+ */
+function mountLoadingTerminal(el, bank = "generic", opts = {}) {
+    if (!el) return { stop() {} };
+
+    // Clean up a previous terminal in the same container.
+    const prev = _activeTerminals.get(el);
+    if (prev) prev.stop();
+
+    const messages = (TERMINAL_MESSAGE_BANKS[bank] || TERMINAL_MESSAGE_BANKS.generic).slice();
+    const header = opts.header || `CORTEX / ${bank.toUpperCase()}.LOG`;
+    const compact = !!opts.compact;
+    const interval = opts.interval || 900;
+
+    el.innerHTML = `
+        <div class="loading-terminal${compact ? " compact" : ""}" role="status" aria-live="polite">
+            ${compact ? "" : `<div class="term-header">${escapeHtml(header)}</div>`}
+            <div class="term-line">
+                <span class="term-prompt">&gt;</span>
+                <span class="term-msg" aria-live="polite"></span>
+                <span class="term-cursor" aria-hidden="true"></span>
+            </div>
+            ${compact ? "" : `<div class="term-progress"></div>`}
+        </div>
+    `;
+
+    const msgEl = el.querySelector(".term-msg");
+    if (!msgEl) return { stop() {} };
+
+    // Respect reduced motion — don't restart the typewriter animation
+    // on each tick, just swap text.
+    const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    let i = 0;
+    function tick() {
+        const msg = messages[i % messages.length];
+        if (reduced) {
+            msgEl.textContent = msg;
+        } else {
+            // Re-trigger the typewriter animation by cloning the node.
+            // Restarting via animation: none → reflow → animation works
+            // but is uglier than a clone.
+            msgEl.textContent = msg;
+            msgEl.style.animation = "none";
+            // force reflow
+            void msgEl.offsetWidth;
+            msgEl.style.animation = "";
+        }
+        i += 1;
+    }
+    tick();
+    const timer = setInterval(tick, interval);
+
+    const handle = {
+        stop() {
+            clearInterval(timer);
+            _activeTerminals.delete(el);
+        },
+    };
+    _activeTerminals.set(el, handle);
+    return handle;
+}
+
+/**
+ * Cancel any active terminal inside `el` without necessarily wiping the
+ * DOM (the caller usually replaces innerHTML anyway). Safe to call even
+ * if no terminal is mounted.
+ */
+function unmountLoadingTerminal(el) {
+    if (!el) return;
+    const handle = _activeTerminals.get(el);
+    if (handle) handle.stop();
+}
 
 // =========================================================================
 // Helpers
@@ -323,6 +475,32 @@ function populateFilterDropdowns(data) {
         opt.textContent = s.name;
         dupesSourceSelect.appendChild(opt);
     });
+}
+
+/**
+ * Cycle the stats-badge through hackery boot messages until showStats()
+ * replaces the innerHTML. Returns a stop function the caller invokes
+ * once real stats land.
+ */
+function startStatsBadgeBoot() {
+    const badge = document.getElementById("stats-badge");
+    if (!badge) return () => {};
+    const msgEl = badge.querySelector(".stats-boot-msg");
+    if (!msgEl) return () => {};
+
+    const messages = TERMINAL_MESSAGE_BANKS.boot;
+    let i = 0;
+    // Tick once immediately (skipping the pre-filled initial message on
+    // the first tick since it's already in the DOM from index.html), then
+    // every 600ms. Fast enough that the user perceives activity.
+    const timer = setInterval(() => {
+        i += 1;
+        msgEl.textContent = messages[i % messages.length];
+    }, 600);
+
+    return function stop() {
+        clearInterval(timer);
+    };
 }
 
 function showStats(data) {
@@ -713,8 +891,9 @@ window.drillToMonth = drillToMonth;
 async function loadMapMarkers(signal) {
     const status = document.getElementById("map-status");
     const mapEl = document.getElementById("map");
-    status.innerHTML = '<span class="loading-pulse">Plotting sightings...</span>';
+    status.innerHTML = '<span class="loading-pulse">PLOTTING SIGHTINGS</span>';
     mapEl?.classList.add("is-loading");
+    ensureMapScanframe("PLOTTING / GRID LIVE");
 
     const bounds = state.map.getBounds();
     const params = getFilterParams();
@@ -754,7 +933,37 @@ async function loadMapMarkers(signal) {
         console.error(err);
     } finally {
         mapEl?.classList.remove("is-loading");
+        clearMapScanframe();
     }
+}
+
+// -------------------------------------------------------------------------
+// Map HUD scan frame — corner brackets + label overlay shown while the
+// map is loading. Created once, reused across every subsequent load.
+// -------------------------------------------------------------------------
+function ensureMapScanframe(label = "SCANNING") {
+    const mapEl = document.getElementById("map");
+    if (!mapEl) return;
+    let frame = mapEl.querySelector(".map-scanframe");
+    if (!frame) {
+        frame = document.createElement("div");
+        frame.className = "map-scanframe";
+        frame.innerHTML = `
+            <div class="mscf-tl"></div>
+            <div class="mscf-tr"></div>
+            <div class="mscf-bl"></div>
+            <div class="mscf-br"></div>
+            <div class="map-scanframe-label"></div>
+        `;
+        mapEl.appendChild(frame);
+    }
+    const labelEl = frame.querySelector(".map-scanframe-label");
+    if (labelEl) labelEl.textContent = label;
+}
+function clearMapScanframe() {
+    // We leave the node in place and let the CSS opacity transition on
+    // #map.is-loading → :not(.is-loading) fade it out. Removing it would
+    // kill the fade.
 }
 
 // =========================================================================
@@ -877,8 +1086,9 @@ function toggleMapMode(mode) {
 async function loadHeatmap(signal) {
     const status = document.getElementById("map-status");
     const mapEl = document.getElementById("map");
-    status.innerHTML = '<span class="loading-pulse">Building heatmap from sightings...</span>';
+    status.innerHTML = '<span class="loading-pulse">COMPUTING HEATMAP</span>';
     mapEl?.classList.add("is-loading");
+    ensureMapScanframe("HEATMAP / THERMAL");
 
     const bounds = state.map.getBounds();
     const params = getFilterParams();
@@ -898,6 +1108,7 @@ async function loadHeatmap(signal) {
         console.error(err);
     } finally {
         mapEl?.classList.remove("is-loading");
+        clearMapScanframe();
     }
 }
 
@@ -1084,8 +1295,10 @@ async function executeSearch() {
     // Disable the submit button so a double-click doesn't fire two requests
     const restoreSearchBtn = disableButtonWhilePending(searchBtn, "Searching…");
 
-    // Skeleton loading state
-    info.innerHTML = '<span class="loading-pulse">Searching...</span>';
+    // Skeleton loading state — hackery terminal in the info bar,
+    // layout-stable shimmer cards below so the page doesn't jump when
+    // results land.
+    mountLoadingTerminal(info, "search", { compact: true, header: "SEARCH" });
     resultsEl.innerHTML = `
         <div class="result-card skeleton"></div>
         <div class="result-card skeleton"></div>
@@ -1295,7 +1508,7 @@ async function loadDuplicates(append = false) {
     const applyBtn = document.getElementById("btn-dupes-apply");
 
     const restoreApplyBtn = disableButtonWhilePending(applyBtn, "Loading…");
-    info.innerHTML = '<span class="loading-pulse">Finding possible duplicate pairs — this can take a few seconds.</span>';
+    mountLoadingTerminal(info, "duplicates", { compact: true, header: "DUPLICATES" });
 
     const params = new URLSearchParams();
     params.set("page", state.dupesPage);
@@ -1379,7 +1592,7 @@ async function loadDuplicates(append = false) {
 // =========================================================================
 async function loadInsights() {
     const statusEl = document.getElementById("insights-status");
-    statusEl.textContent = "Loading how witnesses felt...";
+    mountLoadingTerminal(statusEl, "insights", { compact: true, header: "INSIGHTS" });
 
     const params = getFilterParams();
     const qs = params.toString();
@@ -2617,7 +2830,7 @@ function renderErrorMsg(text) {
 let _thinkingEl = null;
 function showThinking() {
     if (_thinkingEl) return;
-    _thinkingEl = appendBubble("thinking", '<div class="ai-msg-body"><span class="loading-pulse">Thinking...</span></div>');
+    _thinkingEl = appendBubble("thinking", '<div class="ai-msg-body"><span class="loading-pulse">ANALYZING QUERY</span><span class="term-cursor" aria-hidden="true"></span></div>');
 }
 function hideThinking() {
     if (_thinkingEl) { _thinkingEl.remove(); _thinkingEl = null; }

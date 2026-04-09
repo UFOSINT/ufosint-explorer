@@ -87,6 +87,19 @@
     --t-fast:  120ms ease-out;
     --t-base:  180ms ease-out;
     --t-slow:  280ms ease-out;
+
+    /* Hackery loading palette
+       - term-green is the "access granted" terminal color, used for
+         cycling status messages and the blinking cursor.
+       - term-amber is the secondary channel, used for "warn/wait".
+       - term-scan is the scanline tint laid over shimmers. */
+    --term-green:  #3fb950;
+    --term-amber:  #ffce56;
+    --term-cyan:   #76b7b2;
+    --term-glow:   rgba(63, 185, 80, 0.55);
+    --term-scan:   rgba(110, 168, 255, 0.18);
+    --term-bg:     rgba(6, 11, 20, 0.92);
+    --term-border: rgba(63, 185, 80, 0.28);
 }
 
 * {
@@ -748,15 +761,268 @@ select:focus {
     color: #fff;
 }
 
-/* Loading animation */
+/* =========================================================================
+   HACKERY LOADING SYSTEM
+   -----------------------------------------------------------------------
+   Terminal-style loading states. All loading affordances share a common
+   visual language: monospace green text, blinking cursor, scanline
+   shimmer, occasional RGB-split glitch. The effect is "intelligence
+   agency decrypting records" rather than "spinner". Deliberately
+   overbuilt because waiting for 614K rows should feel like breaking
+   into a mainframe, not like buffering a YouTube video.
+
+   All animations respect prefers-reduced-motion — they degrade to a
+   static terminal frame with a blinking cursor and nothing else.
+   ========================================================================= */
+
+/* --- 1. Legacy loading pulse, now with RGB-split glitch --- */
 .loading-pulse {
-    animation: pulse 1.5s ease-in-out infinite;
+    animation: hack-pulse 1.5s ease-in-out infinite,
+               hack-glitch 5s steps(1) infinite;
     color: var(--accent);
+    font-family: var(--font-mono);
+    letter-spacing: 0.02em;
+}
+@keyframes hack-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.55; }
+}
+@keyframes hack-glitch {
+    /* 95% of the loop is clean; the remaining 5% flashes a two-channel
+       RGB split and a tiny offset. Cheap, effective, only actually
+       perceptible at around 20 fps which dodges "is this broken?". */
+    0%, 92%, 100% {
+        text-shadow: none;
+        transform: none;
+    }
+    93% {
+        text-shadow: -1.5px 0 var(--term-cyan), 1.5px 0 var(--danger);
+        transform: translate(1px, 0);
+    }
+    95% {
+        text-shadow: 1.5px 0 var(--term-cyan), -1.5px 0 var(--danger);
+        transform: translate(-1px, 0);
+    }
+    97% {
+        text-shadow: -0.5px 0 var(--term-cyan), 0.5px 0 var(--danger);
+        transform: none;
+    }
 }
 
-@keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.4; }
+/* --- 2. Terminal loading card (reusable) ---------------------------------
+   Usage (JS): mountLoadingTerminal(containerEl, messages)
+   Emits the markup below; the JS helper cycles .term-msg text and the
+   cursor blink is pure CSS. */
+.loading-terminal {
+    position: relative;
+    max-width: 440px;
+    margin: var(--s-6) auto;
+    padding: var(--s-4) var(--s-5);
+    background: var(--term-bg);
+    border: 1px solid var(--term-border);
+    border-radius: var(--r-md);
+    font-family: var(--font-mono);
+    font-size: var(--fs-13);
+    color: var(--term-green);
+    text-shadow: 0 0 6px var(--term-glow);
+    overflow: hidden;
+    box-shadow:
+        0 0 0 1px rgba(63, 185, 80, 0.08),
+        0 8px 32px rgba(0, 0, 0, 0.4),
+        inset 0 0 40px rgba(63, 185, 80, 0.06);
+}
+
+/* CRT-style scanline grid laid across the whole card */
+.loading-terminal::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+        0deg,
+        transparent 0 3px,
+        rgba(0, 0, 0, 0.22) 3px 4px
+    );
+    pointer-events: none;
+    opacity: 0.55;
+}
+
+/* Sweeping scanline that drifts top → bottom */
+.loading-terminal::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 60px;
+    top: -60px;
+    background: linear-gradient(
+        180deg,
+        transparent 0%,
+        rgba(63, 185, 80, 0.08) 40%,
+        rgba(63, 185, 80, 0.18) 50%,
+        rgba(63, 185, 80, 0.08) 60%,
+        transparent 100%
+    );
+    animation: term-scan-drift 3.2s linear infinite;
+    pointer-events: none;
+    mix-blend-mode: screen;
+}
+@keyframes term-scan-drift {
+    0%   { top: -60px; }
+    100% { top: 110%; }
+}
+
+.loading-terminal .term-header {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    margin-bottom: var(--s-3);
+    padding-bottom: var(--s-2);
+    border-bottom: 1px dashed rgba(63, 185, 80, 0.22);
+    font-size: 11px;
+    color: rgba(63, 185, 80, 0.75);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+}
+.loading-terminal .term-header::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--term-green);
+    box-shadow: 0 0 6px var(--term-green);
+    animation: term-pulse 1.4s ease-in-out infinite;
+}
+@keyframes term-pulse {
+    0%, 100% { opacity: 1;   box-shadow: 0 0 8px var(--term-green); }
+    50%      { opacity: 0.4; box-shadow: 0 0 2px var(--term-green); }
+}
+
+.loading-terminal .term-line {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    white-space: nowrap;
+    overflow: hidden;
+    min-height: 1.5em;
+    position: relative;
+    z-index: 1;
+}
+.loading-terminal .term-prompt { color: var(--term-amber); }
+.loading-terminal .term-msg {
+    color: var(--term-green);
+    animation: term-typewriter 280ms steps(22) 1;
+    overflow: hidden;
+    display: inline-block;
+    max-width: 100%;
+}
+.loading-terminal .term-cursor {
+    display: inline-block;
+    width: 8px;
+    height: 1em;
+    background: var(--term-green);
+    box-shadow: 0 0 6px var(--term-glow);
+    animation: term-cursor-blink 1s steps(1) infinite;
+    vertical-align: text-bottom;
+    margin-left: 2px;
+}
+@keyframes term-cursor-blink {
+    0%, 50%   { opacity: 1; }
+    51%, 100% { opacity: 0; }
+}
+@keyframes term-typewriter {
+    from { max-width: 0; }
+    to   { max-width: 100%; }
+}
+
+.loading-terminal .term-progress {
+    margin-top: var(--s-3);
+    height: 4px;
+    background: rgba(63, 185, 80, 0.12);
+    border-radius: 2px;
+    overflow: hidden;
+    position: relative;
+    z-index: 1;
+}
+.loading-terminal .term-progress::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 40%;
+    height: 100%;
+    background: linear-gradient(
+        90deg,
+        transparent,
+        var(--term-green),
+        transparent
+    );
+    box-shadow: 0 0 12px var(--term-glow);
+    animation: term-progress-slide 1.8s ease-in-out infinite;
+}
+@keyframes term-progress-slide {
+    0%   { left: -40%; }
+    100% { left: 100%; }
+}
+
+/* Compact variant — single line, no header, no progress bar. For cases
+   where we only have one row of vertical space (e.g. search info bar). */
+.loading-terminal.compact {
+    max-width: none;
+    margin: 0;
+    padding: 6px 12px;
+    font-size: var(--fs-12);
+    background: transparent;
+    border: 1px solid var(--term-border);
+    box-shadow: none;
+}
+.loading-terminal.compact::before,
+.loading-terminal.compact::after { display: none; }
+.loading-terminal.compact .term-header,
+.loading-terminal.compact .term-progress { display: none; }
+
+/* --- 3. Skeleton scanline enhancement ------------------------------------
+   Layers a bright diagonal scan pass on top of the existing shimmer so
+   the cards read as "incoming transmission" rather than "loading". */
+.result-card.skeleton::after,
+.detail-skeleton::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+        105deg,
+        transparent 0%,
+        transparent 42%,
+        var(--term-scan) 50%,
+        transparent 58%,
+        transparent 100%
+    );
+    background-size: 240% 100%;
+    animation: skeleton-scan 2.2s linear infinite;
+    pointer-events: none;
+    mix-blend-mode: screen;
+}
+.detail-skeleton { position: relative; overflow: hidden; }
+
+@keyframes skeleton-scan {
+    0%   { background-position: 240% 0; }
+    100% { background-position: -140% 0; }
+}
+
+/* --- 4. Reduced-motion fallback ------------------------------------------
+   All the shimmer/scan/glitch animations freeze on their first frame.
+   The terminal still renders with its static scanline grid and the
+   cursor still blinks (visibility change only, no transform). */
+@media (prefers-reduced-motion: reduce) {
+    .loading-pulse {
+        animation: hack-pulse 2s ease-in-out infinite;
+    }
+    .loading-terminal::after,
+    .loading-terminal .term-msg,
+    .loading-terminal .term-progress::after,
+    .result-card.skeleton::after,
+    .detail-skeleton::after {
+        animation: none;
+    }
 }
 
 /* ---- Modal ---- */
@@ -2129,6 +2395,31 @@ select:focus {
     color: var(--text-faint);
     margin: 0 var(--s-1);
 }
+
+/* Stats-badge boot sequence — shown in the HTML before /api/stats has
+   resolved. Monospace, amber prompt, green message, blinking cursor. */
+.stats-badge-boot {
+    font-family: var(--font-mono);
+    font-size: var(--fs-12);
+    color: var(--term-green);
+    text-shadow: 0 0 6px var(--term-glow);
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+}
+.stats-badge-boot .term-prompt {
+    color: var(--term-amber);
+    margin-right: 4px;
+}
+.stats-badge-boot .term-cursor {
+    display: inline-block;
+    width: 6px;
+    height: 0.9em;
+    background: var(--term-green);
+    box-shadow: 0 0 6px var(--term-glow);
+    animation: term-cursor-blink 1s steps(1) infinite;
+    vertical-align: text-bottom;
+    margin-left: 3px;
+}
 .stats-popover {
     position: absolute;
     top: calc(100% + var(--s-2));
@@ -2290,17 +2581,52 @@ select:focus {
     50%      { box-shadow: 0 0 0 5px var(--accent-bg); }
 }
 
-/* ---- Map: top-edge progress bar on load ---- */
-/* Replaces the barely-visible bottom-left status pill as the primary
-   "map is busy" indicator. The pill stays for the count display
-   ("5,000 of 50,000 markers") but the bar is the loading affordance. */
+/* ---- Map: hackery loading overlay ----
+   Three layers:
+   - ::before is a radial sweep that spins once over the viewport,
+     laid over the Leaflet tiles with mix-blend-mode: screen so it
+     tints live tiles without obscuring them.
+   - ::after is the top-edge progress bar from v0.3 (kept because it's
+     a good peripheral indicator).
+   - .map-scanframe is a decorative HUD frame with corner brackets +
+     a glowing title; added/removed via JS alongside .is-loading. */
+#map.is-loading {
+    position: relative;
+}
+#map.is-loading::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 120vmax;
+    height: 120vmax;
+    margin: -60vmax 0 0 -60vmax;
+    background: conic-gradient(
+        from 0deg,
+        transparent 0deg,
+        transparent 260deg,
+        rgba(110, 168, 255, 0.03) 300deg,
+        rgba(110, 168, 255, 0.18) 345deg,
+        rgba(110, 168, 255, 0.35) 360deg
+    );
+    border-radius: 50%;
+    animation: map-radar-spin 3.2s linear infinite;
+    pointer-events: none;
+    mix-blend-mode: screen;
+    z-index: 1199;
+    opacity: 0.85;
+}
+@keyframes map-radar-spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+}
 #map.is-loading::after {
     content: "";
     position: absolute;
     top: 0;
     left: 0;
     right: 0;
-    height: 3px;
+    height: 2px;
     background: linear-gradient(
         90deg,
         transparent 0%,
@@ -2314,10 +2640,70 @@ select:focus {
     animation: map-loading-slide 1.4s ease-in-out infinite;
     z-index: 1200;
     pointer-events: none;
+    box-shadow: 0 0 12px rgba(110, 168, 255, 0.45);
 }
 @keyframes map-loading-slide {
     0%   { background-position: -60% 0; }
     100% { background-position: 160% 0; }
+}
+
+/* Corner-bracket HUD that only appears while loading. The brackets are
+   drawn with linear-gradients on four absolutely-positioned corners,
+   which means no extra DOM and no images. */
+#map.is-loading .leaflet-container::before,
+#map.is-loading .leaflet-container::after {
+    /* we don't actually target .leaflet-container — Leaflet owns it. */
+}
+
+.map-scanframe {
+    position: absolute;
+    inset: 20px;
+    pointer-events: none;
+    z-index: 1201;
+    opacity: 0;
+    transition: opacity var(--t-base) ease-out;
+}
+#map.is-loading .map-scanframe { opacity: 1; }
+
+.map-scanframe::before,
+.map-scanframe::after,
+.map-scanframe > .mscf-tl,
+.map-scanframe > .mscf-tr,
+.map-scanframe > .mscf-bl,
+.map-scanframe > .mscf-br { content: ""; position: absolute; }
+
+.map-scanframe > .mscf-tl,
+.map-scanframe > .mscf-tr,
+.map-scanframe > .mscf-bl,
+.map-scanframe > .mscf-br {
+    width: 28px;
+    height: 28px;
+    border-color: var(--accent);
+    box-shadow: 0 0 10px rgba(110, 168, 255, 0.45);
+}
+.map-scanframe > .mscf-tl { top: 0; left: 0;     border-top: 2px solid; border-left:  2px solid; }
+.map-scanframe > .mscf-tr { top: 0; right: 0;    border-top: 2px solid; border-right: 2px solid; }
+.map-scanframe > .mscf-bl { bottom: 0; left: 0;  border-bottom: 2px solid; border-left:  2px solid; }
+.map-scanframe > .mscf-br { bottom: 0; right: 0; border-bottom: 2px solid; border-right: 2px solid; }
+
+.map-scanframe-label {
+    position: absolute;
+    top: -10px;
+    left: 36px;
+    padding: 2px 8px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--accent);
+    background: var(--bg);
+    box-shadow: 0 0 10px rgba(110, 168, 255, 0.35);
+}
+.map-scanframe-label::before {
+    content: "● ";
+    color: var(--term-green);
+    text-shadow: 0 0 6px var(--term-glow);
+    animation: term-pulse 1.4s ease-in-out infinite;
 }
 
 /* ---- Chart container: fade during drill-down fetch ---- */

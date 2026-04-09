@@ -17,6 +17,80 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 Nothing yet.
 
+## [0.5.0] — 2026-04-09 — Hackery loading system
+
+### Added
+- **`.loading-terminal` component** — reusable monospace terminal card
+  with a drifting scanline, blinking cursor, glowing green prompt, and
+  a bottom-edge progress bar that slides. Two variants: full
+  (header + progress bar) and `.compact` (single-line, no chrome) for
+  tight spaces like the search info bar.
+- **`TERMINAL_MESSAGE_BANKS`** in `static/app.js` — seven themed banks
+  of hacker-flavored status messages: `generic`, `search`, `map`,
+  `timeline`, `duplicates`, `insights`, `boot`. Every loading site
+  picks a bank that matches the tab the user is on.
+- **`mountLoadingTerminal(el, bank, opts)`** / **`unmountLoadingTerminal(el)`**
+  helpers. The mount helper renders the terminal markup, cycles through
+  the chosen message bank every 900 ms, and restarts the typewriter
+  animation on each tick. Tracks active terminals in a `WeakMap` so a
+  second mount into the same container cleans up the first timer.
+- **Map loading HUD** — `#map.is-loading` now renders:
+  - A `conic-gradient` radar sweep rotating around the viewport
+    (`mix-blend-mode: screen`, 3.2 s linear spin).
+  - Four corner brackets (`.map-scanframe > .mscf-tl/tr/bl/br`) drawn
+    with pure CSS borders, `ensureMapScanframe(label)` / `clearMapScanframe()`
+    are called from both `loadMapMarkers` and `loadHeatmap`.
+  - A glowing monospace HUD label (`PLOTTING / GRID LIVE` or
+    `HEATMAP / THERMAL`) with a pulsing green bullet.
+  - The v0.3 top-edge progress bar is kept as the peripheral indicator
+    with a brighter box-shadow.
+- **Stats-badge boot sequence** — the `Loading…` placeholder in
+  `index.html` now ships as a monospace terminal line
+  (`> BOOT SEQUENCE INITIATED_`). `startStatsBadgeBoot()` cycles
+  through `TERMINAL_MESSAGE_BANKS.boot` every 600 ms until
+  `/api/stats` resolves and `showStats()` replaces the innerHTML.
+- **Skeleton scanline pass** — `.result-card.skeleton` and
+  `.detail-skeleton` now layer a bright diagonal scanline
+  (`mix-blend-mode: screen`, `--term-scan` tint) on top of the
+  existing shimmer gradient so the cards read as "incoming
+  transmission".
+- **Glitch-pulse `.loading-pulse`** — the old 1.5 s opacity pulse now
+  runs alongside a 5 s `hack-glitch` animation that flashes a
+  two-channel RGB split (cyan + danger) with a 1 px transform offset
+  on about 5% of frames. Only perceptible at ~20 fps which dodges the
+  "is this broken?" uncanny-valley effect.
+- **Terminal palette tokens** — `--term-green`, `--term-amber`,
+  `--term-cyan`, `--term-glow`, `--term-scan`, `--term-bg`,
+  `--term-border` in `:root`. Referenced everywhere in the loading
+  system so a theme switch lands in one place.
+- **45 new tests in `tests/test_loading_system.py`** locking the
+  CSS/HTML/JS contract: every required design token, every required
+  selector, every keyframe, prefers-reduced-motion fallback block,
+  boot-sequence markup, scanframe helper wiring, message bank
+  presence for all 7 banks. Suite is now 79 tests and still runs in
+  under a second.
+
+### Changed
+- **Every loading site now uses the terminal** (or at least the
+  updated glitch-pulse):
+  - `/api/search` → `mountLoadingTerminal(info, "search", {compact: true})`
+  - `/api/map` → `ensureMapScanframe("PLOTTING / GRID LIVE")` +
+    `loading-pulse PLOTTING SIGHTINGS` in the status pill
+  - `/api/heatmap` → `ensureMapScanframe("HEATMAP / THERMAL")` +
+    `loading-pulse COMPUTING HEATMAP`
+  - `/api/duplicates` → `mountLoadingTerminal(info, "duplicates", {compact: true})`
+  - `/api/sentiment/*` → `mountLoadingTerminal(statusEl, "insights", {compact: true})`
+  - AI chat thinking state → `loading-pulse ANALYZING QUERY` + cursor
+
+### Accessibility
+- **`prefers-reduced-motion: reduce`** freezes the drifting scanline,
+  skeleton scan pass, typewriter, and progress-bar slide. The cursor
+  still blinks (opacity-only, no transform) and `loading-pulse` runs
+  at a slower 2 s cycle. No vestibular triggers at reduced-motion.
+- **`role="status"` + `aria-live="polite"`** on every terminal
+  container so screen readers announce the current message instead
+  of reading "loading" silently forever.
+
 ## [0.4.1] — 2026-04-09 — Stale-cache hotfix + test suite
 
 ### Fixed
