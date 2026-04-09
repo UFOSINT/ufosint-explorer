@@ -13,6 +13,9 @@ Run locally:
 import os
 import json
 import time
+import hashlib
+import subprocess
+from pathlib import Path
 from flask import Flask, request, jsonify, send_from_directory, Response
 from flask_caching import Cache
 from flask_compress import Compress
@@ -21,6 +24,54 @@ import psycopg
 from psycopg_pool import ConnectionPool
 
 app = Flask(__name__, static_folder="static")
+
+
+# ---------------------------------------------------------------------------
+# Asset version — tacked onto static asset URLs as ?v=<version> so a new
+# deploy busts any browser cache immediately.
+#
+# Preference order: AZURE env var set by deploy → git SHA → mtime hash of
+# the two big static files. Computed once at import time; the route below
+# substitutes it into index.html on every request.
+# ---------------------------------------------------------------------------
+def _compute_asset_version() -> str:
+    env_ver = os.environ.get("ASSET_VERSION") or os.environ.get("GITHUB_SHA")
+    if env_ver:
+        return env_ver[:12]
+    try:
+        sha = subprocess.check_output(
+            ["git", "rev-parse", "--short=12", "HEAD"],
+            cwd=os.path.dirname(__file__) or ".",
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+        if sha:
+            return sha
+    except Exception:
+        pass
+    # Final fallback: hash the (mtime, size) of the two big static files.
+    h = hashlib.md5()
+    for name in ("static/style.css", "static/app.js", "static/index.html"):
+        p = Path(__file__).parent / name
+        if p.exists():
+            st = p.stat()
+            h.update(f"{name}:{st.st_mtime_ns}:{st.st_size}".encode())
+    return h.hexdigest()[:12]
+
+
+ASSET_VERSION = _compute_asset_version()
+print(f"ASSET_VERSION = {ASSET_VERSION}")
+
+# Read index.html once at startup and pre-substitute the {{ASSET_VERSION}}
+# placeholder. Avoids a file read + string replace on every request.
+_INDEX_HTML_PATH = Path(__file__).parent / "static" / "index.html"
+try:
+    _INDEX_HTML = _INDEX_HTML_PATH.read_text(encoding="utf-8").replace(
+        "{{ASSET_VERSION}}", ASSET_VERSION
+    )
+except Exception as e:
+    print(f"Could not preload index.html: {e}")
+    _INDEX_HTML = None
 
 # gzip / brotli on every response > 500 bytes. The 4 MB world-map JSON
 # response shrinks to ~700 KB. Free win for everyone, biggest win for
@@ -148,24 +199,32 @@ _BROWSER_CACHEABLE_PREFIXES = (
 def add_cache_headers(response):
     """Set Cache-Control on cacheable responses.
 
-    - /static/* is fingerprinted-by-content-hash via Flask's default ETag
-      so we can max-age them aggressively. Browsers revalidate on
-      navigation; the response cache layer above handles repeats.
-    - The cacheable /api/* endpoints get a short max-age (5 min) so the
-      browser doesn't even hit the server during a single user session of
-      panning around.
-    - /api/sighting/<id> and /health stay no-cache so detail lookups and
-      health checks are always fresh.
+    - /static/* with a ?v=<asset_version> query string is safe to cache
+      for a year immutable — the version changes on every deploy, so a
+      new URL is issued and the old URL gets left behind. This is the
+      fingerprint-in-URL pattern.
+    - /static/* WITHOUT a version string gets a conservative 1-hour
+      max-age + must-revalidate, so an old cached copy can't lock the
+      browser out of a new deploy for more than an hour. This is the
+      safety net that protects direct-link uses (preload scans, dev
+      tools, curl).
+    - /api/* cacheable endpoints get 5 min so a pan/zoom session doesn't
+      hammer the server.
+    - /api/sighting/<id> and /health stay no-cache.
+    - `/` (the HTML shell) gets a short 60s cache so the version string
+      in the <link>/<script> tags stays fresh after a deploy.
     """
     path = request.path or ""
     if path.startswith("/static/"):
-        # 7 days. Static files are version-pinned in the deploy package;
-        # if a deploy changes them, the browser revalidates against the
-        # ETag (Flask sets one automatically on send_from_directory).
-        response.headers["Cache-Control"] = "public, max-age=604800"
+        if request.args.get("v"):
+            # Versioned asset URL — immutable for a year.
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        else:
+            # Unversioned — short cache with required revalidation.
+            response.headers["Cache-Control"] = "public, max-age=3600, must-revalidate"
     elif any(path.startswith(p) for p in _BROWSER_CACHEABLE_PREFIXES):
         response.headers["Cache-Control"] = "public, max-age=300"
-    elif path == "/" or path.startswith("/static"):
+    elif path == "/":
         response.headers["Cache-Control"] = "public, max-age=60"
     return response
 
@@ -331,6 +390,11 @@ def add_common_filters(params, clauses, args, table_prefix="s"):
 
 @app.route("/")
 def index():
+    # Serve the version-substituted index.html so the CSS/JS <link> and
+    # <script> tags get a fresh ?v=<version> query param on every deploy.
+    # Cache-Control is set by add_cache_headers() below.
+    if _INDEX_HTML is not None:
+        return Response(_INDEX_HTML, content_type="text/html; charset=utf-8")
     return send_from_directory("static", "index.html")
 
 

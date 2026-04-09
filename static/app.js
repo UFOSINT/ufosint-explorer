@@ -1105,7 +1105,7 @@ async function executeSearch() {
         if (data.total === 0) {
             resultsEl.innerHTML = `
                 <div class="empty-state">
-                    <div class="empty-state-icon"><svg class="icon icon-xl" viewBox="0 0 64 32" aria-hidden="true"><ellipse cx="32" cy="20" rx="28" ry="6"/><path d="M14 18 C14 10, 22 4, 32 4 C42 4, 50 10, 50 18"/><circle cx="32" cy="10" r="1.5" fill="currentColor" stroke="none"/><line x1="14" y1="26" x2="10" y2="30"/><line x1="32" y1="27" x2="32" y2="31"/><line x1="50" y1="26" x2="54" y2="30"/></svg></div>
+                    <div class="empty-state-icon"><svg class="icon icon-xl" width="64" height="32" viewBox="0 0 64 32" aria-hidden="true"><ellipse cx="32" cy="20" rx="28" ry="6"/><path d="M14 18 C14 10, 22 4, 32 4 C42 4, 50 10, 50 18"/><circle cx="32" cy="10" r="1.5" fill="currentColor" stroke="none"/><line x1="14" y1="26" x2="10" y2="30"/><line x1="32" y1="27" x2="32" y2="31"/><line x1="50" y1="26" x2="54" y2="30"/></svg></div>
                     <div class="empty-state-title">No sightings found</div>
                     <div class="empty-state-detail">
                         Try clearing some filters above, or
@@ -1156,7 +1156,7 @@ async function executeSearch() {
         renderPager(data.page, data.pages);
     } catch (err) {
         info.textContent = "Couldn't run that search";
-        resultsEl.innerHTML = `<div class="empty-state"><div class="empty-state-icon"><svg class="icon icon-xl" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div><div class="empty-state-title">Search failed</div><div class="empty-state-detail">Check your filters or try again. <br><span style="opacity:0.6">${escapeHtml(err.message || String(err))}</span></div></div>`;
+        resultsEl.innerHTML = `<div class="empty-state"><div class="empty-state-icon"><svg class="icon icon-xl" width="48" height="48" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div><div class="empty-state-title">Search failed</div><div class="empty-state-detail">Check your filters or try again. <br><span style="opacity:0.6">${escapeHtml(err.message || String(err))}</span></div></div>`;
         console.error(err);
     } finally {
         restoreSearchBtn();
