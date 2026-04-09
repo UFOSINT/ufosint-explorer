@@ -145,6 +145,86 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
     font-weight: 600;
 }
 
+/* Gear-icon settings menu — hides the AI features behind a discoverable
+   affordance instead of cluttering the main tab bar. */
+.tabs-settings {
+    position: relative;
+    margin-left: var(--s-2);
+    padding-left: var(--s-2);
+    border-left: 1px solid var(--border);
+}
+.tab-icon {
+    padding: var(--s-2);
+    min-width: 32px;
+    font-size: var(--fs-16);
+    line-height: 1;
+}
+.settings-menu {
+    position: absolute;
+    top: calc(100% + var(--s-2));
+    right: 0;
+    z-index: 9000;
+    min-width: 260px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    box-shadow: var(--shadow-lg);
+    padding: var(--s-2);
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-1);
+}
+.settings-menu[hidden] { display: none; }
+.settings-menu-section {
+    font-size: var(--fs-12);
+    font-weight: 600;
+    color: var(--text-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: var(--s-2) var(--s-3) var(--s-1);
+}
+.settings-menu-item {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--s-3);
+    padding: var(--s-3);
+    background: none;
+    border: 1px solid transparent;
+    border-radius: var(--r-md);
+    color: var(--text);
+    text-align: left;
+    font-family: inherit;
+    font-size: var(--fs-14);
+    cursor: pointer;
+    transition: background var(--t-fast), border-color var(--t-fast);
+}
+.settings-menu-item:hover {
+    background: var(--bg-card);
+    border-color: var(--border);
+}
+.settings-menu-icon {
+    font-size: 20px;
+    line-height: 1;
+    flex-shrink: 0;
+    width: 24px;
+    text-align: center;
+}
+.settings-menu-label {
+    display: block;
+    font-weight: 600;
+    color: var(--text);
+}
+.settings-menu-hint {
+    display: block;
+    color: var(--text-muted);
+    font-size: var(--fs-12);
+    margin-top: 2px;
+}
+
+/* Generic hide utility — used to keep DOM nodes around for orchestrator
+   wiring while removing them from the visual layout. */
+.hidden { display: none !important; }
+
 /* ---- Filters Bar ---- */
 #filters-bar {
     display: flex;

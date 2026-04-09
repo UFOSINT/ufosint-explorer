@@ -40,9 +40,27 @@
             <button class="tab" data-tab="search">Search</button>
             <button class="tab" data-tab="duplicates">Duplicates</button>
             <button class="tab" data-tab="insights">Insights</button>
-            <button class="tab" data-tab="ai">Ask AI</button>
-            <button class="tab" data-tab="connect">Connect</button>
             <button class="tab" data-tab="methodology">Methodology</button>
+            <div class="tabs-settings">
+                <button id="settings-btn" class="tab tab-icon" title="Settings &amp; AI tools" aria-label="Settings menu" aria-haspopup="menu" aria-expanded="false">⚙</button>
+                <div id="settings-menu" class="settings-menu" role="menu" hidden>
+                    <div class="settings-menu-section">AI tools</div>
+                    <button class="settings-menu-item" role="menuitem" data-tab="ai">
+                        <span class="settings-menu-icon">💬</span>
+                        <span>
+                            <span class="settings-menu-label">Ask AI</span>
+                            <span class="settings-menu-hint">Chat with the data using your own API key</span>
+                        </span>
+                    </button>
+                    <button class="settings-menu-item" role="menuitem" data-tab="connect">
+                        <span class="settings-menu-icon">🔌</span>
+                        <span>
+                            <span class="settings-menu-label">Connect</span>
+                            <span class="settings-menu-hint">MCP server &amp; API for your own AI client</span>
+                        </span>
+                    </button>
+                </div>
+            </div>
         </nav>
     </header>
 
@@ -767,8 +785,11 @@ DATABASE_URL="postgresql://..." python mcp_server.py</code></pre>
         </div>
     </div>
 
-    <!-- Floating chat widget — always available, opens the same chat as the Ask AI tab -->
-    <button id="chat-fab" class="chat-fab" title="Ask AI">
+    <!-- Floating chat widget — hidden by default; the AI features are only
+         exposed via the gear menu in the header. Code stays in the DOM so
+         the orchestrator init still wires up cleanly; can be re-enabled
+         later by removing the .hidden class. -->
+    <button id="chat-fab" class="chat-fab hidden" title="Ask AI">
         <span class="chat-fab-icon">💬</span>
         <span class="chat-fab-label">Ask AI</span>
     </button>

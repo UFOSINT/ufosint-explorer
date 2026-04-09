@@ -137,6 +137,9 @@ document.addEventListener("DOMContentLoaded", async () => {
         btn.addEventListener("click", () => toggleMapMode(btn.dataset.mode));
     });
 
+    // Settings dropdown menu (wraps the AI tools)
+    initSettingsMenu();
+
     // BYOK AI chat
     loadAISettings();
     applySettingsToUI();
@@ -1668,6 +1671,48 @@ function applySettingsToUI() {
     if (p) p.value = AI.settings.provider || "openrouter";
     if (k) k.value = AI.settings.apiKey || "";
     if (m) m.value = AI.settings.model || "";
+}
+
+function initSettingsMenu() {
+    const btn = document.getElementById("settings-btn");
+    const menu = document.getElementById("settings-menu");
+    if (!btn || !menu) return;
+
+    function openMenu() {
+        menu.hidden = false;
+        btn.setAttribute("aria-expanded", "true");
+        btn.classList.add("active");
+        // Close on outside click
+        setTimeout(() => document.addEventListener("click", closeOnOutside), 0);
+        // Close on Escape
+        document.addEventListener("keydown", closeOnEscape);
+    }
+    function closeMenu() {
+        menu.hidden = true;
+        btn.setAttribute("aria-expanded", "false");
+        btn.classList.remove("active");
+        document.removeEventListener("click", closeOnOutside);
+        document.removeEventListener("keydown", closeOnEscape);
+    }
+    function closeOnOutside(e) {
+        if (!menu.contains(e.target) && e.target !== btn) closeMenu();
+    }
+    function closeOnEscape(e) { if (e.key === "Escape") closeMenu(); }
+
+    btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (menu.hidden) openMenu();
+        else closeMenu();
+    });
+
+    // Each menu item switches to its data-tab and closes the menu
+    menu.querySelectorAll("[data-tab]").forEach(item => {
+        item.addEventListener("click", () => {
+            const tab = item.dataset.tab;
+            closeMenu();
+            switchTab(tab);
+        });
+    });
 }
 
 function aiInitListeners() {
