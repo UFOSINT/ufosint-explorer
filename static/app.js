@@ -137,6 +137,11 @@ document.addEventListener("DOMContentLoaded", async () => {
         btn.addEventListener("click", () => toggleMapMode(btn.dataset.mode));
     });
 
+    // BYOK AI chat
+    loadAISettings();
+    applySettingsToUI();
+    aiInitListeners();
+
     // Init map
     initMap();
 
@@ -308,10 +313,6 @@ function switchTab(tab) {
     document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
     document.getElementById(`panel-${tab}`).classList.add("active");
 
-    // Hide filters bar on methodology (not applicable)
-    const filtersBar = document.getElementById("filters-bar");
-    filtersBar.style.display = (tab === "methodology") ? "none" : "flex";
-
     if (tab === "map") {
         // Leaflet needs an invalidateSize when shown
         setTimeout(() => {
@@ -330,7 +331,13 @@ function switchTab(tab) {
         }
     } else if (tab === "search") {
         renderActiveFilterChips();
+    } else if (tab === "ai") {
+        // Focus the input on tab open
+        setTimeout(() => document.getElementById("ai-input")?.focus(), 100);
     }
+    // Hide filters bar on the AI / Connect / Methodology tabs (no global filters)
+    const fb = document.getElementById("filters-bar");
+    if (fb) fb.style.display = (tab === "methodology" || tab === "ai" || tab === "connect") ? "none" : "flex";
     writeHash();
 }
 
@@ -1554,6 +1561,527 @@ async function openDetail(id) {
         console.error("openDetail error:", err);
     }
 }
+
+// =========================================================================
+// BYOK ("Bring Your Own Key") AI chat
+// =========================================================================
+// The chat happens entirely in the user's browser. They paste their own
+// LLM provider API key, which is stored in localStorage and sent
+// directly to the provider — never to ufosint-explorer servers.
+//
+// When the LLM requests a tool call (e.g. "search_sightings"), the
+// browser hits our /api/tool/<name> endpoint to execute it server-side
+// (we hold the PG credentials), then feeds the result back to the LLM
+// and continues the conversation.
+//
+// This means: zero inference cost to us, zero rate limits to manage,
+// and users can use any model they prefer (Claude, GPT-4, Llama, etc).
+// =========================================================================
+
+const AI = {
+    settings: null,           // {provider, apiKey, model}
+    tools: null,              // OpenAI-format tool definitions, fetched once
+    history: [],              // chat history for the LLM (system + user + assistant)
+    activeStream: null,       // AbortController for in-flight requests
+    busy: false,
+};
+
+const PROVIDER_DEFAULTS = {
+    openrouter: {
+        url: "https://openrouter.ai/api/v1/chat/completions",
+        defaultModel: "openrouter/free",
+        keyHeader: "Authorization",
+        keyPrefix: "Bearer ",
+    },
+    openai: {
+        url: "https://api.openai.com/v1/chat/completions",
+        defaultModel: "gpt-4o-mini",
+        keyHeader: "Authorization",
+        keyPrefix: "Bearer ",
+    },
+    anthropic: {
+        // Anthropic's chat API isn't OpenAI-compatible directly — but
+        // it supports tools natively. We use the messages endpoint with
+        // a slightly different request shape (handled in callLLM).
+        url: "https://api.anthropic.com/v1/messages",
+        defaultModel: "claude-haiku-4-5",
+        keyHeader: "x-api-key",
+        keyPrefix: "",
+        extraHeaders: {
+            "anthropic-version": "2023-06-01",
+            "anthropic-dangerous-direct-browser-access": "true",
+        },
+    },
+};
+
+const SYSTEM_PROMPT = `You are an assistant for the UFOSINT unified UFO sightings database.
+You help users explore 614,505 deduplicated sighting records from 5 sources
+(NUFORC, MUFON, UFOCAT, UPDB, UFO-search) covering dates from antiquity to 2026.
+
+You have access to tools that query the database read-only:
+- search_sightings: free-text + filter search
+- get_sighting: full detail for one record
+- get_stats: top-level database statistics
+- get_timeline: counts by year (or by month for a specific year)
+- find_duplicates_for: cross-source duplicate candidates for a sighting
+- count_by: top-N rankings (shapes, states, sources, etc)
+
+Use these tools liberally — they're cheap and the user is expecting them.
+Prefer concrete data over speculation. When you return a list of sightings,
+mention specific examples (id + date + location + shape) so the user can
+click through and see the full record. Keep answers concise and factual;
+this is a research tool, not a creative writing assistant.
+
+Date params accept either a year (1973) or an ISO date (1973-10-15).
+Source names are exactly: NUFORC, MUFON, UFOCAT, UPDB, UFO-search.`;
+
+
+function loadAISettings() {
+    try {
+        const raw = localStorage.getItem("ufosint.ai.settings");
+        if (raw) AI.settings = JSON.parse(raw);
+    } catch (_) { AI.settings = null; }
+}
+
+function saveAISettings(s) {
+    AI.settings = s;
+    localStorage.setItem("ufosint.ai.settings", JSON.stringify(s));
+}
+
+function clearAISettings() {
+    AI.settings = null;
+    localStorage.removeItem("ufosint.ai.settings");
+}
+
+function aiSettingsUI() {
+    const provider = document.getElementById("ai-provider").value;
+    const apiKey = document.getElementById("ai-api-key").value.trim();
+    const model = document.getElementById("ai-model").value.trim();
+    return { provider, apiKey, model };
+}
+
+function applySettingsToUI() {
+    if (!AI.settings) return;
+    const p = document.getElementById("ai-provider");
+    const k = document.getElementById("ai-api-key");
+    const m = document.getElementById("ai-model");
+    if (p) p.value = AI.settings.provider || "openrouter";
+    if (k) k.value = AI.settings.apiKey || "";
+    if (m) m.value = AI.settings.model || "";
+}
+
+function aiInitListeners() {
+    const settingsBtn = document.getElementById("ai-settings-btn");
+    const settingsPane = document.getElementById("ai-settings-pane");
+    const saveBtn = document.getElementById("ai-save-key");
+    const clearBtn = document.getElementById("ai-clear-key");
+    const sendBtn = document.getElementById("ai-send");
+    const input = document.getElementById("ai-input");
+    if (settingsBtn) settingsBtn.addEventListener("click", () => {
+        settingsPane.style.display = settingsPane.style.display === "none" ? "block" : "none";
+    });
+    if (saveBtn) saveBtn.addEventListener("click", () => {
+        const s = aiSettingsUI();
+        if (!s.apiKey) {
+            alert("Please paste an API key first.");
+            return;
+        }
+        saveAISettings(s);
+        settingsPane.style.display = "none";
+        renderSystemMsg("API key saved (browser-only). You can now ask questions.");
+    });
+    if (clearBtn) clearBtn.addEventListener("click", () => {
+        clearAISettings();
+        applySettingsToUI();
+        document.getElementById("ai-api-key").value = "";
+        renderSystemMsg("API key cleared.");
+    });
+    if (sendBtn) sendBtn.addEventListener("click", () => askAI(input.value.trim()));
+    if (input) input.addEventListener("keydown", e => {
+        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); askAI(input.value.trim()); }
+    });
+
+    // Floating widget
+    const fab = document.getElementById("chat-fab");
+    const popover = document.getElementById("chat-popover");
+    const popClose = document.getElementById("chat-popover-close");
+    const popExpand = document.getElementById("chat-popover-expand");
+    const popInput = document.getElementById("chat-popover-input");
+    const popSend = document.getElementById("chat-popover-send");
+    if (fab) fab.addEventListener("click", () => {
+        popover.style.display = popover.style.display === "none" ? "flex" : "none";
+        if (popover.style.display === "flex") popInput?.focus();
+    });
+    if (popClose) popClose.addEventListener("click", () => { popover.style.display = "none"; });
+    if (popExpand) popExpand.addEventListener("click", () => {
+        popover.style.display = "none";
+        switchTab("ai");
+    });
+    if (popSend) popSend.addEventListener("click", () => {
+        const v = popInput.value.trim();
+        if (!v) return;
+        // Bounce the question over to the main panel
+        switchTab("ai");
+        popover.style.display = "none";
+        document.getElementById("ai-input").value = v;
+        popInput.value = "";
+        askAI(v);
+    });
+    if (popInput) popInput.addEventListener("keydown", e => {
+        if (e.key === "Enter") popSend.click();
+    });
+}
+
+
+async function loadAITools() {
+    if (AI.tools) return AI.tools;
+    const data = await fetchJSON("/api/tools-catalog");
+    AI.tools = data.tools;
+    return AI.tools;
+}
+
+
+/**
+ * Main chat entry point. Called from the input box, the floating widget,
+ * and the empty-state suggestion buttons.
+ */
+async function askAI(text) {
+    text = (text || "").trim();
+    if (!text) return;
+    if (AI.busy) return;            // already in flight
+    if (!AI.settings || !AI.settings.apiKey) {
+        renderSystemMsg("No API key set. Click Settings above and paste a key from your provider.");
+        document.getElementById("ai-settings-pane").style.display = "block";
+        return;
+    }
+
+    document.getElementById("ai-input").value = "";
+    renderUserMsg(text);
+    AI.history.push({ role: "user", content: text });
+
+    AI.busy = true;
+    try {
+        await loadAITools();
+        await runChatLoop();
+    } catch (err) {
+        console.error("askAI error:", err);
+        renderErrorMsg(err.message || String(err));
+    } finally {
+        AI.busy = false;
+    }
+}
+
+window.askAI = askAI;
+
+
+/**
+ * The chat loop:
+ *  - call the LLM with the conversation + tool definitions
+ *  - if it returns text, display and stop
+ *  - if it returns tool calls, execute each via /api/tool/<name>,
+ *    feed the results back, loop
+ *  - hard cap on iterations to prevent runaway costs
+ */
+const MAX_TOOL_ITERATIONS = 8;
+
+async function runChatLoop() {
+    showThinking();
+    for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
+        const reply = await callLLM(AI.history, AI.tools);
+        // reply: { content: string|null, tool_calls: [{id, name, arguments}] }
+
+        if (reply.content) {
+            // Add assistant message to history first (with any tool_calls so the
+            // next iteration knows about them) — then render once we know
+            // there are no more tool calls.
+        }
+
+        // Append assistant message to history
+        const histMsg = { role: "assistant", content: reply.content || "" };
+        if (reply.tool_calls && reply.tool_calls.length) {
+            histMsg.tool_calls = reply.tool_calls.map(tc => ({
+                id: tc.id,
+                type: "function",
+                function: { name: tc.name, arguments: JSON.stringify(tc.arguments || {}) },
+            }));
+        }
+        AI.history.push(histMsg);
+
+        // If there's text, render it
+        if (reply.content) {
+            hideThinking();
+            renderAssistantMsg(reply.content);
+        }
+
+        // No tool calls -> we're done
+        if (!reply.tool_calls || reply.tool_calls.length === 0) {
+            return;
+        }
+
+        // Execute each tool call against our backend, render an inline
+        // summary card, and append the result to history as a tool message
+        for (const tc of reply.tool_calls) {
+            renderToolCallStart(tc.name, tc.arguments);
+            let result;
+            try {
+                const resp = await fetch(`/api/tool/${encodeURIComponent(tc.name)}`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(tc.arguments || {}),
+                });
+                result = await resp.json();
+            } catch (err) {
+                result = { error: String(err) };
+            }
+            // Stash the most recent search args so the "view all in Search"
+            // affordance on inline result cards has something to link to.
+            if (tc.name === "search_sightings") {
+                _lastSearchArgs = tc.arguments || {};
+            }
+            renderToolCallResult(tc.name, result);
+            AI.history.push({
+                role: "tool",
+                tool_call_id: tc.id,
+                content: JSON.stringify(result),
+            });
+        }
+        showThinking();
+    }
+    hideThinking();
+    renderSystemMsg("(stopped after " + MAX_TOOL_ITERATIONS + " tool iterations)");
+}
+
+
+/**
+ * Call the user's chosen LLM provider. Returns
+ *   { content: string|null, tool_calls: [{id, name, arguments}] }
+ *
+ * Handles OpenAI-compatible providers (OpenRouter, OpenAI) and
+ * Anthropic's slightly different message shape.
+ */
+async function callLLM(history, tools) {
+    const cfg = PROVIDER_DEFAULTS[AI.settings.provider] || PROVIDER_DEFAULTS.openrouter;
+    const model = AI.settings.model || cfg.defaultModel;
+
+    if (AI.settings.provider === "anthropic") {
+        // Anthropic Messages API: system goes in a top-level field, tools
+        // use a slightly different schema (input_schema instead of parameters).
+        const anthropicTools = tools.map(t => ({
+            name: t.function.name,
+            description: t.function.description,
+            input_schema: t.function.parameters,
+        }));
+        const messages = history
+            .filter(m => m.role !== "system")
+            .map(m => {
+                if (m.role === "assistant" && m.tool_calls) {
+                    const blocks = [];
+                    if (m.content) blocks.push({ type: "text", text: m.content });
+                    for (const tc of m.tool_calls) {
+                        blocks.push({
+                            type: "tool_use",
+                            id: tc.id,
+                            name: tc.function.name,
+                            input: JSON.parse(tc.function.arguments || "{}"),
+                        });
+                    }
+                    return { role: "assistant", content: blocks };
+                }
+                if (m.role === "tool") {
+                    return {
+                        role: "user",
+                        content: [{ type: "tool_result", tool_use_id: m.tool_call_id, content: m.content }],
+                    };
+                }
+                return { role: m.role, content: m.content };
+            });
+        const body = {
+            model,
+            system: SYSTEM_PROMPT,
+            messages,
+            tools: anthropicTools,
+            max_tokens: 2048,
+        };
+        const resp = await fetch(cfg.url, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                [cfg.keyHeader]: cfg.keyPrefix + AI.settings.apiKey,
+                ...(cfg.extraHeaders || {}),
+            },
+            body: JSON.stringify(body),
+        });
+        if (!resp.ok) {
+            const errText = await resp.text();
+            throw new Error(`Anthropic ${resp.status}: ${errText.substring(0, 300)}`);
+        }
+        const data = await resp.json();
+        const out = { content: null, tool_calls: [] };
+        for (const block of (data.content || [])) {
+            if (block.type === "text") out.content = (out.content || "") + block.text;
+            if (block.type === "tool_use") {
+                out.tool_calls.push({ id: block.id, name: block.name, arguments: block.input || {} });
+            }
+        }
+        return out;
+    }
+
+    // OpenAI-compatible (OpenRouter / OpenAI)
+    const messages = [{ role: "system", content: SYSTEM_PROMPT }, ...history];
+    const body = {
+        model,
+        messages,
+        tools,
+        tool_choice: "auto",
+    };
+    const resp = await fetch(cfg.url, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            [cfg.keyHeader]: cfg.keyPrefix + AI.settings.apiKey,
+            "HTTP-Referer": window.location.origin,
+            "X-Title": "UFOSINT Explorer",
+        },
+        body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+        const errText = await resp.text();
+        throw new Error(`${AI.settings.provider} ${resp.status}: ${errText.substring(0, 300)}`);
+    }
+    const data = await resp.json();
+    const msg = data.choices?.[0]?.message;
+    if (!msg) throw new Error("No message in LLM response: " + JSON.stringify(data).substring(0, 300));
+    const out = { content: msg.content || null, tool_calls: [] };
+    for (const tc of (msg.tool_calls || [])) {
+        let args = {};
+        try { args = JSON.parse(tc.function.arguments || "{}"); }
+        catch (_) { args = {}; }
+        out.tool_calls.push({ id: tc.id, name: tc.function.name, arguments: args });
+    }
+    return out;
+}
+
+
+// ----- Rendering -----
+
+function aiMessagesEl() { return document.getElementById("ai-messages"); }
+
+function clearEmptyState() {
+    const el = aiMessagesEl();
+    const empty = el.querySelector(".ai-empty");
+    if (empty) empty.remove();
+}
+
+function appendBubble(cls, html) {
+    clearEmptyState();
+    const el = aiMessagesEl();
+    const div = document.createElement("div");
+    div.className = "ai-msg " + cls;
+    div.innerHTML = html;
+    el.appendChild(div);
+    el.scrollTop = el.scrollHeight;
+    return div;
+}
+
+function renderUserMsg(text) {
+    appendBubble("user", `<div class="ai-msg-body">${escapeHtml(text)}</div>`);
+}
+function renderAssistantMsg(text) {
+    appendBubble("assistant", `<div class="ai-msg-body">${formatMarkdownLite(text)}</div>`);
+}
+function renderSystemMsg(text) {
+    appendBubble("system", `<div class="ai-msg-body">${escapeHtml(text)}</div>`);
+}
+function renderErrorMsg(text) {
+    appendBubble("error", `<div class="ai-msg-body"><strong>Error:</strong> ${escapeHtml(text)}</div>`);
+}
+
+let _thinkingEl = null;
+function showThinking() {
+    if (_thinkingEl) return;
+    _thinkingEl = appendBubble("thinking", '<div class="ai-msg-body"><span class="loading-pulse">Thinking...</span></div>');
+}
+function hideThinking() {
+    if (_thinkingEl) { _thinkingEl.remove(); _thinkingEl = null; }
+}
+
+function renderToolCallStart(name, args) {
+    const argsStr = Object.keys(args || {}).length
+        ? Object.entries(args).map(([k, v]) => `${k}=${typeof v === "string" ? '"' + v + '"' : v}`).join(", ")
+        : "";
+    appendBubble("tool", `<div class="ai-msg-body"><span class="ai-tool-name">${escapeHtml(name)}</span>(<span class="ai-tool-args">${escapeHtml(argsStr)}</span>)</div>`);
+}
+
+function renderToolCallResult(name, result) {
+    if (!result) return;
+    if (result.error && Object.keys(result).length === 1) {
+        appendBubble("tool error", `<div class="ai-msg-body"><strong>${escapeHtml(name)} error:</strong> ${escapeHtml(result.error)}</div>`);
+        return;
+    }
+    // Pretty-render specific tool results
+    if (name === "search_sightings" && Array.isArray(result.results)) {
+        const cards = result.results.slice(0, 8).map(r => {
+            const loc = formatLocation(r.city, r.state, r.country);
+            return `<a class="ai-result-card" href="#" onclick="openDetail(${r.id}); return false;">
+                <div class="ai-result-head">
+                    <span class="ai-result-date">${escapeHtml(r.date_event || "—")}</span>
+                    ${sourceBadge(r.source)}
+                    ${r.shape ? `<span class="shape-tag">${escapeHtml(r.shape)}</span>` : ""}
+                </div>
+                <div class="ai-result-loc">${escapeHtml(loc) || "Unknown location"}</div>
+                ${r.description ? `<div class="ai-result-desc">${escapeHtml(r.description.substring(0, 200))}${r.description.length > 200 ? "…" : ""}</div>` : ""}
+            </a>`;
+        }).join("");
+        const more = result.total > result.results.length ? `<div class="ai-result-more">+${(result.total - result.results.length).toLocaleString()} more — <a href="#" onclick="navigateToSearchFromAI(${JSON.stringify(getLastSearchArgs()).replace(/"/g, '&quot;')}); return false;">view all in Search →</a></div>` : "";
+        appendBubble("tool-result", `<div class="ai-msg-body"><div class="ai-result-summary">${result.total.toLocaleString()} matching sightings (showing ${Math.min(8, result.results.length)})</div>${cards}${more}</div>`);
+        return;
+    }
+    if (name === "count_by" && Array.isArray(result.rows)) {
+        const max = Math.max(1, ...result.rows.map(r => r.count));
+        const bars = result.rows.slice(0, 12).map(r =>
+            `<div class="ai-bar-row">
+                <div class="ai-bar-label">${escapeHtml(String(r.value))}</div>
+                <div class="ai-bar-track"><div class="ai-bar-fill" style="width:${(r.count / max * 100).toFixed(1)}%"></div></div>
+                <div class="ai-bar-count">${r.count.toLocaleString()}</div>
+            </div>`).join("");
+        appendBubble("tool-result", `<div class="ai-msg-body"><div class="ai-result-summary">Top ${result.rows.length} by ${escapeHtml(result.field)}</div>${bars}</div>`);
+        return;
+    }
+    if (name === "get_stats") {
+        const r = result;
+        appendBubble("tool-result", `<div class="ai-msg-body"><div class="ai-result-summary">${r.total_sightings.toLocaleString()} total sightings · ${r.geocoded_locations.toLocaleString()} geocoded · ${r.duplicate_pairs.toLocaleString()} duplicate pairs · ${r.date_range.min} to ${r.date_range.max}</div></div>`);
+        return;
+    }
+    // Default: small JSON dump
+    const pretty = JSON.stringify(result, null, 2);
+    const truncated = pretty.length > 800 ? pretty.substring(0, 800) + "\n..." : pretty;
+    appendBubble("tool-result", `<div class="ai-msg-body"><pre class="ai-tool-json">${escapeHtml(truncated)}</pre></div>`);
+}
+
+// Last search args, captured for the "view all in Search" link
+let _lastSearchArgs = {};
+function getLastSearchArgs() { return _lastSearchArgs; }
+
+function navigateToSearchFromAI(args) {
+    if (typeof args === "string") {
+        try { args = JSON.parse(args); } catch (_) { args = {}; }
+    }
+    navigateToSearch(args || {}, true);
+}
+window.navigateToSearchFromAI = navigateToSearchFromAI;
+
+// Tiny markdown -> HTML for assistant messages: **bold**, *italic*,
+// `code`, single newlines as <br>, double newlines as paragraphs.
+function formatMarkdownLite(text) {
+    let out = escapeHtml(text);
+    out = out.replace(/`([^`]+)`/g, '<code>$1</code>');
+    out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    out = out.replace(/\*([^*\s][^*]*)\*/g, '<em>$1</em>');
+    // Paragraphs
+    out = out.split(/\n{2,}/).map(p => `<p>${p.replace(/\n/g, "<br>")}</p>`).join("");
+    return out;
+}
+
 
 // Make functions globally available for inline onclick handlers in
 // dynamically-injected markup (popup links, filter chips, pager buttons,

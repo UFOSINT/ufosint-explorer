@@ -40,6 +40,8 @@
             <button class="tab" data-tab="search">Search</button>
             <button class="tab" data-tab="duplicates">Duplicates</button>
             <button class="tab" data-tab="insights">Insights</button>
+            <button class="tab" data-tab="ai">Ask AI</button>
+            <button class="tab" data-tab="connect">Connect</button>
             <button class="tab" data-tab="methodology">Methodology</button>
         </nav>
     </header>
@@ -184,6 +186,162 @@
                         <canvas id="emotion-shape-chart"></canvas>
                     </div>
                 </div>
+            </div>
+        </div>
+
+        <!-- Ask AI Panel -->
+        <div id="panel-ai" class="panel">
+            <div class="ai-panel">
+                <div class="ai-panel-header">
+                    <div>
+                        <div class="ai-panel-title">Ask AI about the data</div>
+                        <div class="ai-panel-subtitle">Bring your own API key — chat happens in your browser, the key never touches our server.</div>
+                    </div>
+                    <button id="ai-settings-btn" class="btn btn-secondary btn-small">Settings</button>
+                </div>
+                <div id="ai-settings-pane" class="ai-settings" style="display:none">
+                    <label>
+                        Provider
+                        <select id="ai-provider">
+                            <option value="openrouter">OpenRouter (recommended)</option>
+                            <option value="openai">OpenAI</option>
+                            <option value="anthropic">Anthropic</option>
+                        </select>
+                    </label>
+                    <label>
+                        API key
+                        <input type="password" id="ai-api-key" placeholder="sk-or-... / sk-... / sk-ant-..." autocomplete="off" />
+                    </label>
+                    <label>
+                        Model
+                        <input type="text" id="ai-model" placeholder="leave blank for provider default" />
+                    </label>
+                    <div class="ai-settings-row">
+                        <button id="ai-save-key" class="btn btn-primary btn-small">Save (browser only)</button>
+                        <button id="ai-clear-key" class="btn btn-secondary btn-small">Clear</button>
+                    </div>
+                    <div class="ai-settings-hint">
+                        Your key is stored in <code>localStorage</code> only. It is sent directly from your browser
+                        to your chosen provider, never to ufosint-explorer servers.
+                        Get a free OpenRouter key at <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">openrouter.ai/keys</a>.
+                    </div>
+                </div>
+                <div id="ai-messages" class="ai-messages">
+                    <div class="ai-empty">
+                        <div class="ai-empty-icon">🛸</div>
+                        <div class="ai-empty-title">Ask anything about the unified UFO database</div>
+                        <div class="ai-empty-detail">
+                            Try:
+                            <ul class="ai-empty-suggestions">
+                                <li onclick="askAI('What are the most common shapes?')">"What are the most common shapes?"</li>
+                                <li onclick="askAI('Show me triangle sightings in California in the 1970s')">"Show me triangle sightings in California in the 1970s"</li>
+                                <li onclick="askAI('How many sightings happened in October 1973?')">"How many sightings happened in October 1973?"</li>
+                                <li onclick="askAI('Which states report the most sightings?')">"Which states report the most sightings?"</li>
+                            </ul>
+                            <span class="ai-empty-foot">You'll need an API key from your provider — open Settings above.</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="ai-input-row">
+                    <input type="text" id="ai-input" placeholder="Ask a question about the database..." />
+                    <button id="ai-send" class="btn btn-primary">Send</button>
+                </div>
+                <div class="ai-foot">
+                    Powered by <a href="https://modelcontextprotocol.io" target="_blank" rel="noopener">MCP-compatible tools</a>.
+                    Your API key is stored locally in your browser only.
+                </div>
+            </div>
+        </div>
+
+        <!-- Connect Panel (how to use the data with your own AI client) -->
+        <div id="panel-connect" class="panel">
+            <div class="connect-page">
+                <h2>Connect your own AI to the UFOSINT data</h2>
+                <p class="connect-intro">
+                    Every tool the website's chatbot has access to is also exposed via the
+                    <a href="https://modelcontextprotocol.io" target="_blank" rel="noopener">Model Context Protocol</a>
+                    at a single HTTPS endpoint, so any MCP-compatible AI client can query
+                    the unified UFO sightings database with your own model and your own subscription.
+                    The endpoint is read-only and free to use.
+                </p>
+
+                <div class="connect-card">
+                    <h3>MCP endpoint</h3>
+                    <pre class="connect-code"><code>https://ufosint-explorer.azurewebsites.net/mcp</code></pre>
+                    <p>6 tools available: <code>search_sightings</code>, <code>get_sighting</code>, <code>get_stats</code>, <code>get_timeline</code>, <code>find_duplicates_for</code>, <code>count_by</code>.</p>
+                </div>
+
+                <div class="connect-card">
+                    <h3>Claude Desktop</h3>
+                    <p>Open <code>~/Library/Application Support/Claude/claude_desktop_config.json</code>
+                       (macOS) or <code>%APPDATA%\Claude\claude_desktop_config.json</code> (Windows) and add:</p>
+                    <pre class="connect-code"><code>{
+  "mcpServers": {
+    "ufosint": {
+      "url": "https://ufosint-explorer.azurewebsites.net/mcp",
+      "transport": "http"
+    }
+  }
+}</code></pre>
+                    <p>Restart Claude Desktop. The 6 UFOSINT tools will appear in the tools panel.</p>
+                </div>
+
+                <div class="connect-card">
+                    <h3>Cursor / Cline / Continue / Windsurf</h3>
+                    <p>These all support remote MCP servers. Add the same URL above to your client's MCP configuration.
+                       Each client documents the exact location, but the JSON shape is the same.</p>
+                </div>
+
+                <div class="connect-card">
+                    <h3>Direct API (curl / Python / any HTTP client)</h3>
+                    <p>The endpoint is JSON-RPC 2.0 over HTTPS. List the tools:</p>
+                    <pre class="connect-code"><code>curl -s https://ufosint-explorer.azurewebsites.net/mcp \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'</code></pre>
+                    <p>Call a tool:</p>
+                    <pre class="connect-code"><code>curl -s https://ufosint-explorer.azurewebsites.net/mcp \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":2,
+    "method":"tools/call",
+    "params":{
+      "name":"search_sightings",
+      "arguments":{"q":"triangle","state":"CA","limit":5}
+    }
+  }'</code></pre>
+                </div>
+
+                <div class="connect-card">
+                    <h3>OpenAI / OpenRouter function-calling format</h3>
+                    <p>If you're integrating with OpenAI or OpenRouter and want the tool definitions
+                       in their native format (instead of going through MCP), fetch:</p>
+                    <pre class="connect-code"><code>GET https://ufosint-explorer.azurewebsites.net/api/tools-catalog</code></pre>
+                    <p>And invoke individual tools at:</p>
+                    <pre class="connect-code"><code>POST https://ufosint-explorer.azurewebsites.net/api/tool/&lt;tool_name&gt;
+Content-Type: application/json
+
+{ "q": "triangle", "state": "CA", "limit": 5 }</code></pre>
+                </div>
+
+                <div class="connect-card">
+                    <h3>Local stdio MCP server</h3>
+                    <p>Prefer to run an MCP server on your own machine (e.g. for privacy, lower latency,
+                       or offline use)? Clone the repo and use the included <code>mcp_server.py</code>:</p>
+                    <pre class="connect-code"><code>git clone https://github.com/UFOSINT/ufosint-explorer
+cd ufosint-explorer
+pip install fastmcp psycopg[binary]
+DATABASE_URL="postgresql://..." python mcp_server.py</code></pre>
+                    <p>Then point Claude Desktop at the local script via the <code>command</code> form
+                       of the MCP config. (You'll need read-only credentials to a PostgreSQL with the
+                       UFOSINT schema.)</p>
+                </div>
+
+                <p class="connect-foot">
+                    All access is read-only. Source data is licensed by UFOSINT; the deduplicated
+                    database is built by the
+                    <a href="https://github.com/UFOSINT/ufo-dedup" target="_blank" rel="noopener">ufo-dedup pipeline</a>.
+                </p>
             </div>
         </div>
 
@@ -606,6 +764,35 @@
                 <button id="modal-close" class="modal-close">&times;</button>
             </div>
             <div id="modal-body" class="modal-body"></div>
+        </div>
+    </div>
+
+    <!-- Floating chat widget — always available, opens the same chat as the Ask AI tab -->
+    <button id="chat-fab" class="chat-fab" title="Ask AI">
+        <span class="chat-fab-icon">💬</span>
+        <span class="chat-fab-label">Ask AI</span>
+    </button>
+    <div id="chat-popover" class="chat-popover" style="display:none">
+        <div class="chat-popover-header">
+            <div class="chat-popover-title">Ask AI about the data</div>
+            <div class="chat-popover-actions">
+                <button id="chat-popover-expand" class="btn-icon" title="Open in tab">↗</button>
+                <button id="chat-popover-close" class="btn-icon" title="Close">×</button>
+            </div>
+        </div>
+        <div id="chat-popover-body" class="chat-popover-body">
+            <div class="ai-empty">
+                <div class="ai-empty-icon">🛸</div>
+                <div class="ai-empty-detail">
+                    Ask anything about the database. You'll need an API key —
+                    <a href="#/ai" onclick="switchTab('ai'); document.getElementById('chat-popover').style.display='none'; return false;">open the Ask AI tab</a>
+                    to set it up.
+                </div>
+            </div>
+        </div>
+        <div class="ai-input-row">
+            <input type="text" id="chat-popover-input" placeholder="Quick question..." />
+            <button id="chat-popover-send" class="btn btn-primary btn-small">Send</button>
         </div>
     </div>
 

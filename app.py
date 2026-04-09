@@ -34,6 +34,13 @@ app.config["COMPRESS_LEVEL"] = 6           # gzip default; balances CPU vs ratio
 app.config["COMPRESS_MIN_SIZE"] = 500
 Compress(app)
 
+# MCP-over-HTTP server, mounted at /mcp. Lets any MCP-aware AI client
+# (Claude Desktop, Cursor, Cline, Continue, Windsurf, etc.) call the
+# tool catalog directly using their own LLM, with no inference cost
+# to us. See mcp_http.py for the JSON-RPC implementation.
+from mcp_http import mcp_bp
+app.register_blueprint(mcp_bp)
+
 # In-process LRU cache for expensive query responses. Per-worker
 # (not shared across gunicorn workers), keyed on the full query
 # string. 5-minute default TTL.
@@ -370,6 +377,44 @@ def api_stats():
 def api_filters():
     """Return cached filter options."""
     return jsonify(FILTER_CACHE)
+
+
+@app.route("/api/tools-catalog")
+@cache.cached(timeout=3600)
+def api_tools_catalog():
+    """Tool definitions in OpenAI / OpenRouter function-calling format.
+
+    Consumed by the BYOK chat UI in static/app.js: the browser fetches
+    this once on chat panel open and passes it to the user's chosen
+    LLM provider as the `tools` parameter on every chat completion.
+
+    The same tools are exposed to MCP clients via the /mcp endpoint
+    (see mcp_http.py); both consumers share tools_catalog.TOOLS as
+    the single source of truth.
+    """
+    from tools_catalog import list_tools_openai
+    return jsonify({"tools": list_tools_openai()})
+
+
+@app.route("/api/tool/<name>", methods=["POST"])
+def api_tool_call(name):
+    """Direct tool invocation for the BYOK chat.
+
+    The browser-side chat orchestrator hits this whenever the LLM
+    requests a tool call. We do server-side execution because the
+    tool implementations need PostgreSQL credentials we never want
+    to expose to the browser.
+
+    Body: JSON object of tool arguments.
+    Response: JSON object with the tool's return value, or {error: ...}.
+    """
+    from tools_catalog import call_tool
+    args = request.get_json(silent=True) or {}
+    if not isinstance(args, dict):
+        return jsonify({"error": "request body must be a JSON object"}), 400
+    result = call_tool(name, args)
+    status = 200 if not (isinstance(result, dict) and "error" in result and len(result) == 1) else 400
+    return jsonify(result), status
 
 
 @app.route("/api/map")
