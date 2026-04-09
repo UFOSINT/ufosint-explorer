@@ -1,0 +1,37 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+# Quiet warnings from psycopg_pool stubbing in conftest.
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--tb=short",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["static", "scripts/pg_schema.sql"]
+
+[tool.ruff.lint]
+# Start conservative — just the obvious wins. Can tighten later.
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "W",   # pycodestyle warnings
+    "B",   # bugbear
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line length (we have Black-style long strings in tools_catalog)
+    "B008",  # function calls in defaults (Flask pattern)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]  # asserts are fine in tests

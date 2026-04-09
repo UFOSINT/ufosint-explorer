@@ -20,7 +20,6 @@ from flask import Flask, request, jsonify, send_from_directory, Response
 from flask_caching import Cache
 from flask_compress import Compress
 
-import psycopg
 from psycopg_pool import ConnectionPool
 
 app = Flask(__name__, static_folder="static")
@@ -89,7 +88,9 @@ Compress(app)
 # (Claude Desktop, Cursor, Cline, Continue, Windsurf, etc.) call the
 # tool catalog directly using their own LLM, with no inference cost
 # to us. See mcp_http.py for the JSON-RPC implementation.
-from mcp_http import mcp_bp
+# Deliberate late import: mcp_http imports from app, so we register
+# the blueprint after the Flask instance exists. (ruff E402)
+from mcp_http import mcp_bp  # noqa: E402
 app.register_blueprint(mcp_bp)
 
 # In-process LRU cache for expensive query responses. Per-worker
@@ -1017,7 +1018,7 @@ def api_export_json():
     try:
         cur = conn.cursor()
         cur.execute(sql, args)
-        rows = [dict(zip(EXPORT_COLUMNS, r)) for r in cur.fetchall()]
+        rows = [dict(zip(EXPORT_COLUMNS, r, strict=False)) for r in cur.fetchall()]
     finally:
         conn.close()
     payload = {
@@ -1062,7 +1063,7 @@ def api_sighting(sid):
         # Convert to dict, skipping None values for cleaner JSON
         keys = [desc[0] for desc in cur.description]
         record = {}
-        for k, v in zip(keys, row):
+        for k, v in zip(keys, row, strict=False):
             if v is not None and v != "":
                 record[k] = v
 
@@ -1136,7 +1137,7 @@ def api_sighting(sid):
         sent_row = cur.fetchone()
         if sent_row:
             sent_keys = [desc[0] for desc in cur.description]
-            record["sentiment"] = dict(zip(sent_keys, sent_row))
+            record["sentiment"] = dict(zip(sent_keys, sent_row, strict=False))
 
         return jsonify(record)
 
@@ -1187,7 +1188,7 @@ def api_sentiment_overview():
     """, args)
     row = cur.fetchone()
     keys = [desc[0] for desc in cur.description]
-    result = dict(zip(keys, row))
+    result = dict(zip(keys, row, strict=False))
 
     conn.close()
     return jsonify(result)
@@ -1229,7 +1230,7 @@ def api_sentiment_timeline():
     """, args)
     rows = cur.fetchall()
     keys = [desc[0] for desc in cur.description]
-    data = [dict(zip(keys, row)) for row in rows]
+    data = [dict(zip(keys, row, strict=False)) for row in rows]
 
     conn.close()
     return jsonify({"data": data})
@@ -1270,7 +1271,7 @@ def api_sentiment_by_source():
     """, args)
     rows = cur.fetchall()
     keys = [desc[0] for desc in cur.description]
-    data = [dict(zip(keys, row)) for row in rows]
+    data = [dict(zip(keys, row, strict=False)) for row in rows]
 
     conn.close()
     return jsonify({"data": data})
@@ -1311,7 +1312,7 @@ def api_sentiment_by_shape():
     """, args)
     rows = cur.fetchall()
     keys = [desc[0] for desc in cur.description]
-    data = [dict(zip(keys, row)) for row in rows]
+    data = [dict(zip(keys, row, strict=False)) for row in rows]
 
     conn.close()
     return jsonify({"data": data})

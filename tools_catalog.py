@@ -20,7 +20,7 @@ Each tool is a dict with:
 The handlers connect to PostgreSQL via the same psycopg connection
 pool the Flask app uses (imported lazily to avoid circular imports).
 """
-from typing import Any, Optional
+from typing import Any
 
 
 # ---------------------------------------------------------------------------
@@ -37,7 +37,7 @@ def _get_db():
 
 def _rows_to_dicts(cur, rows):
     cols = [desc[0] for desc in cur.description]
-    return [dict(zip(cols, row)) for row in rows]
+    return [dict(zip(cols, row, strict=False)) for row in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -73,14 +73,14 @@ def _clamp(n, lo, hi, default):
 # ---------------------------------------------------------------------------
 
 def search_sightings(
-    q: Optional[str] = None,
-    shape: Optional[str] = None,
-    source: Optional[str] = None,
-    state: Optional[str] = None,
-    country: Optional[str] = None,
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-    hynek: Optional[str] = None,
+    q: str | None = None,
+    shape: str | None = None,
+    source: str | None = None,
+    state: str | None = None,
+    country: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    hynek: str | None = None,
     limit: int = DEFAULT_ROWS,
 ):
     """Free-text + filter search across the sighting table."""
@@ -177,7 +177,7 @@ def get_sighting(sighting_id: int):
         if not row:
             return {"error": f"sighting {sighting_id} not found"}
         cols = [d[0] for d in cur.description]
-        record = {k: v for k, v in zip(cols, row) if v is not None and v != ""}
+        record = {k: v for k, v in zip(cols, row, strict=False) if v is not None and v != ""}
         # Truncate the long fields so we don't blow the LLM's context
         record["description"] = _trunc(record.get("description"))
         record["summary"] = _trunc(record.get("summary"))
@@ -231,9 +231,9 @@ def get_stats():
 # Tool 4: get_timeline
 # ---------------------------------------------------------------------------
 
-def get_timeline(year: Optional[int] = None,
-                 source: Optional[str] = None,
-                 shape: Optional[str] = None):
+def get_timeline(year: int | None = None,
+                 source: str | None = None,
+                 shape: str | None = None):
     """Sighting counts by year (default) or by month if a year is given."""
     clauses = ["s.date_event IS NOT NULL", "LENGTH(s.date_event) >= 4"]
     args: list[Any] = []
@@ -325,8 +325,8 @@ def find_duplicates_for(sighting_id: int, limit: int = 10):
 # ---------------------------------------------------------------------------
 
 def count_by(field: str, limit: int = 25,
-             date_from: Optional[str] = None,
-             date_to: Optional[str] = None):
+             date_from: str | None = None,
+             date_to: str | None = None):
     """Aggregate counts grouped by a categorical field.
 
     Allowed fields: shape, hynek, vallee, source, country, state.

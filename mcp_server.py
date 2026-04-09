@@ -50,7 +50,6 @@ if not os.environ.get("DATABASE_URL"):
     )
 
 from tools_catalog import (
-    TOOLS,
     search_sightings as _search_sightings,
     get_sighting as _get_sighting,
     get_stats as _get_stats,

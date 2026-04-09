@@ -1,0 +1,7 @@
+# Development / CI-only dependencies. The production build (see
+# azure-deploy.yml) installs requirements.txt only; this file is
+# installed separately on the GitHub Actions runner for the test step.
+-r requirements.txt
+
+pytest==8.3.4
+ruff==0.9.1

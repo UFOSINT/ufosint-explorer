@@ -19,8 +19,6 @@ Tables are migrated in dependency order so foreign keys never break:
     duplicate_candidate -> sentiment_analysis -> date_correction
 """
 import argparse
-import csv
-import io
 import sqlite3
 import sys
 import time
