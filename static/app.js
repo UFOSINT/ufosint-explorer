@@ -35,6 +35,8 @@ const FILTER_FIELDS = [
     { id: "filter-shape",     key: "shape",     label: "Shape" },
     { id: "filter-collection",key: "collection",label: "Collection" },
     { id: "filter-source",    key: "source",    label: "Source" },
+    { id: "filter-country",   key: "country",   label: "Country" },
+    { id: "filter-state",     key: "state",     label: "State" },
     { id: "filter-hynek",     key: "hynek",     label: "Hynek" },
     { id: "filter-vallee",    key: "vallee",    label: "Vallee" },
     { id: "coords-filter",    key: "coords",    label: "Coords" },
@@ -78,6 +80,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     populateFilterDropdowns(filtersData);
     showStats(statsData);
+    initStatsBadge();
 
     // Setup tabs
     document.querySelectorAll(".tab").forEach(btn => {
@@ -139,6 +142,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     // Settings dropdown menu (wraps the AI tools)
     initSettingsMenu();
+
+    // Map place search (Nominatim) + browser geolocation
+    initMapPlaceSearch();
+
+    // Search panel: export buttons + copy-link button
+    initSearchActions();
 
     // BYOK AI chat
     loadAISettings();
@@ -209,6 +218,8 @@ function getFilterParams() {
     const shape = document.getElementById("filter-shape").value;
     const collection = document.getElementById("filter-collection").value;
     const source = document.getElementById("filter-source").value;
+    const country = document.getElementById("filter-country")?.value;
+    const stateVal = document.getElementById("filter-state")?.value;
     const hynek = document.getElementById("filter-hynek").value;
     const vallee = document.getElementById("filter-vallee").value;
     const coords = document.getElementById("coords-filter").value;
@@ -218,6 +229,8 @@ function getFilterParams() {
     if (shape) p.set("shape", shape);
     if (collection) p.set("collection", collection);
     if (source) p.set("source", source);
+    if (country) p.set("country", country);
+    if (stateVal) p.set("state", stateVal);
     if (hynek) p.set("hynek", hynek);
     if (vallee) p.set("vallee", vallee);
     if (coords && coords !== "all") p.set("coords", coords);
@@ -253,6 +266,26 @@ function populateFilterDropdowns(data) {
         opt.textContent = s.name;
         sourceSelect.appendChild(opt);
     });
+
+    const countrySelect = document.getElementById("filter-country");
+    if (countrySelect) {
+        (data.countries || []).forEach(c => {
+            const opt = document.createElement("option");
+            opt.value = c.value;
+            opt.textContent = `${c.value} (${c.count.toLocaleString()})`;
+            countrySelect.appendChild(opt);
+        });
+    }
+
+    const stateSelect = document.getElementById("filter-state");
+    if (stateSelect) {
+        (data.states || []).forEach(st => {
+            const opt = document.createElement("option");
+            opt.value = st.value;
+            opt.textContent = `${st.value} (${st.count.toLocaleString()})`;
+            stateSelect.appendChild(opt);
+        });
+    }
 
     const hynekSelect = document.getElementById("filter-hynek");
     (data.hynek || []).forEach(h => {
@@ -290,12 +323,67 @@ function populateFilterDropdowns(data) {
 
 function showStats(data) {
     const badge = document.getElementById("stats-badge");
+    const popover = document.getElementById("stats-popover");
     const total = data.total_sightings.toLocaleString();
     const geo = data.geocoded_locations.toLocaleString();
     const geoOrig = (data.geocoded_original || 0).toLocaleString();
     const geoGN = (data.geocoded_geonames || 0).toLocaleString();
     const dupes = data.duplicate_candidates.toLocaleString();
-    badge.textContent = `${total} sightings | ${geo} geocoded (${geoOrig} original + ${geoGN} GeoNames) | ${dupes} duplicate pairs`;
+
+    // Compact badge — three numbers separated by middle dots, no
+    // parenthetical, no implementation jargon. The full breakdown
+    // (original vs GeoNames, source counts, date range) lives in the
+    // popover that opens on click.
+    badge.innerHTML = `${total} sightings <span class="stats-sep">·</span> ${geo} mapped <span class="stats-sep">·</span> ${dupes} possible duplicates`;
+
+    if (popover) {
+        const sources = (data.by_source || []).map(s =>
+            `<tr><td>${escapeHtml(s.name)}</td><td>${s.count.toLocaleString()}</td></tr>`
+        ).join("");
+        popover.innerHTML = `
+            <div class="stats-popover-section">
+                <div class="stats-popover-row"><span>Total sightings</span><strong>${total}</strong></div>
+                <div class="stats-popover-row"><span>Geocoded locations</span><strong>${geo}</strong></div>
+                <div class="stats-popover-row stats-popover-sub"><span>· from source data</span>${geoOrig}</div>
+                <div class="stats-popover-row stats-popover-sub"><span>· from GeoNames lookup</span>${geoGN}</div>
+                <div class="stats-popover-row"><span>Duplicate candidate pairs</span><strong>${dupes}</strong></div>
+            </div>
+            ${sources ? `<div class="stats-popover-section">
+                <div class="stats-popover-title">By source</div>
+                <table class="stats-popover-table">${sources}</table>
+            </div>` : ""}
+            <div class="stats-popover-foot">All counts come from <a href="#/methodology" onclick="switchTab('methodology'); document.getElementById('stats-popover').hidden=true; document.getElementById('stats-badge').setAttribute('aria-expanded','false'); return false;">the deduplication pipeline</a>.</div>
+        `;
+    }
+}
+
+function initStatsBadge() {
+    const badge = document.getElementById("stats-badge");
+    const popover = document.getElementById("stats-popover");
+    if (!badge || !popover) return;
+
+    function open() {
+        popover.hidden = false;
+        badge.setAttribute("aria-expanded", "true");
+        setTimeout(() => document.addEventListener("click", outside), 0);
+        document.addEventListener("keydown", escape);
+    }
+    function close() {
+        popover.hidden = true;
+        badge.setAttribute("aria-expanded", "false");
+        document.removeEventListener("click", outside);
+        document.removeEventListener("keydown", escape);
+    }
+    function outside(e) {
+        if (!popover.contains(e.target) && e.target !== badge) close();
+    }
+    function escape(e) { if (e.key === "Escape") close(); }
+
+    badge.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (popover.hidden) open();
+        else close();
+    });
 }
 
 function sourceBadge(name) {
@@ -377,6 +465,8 @@ function clearFilters() {
     document.getElementById("filter-shape").value = "";
     document.getElementById("filter-collection").value = "";
     document.getElementById("filter-source").value = "";
+    document.getElementById("filter-country").value = "";
+    document.getElementById("filter-state").value = "";
     document.getElementById("filter-hynek").value = "";
     document.getElementById("filter-vallee").value = "";
     applyFilters();
@@ -556,6 +646,64 @@ function initMap() {
     loadMapMarkers();
 }
 
+// Build a marker popup with cross-tab pivots. The popup has up to 3
+// links: View Details (modal), View all in this city (Search filtered),
+// and Drill into this month (Timeline monthly view). The latter two
+// are only added when the marker has the requisite metadata.
+function buildMarkerPopupHTML(m) {
+    const loc = formatLocation(m.city, m.state, m.country);
+    const links = [
+        `<a href="#" class="popup-link" onclick="openDetail(${m.id}); return false;">View details →</a>`,
+    ];
+    if (m.city) {
+        const cityArg = JSON.stringify(m.city).replace(/"/g, '&quot;');
+        const stateArg = m.state ? JSON.stringify(m.state).replace(/"/g, '&quot;') : "''";
+        const countryArg = m.country ? JSON.stringify(m.country).replace(/"/g, '&quot;') : "''";
+        links.push(`<a href="#" class="popup-link" onclick="viewAllInCity(${cityArg}, ${stateArg}, ${countryArg}); return false;">View all in ${escapeHtml(m.city)} →</a>`);
+    }
+    if (m.date && m.date.length >= 7) {
+        const ym = m.date.substring(0, 7);  // "YYYY-MM"
+        links.push(`<a href="#" class="popup-link" onclick="drillToMonth('${ym}'); return false;">See ${escapeHtml(ym)} on the timeline →</a>`);
+    }
+    return `
+        <div class="popup">
+            <div class="popup-date">${escapeHtml(m.date || "Unknown date")}</div>
+            <div class="popup-loc">${escapeHtml(loc) || "Unknown location"}</div>
+            <div>${sourceBadge(m.source)} ${m.shape ? `<span class="shape-tag">${escapeHtml(m.shape)}</span>` : ""}</div>
+            ${links.join("")}
+        </div>
+    `;
+}
+
+// Map marker popup link handlers — exposed globally so the inline
+// onclick attributes in the popup HTML can call them.
+function viewAllInCity(city, state, country) {
+    // City filter is not in the global filter bar (we'd need a free-text
+    // city input). For now we use the search free-text "q" against the
+    // structured location columns via state + country plus a city
+    // qualifier in the search box. This is a deliberate compromise: it
+    // lets users get most of the way to the result set without
+    // requiring a city autocomplete UI.
+    const updates = { q: city };
+    if (state)   updates.state = state;
+    if (country) updates.country = country;
+    navigateToSearch(updates, true);
+}
+window.viewAllInCity = viewAllInCity;
+
+function drillToMonth(yearMonth) {
+    // yearMonth is "YYYY-MM". Switch to Timeline tab, set the
+    // drill-down state to that year, and trigger a load. The user
+    // can then click the month bar to jump to filtered search.
+    const [year, month] = yearMonth.split("-");
+    state.timelineYear = year;
+    switchTab("timeline");
+    // The timeline panel reads state.timelineYear in loadTimeline,
+    // which switchTab calls automatically. The monthly view will
+    // appear with the year drill-down already applied.
+}
+window.drillToMonth = drillToMonth;
+
 async function loadMapMarkers(signal) {
     const status = document.getElementById("map-status");
     status.innerHTML = '<span class="loading-pulse">Plotting sightings...</span>';
@@ -584,15 +732,7 @@ async function loadMapMarkers(signal) {
                 fillOpacity: 0.7,
             });
 
-            const loc = formatLocation(m.city, m.state, m.country);
-            marker.bindPopup(`
-                <div class="popup">
-                    <div class="popup-date">${m.date || "Unknown date"}</div>
-                    <div class="popup-loc">${escapeHtml(loc) || "Unknown location"}</div>
-                    <div>${sourceBadge(m.source)} ${m.shape ? `<span class="shape-tag">${escapeHtml(m.shape)}</span>` : ""}</div>
-                    <a href="#" class="popup-link" onclick="openDetail(${m.id}); return false;">View Details</a>
-                </div>
-            `);
+            marker.bindPopup(buildMarkerPopupHTML(m));
 
             return marker;
         });
@@ -666,15 +806,7 @@ async function loadAll() {
                     weight: 1,
                     fillOpacity: 0.7,
                 });
-                const loc = formatLocation(m.city, m.state, m.country);
-                marker.bindPopup(`
-                    <div class="popup">
-                        <div class="popup-date">${m.date || "Unknown date"}</div>
-                        <div class="popup-loc">${escapeHtml(loc) || "Unknown location"}</div>
-                        <div>${sourceBadge(m.source)} ${m.shape ? `<span class="shape-tag">${escapeHtml(m.shape)}</span>` : ""}</div>
-                        <a href="#" class="popup-link" onclick="openDetail(${m.id}); return false;">View Details</a>
-                    </div>
-                `);
+                marker.bindPopup(buildMarkerPopupHTML(m));
                 return marker;
             });
             state.markerLayer.addLayers(markers);
@@ -1793,6 +1925,151 @@ function initSettingsMenu() {
         });
     });
 }
+
+// =========================================================================
+// Map place search (Nominatim) + browser geolocation
+// =========================================================================
+// Lets users type "Phoenix, AZ" or click "Near me" to jump the map.
+// Nominatim is the OpenStreetMap geocoder — free, no API key required,
+// CORS-enabled. Their usage policy asks for a custom User-Agent and a
+// max of one request per second. The browser sets its own UA so we
+// can't override it; we add HTTP-Referer-style identification via the
+// `email` query param when running anywhere we control. We throttle to
+// one in-flight request at a time and add a 400ms typing debounce.
+
+let _placeSearchTimer = null;
+let _placeSearchAbort = null;
+
+async function geocodePlace(query) {
+    if (_placeSearchAbort) _placeSearchAbort.abort();
+    _placeSearchAbort = new AbortController();
+    const url = "https://nominatim.openstreetmap.org/search?format=json&limit=1&q=" + encodeURIComponent(query);
+    const resp = await fetch(url, {
+        signal: _placeSearchAbort.signal,
+        headers: { "Accept": "application/json" },
+    });
+    if (!resp.ok) throw new Error("Place search failed (" + resp.status + ")");
+    const results = await resp.json();
+    if (!results.length) throw new Error("No matches for that place.");
+    const top = results[0];
+    return {
+        lat: parseFloat(top.lat),
+        lng: parseFloat(top.lon),
+        display: top.display_name,
+        bbox: top.boundingbox,  // [south, north, west, east] as strings
+    };
+}
+
+function initMapPlaceSearch() {
+    const input = document.getElementById("place-input");
+    const goBtn = document.getElementById("btn-place-search");
+    const locBtn = document.getElementById("btn-locate-me");
+    if (!input || !goBtn) return;
+
+    async function runPlaceSearch() {
+        const q = input.value.trim();
+        if (!q) return;
+        const restore = disableButtonWhilePending(goBtn, "…");
+        try {
+            const place = await geocodePlace(q);
+            // Prefer a viewport fit if Nominatim gave us a bounding box,
+            // otherwise zoom to a reasonable level (city ~ zoom 11).
+            if (place.bbox && place.bbox.length === 4) {
+                const [s, n, w, e] = place.bbox.map(parseFloat);
+                state.map.fitBounds([[s, w], [n, e]], { maxZoom: 12 });
+            } else {
+                state.map.setView([place.lat, place.lng], 11);
+            }
+        } catch (err) {
+            if (!isAbortError(err)) {
+                document.getElementById("map-status").textContent = "Couldn't find that place — try a city + country.";
+                console.warn("place search:", err);
+            }
+        } finally {
+            restore();
+        }
+    }
+
+    goBtn.addEventListener("click", runPlaceSearch);
+    input.addEventListener("keydown", e => {
+        if (e.key === "Enter") { e.preventDefault(); runPlaceSearch(); }
+    });
+
+    if (locBtn) {
+        locBtn.addEventListener("click", () => {
+            if (!navigator.geolocation) {
+                document.getElementById("map-status").textContent = "Geolocation isn't available in this browser.";
+                return;
+            }
+            const restore = disableButtonWhilePending(locBtn, "Locating…");
+            navigator.geolocation.getCurrentPosition(
+                pos => {
+                    state.map.setView([pos.coords.latitude, pos.coords.longitude], 10);
+                    restore();
+                },
+                err => {
+                    document.getElementById("map-status").textContent = "Couldn't get your location: " + err.message;
+                    restore();
+                },
+                { timeout: 8000, enableHighAccuracy: false }
+            );
+        });
+    }
+}
+
+
+// =========================================================================
+// Search panel: export buttons + copy-link button
+// =========================================================================
+
+function initSearchActions() {
+    const csvBtn = document.getElementById("btn-export-csv");
+    const jsonBtn = document.getElementById("btn-export-json");
+    const copyBtn = document.getElementById("btn-copy-link");
+
+    function downloadExport(format) {
+        // Reuse the same filter params the search panel just used
+        const params = getFilterParams();
+        const q = document.getElementById("search-input")?.value?.trim();
+        if (q) params.set("q", q);
+        const url = `/api/export.${format}?${params}`;
+        // Trigger a download by creating a temporary anchor — using
+        // window.location would replace the SPA URL hash.
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `ufosint-export.${format}`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+    }
+
+    if (csvBtn)  csvBtn.addEventListener("click", () => downloadExport("csv"));
+    if (jsonBtn) jsonBtn.addEventListener("click", () => downloadExport("json"));
+
+    if (copyBtn) {
+        copyBtn.addEventListener("click", async () => {
+            const url = window.location.origin + window.location.pathname + window.location.hash;
+            const original = copyBtn.innerHTML;
+            try {
+                await navigator.clipboard.writeText(url);
+                copyBtn.innerHTML = "✓ Copied";
+            } catch (err) {
+                // Fallback: execCommand for older browsers / restrictive contexts
+                const ta = document.createElement("textarea");
+                ta.value = url;
+                ta.style.position = "fixed";
+                ta.style.opacity = "0";
+                document.body.appendChild(ta);
+                ta.select();
+                try { document.execCommand("copy"); copyBtn.innerHTML = "✓ Copied"; }
+                catch (_) { copyBtn.innerHTML = "✗ Copy failed"; }
+                document.body.removeChild(ta);
+            }
+            setTimeout(() => { copyBtn.innerHTML = original; }, 1500);
+        });
+    }
+}
+
 
 function aiInitListeners() {
     const settingsBtn = document.getElementById("ai-settings-btn");

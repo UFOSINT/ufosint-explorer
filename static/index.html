@@ -32,7 +32,10 @@
     <header id="header">
         <div class="header-left">
             <h1>UFO Explorer</h1>
-            <span id="stats-badge" class="stats-badge"></span>
+            <div class="stats-badge-wrap">
+                <button id="stats-badge" class="stats-badge" type="button" aria-haspopup="dialog" aria-expanded="false" title="Click for detailed counts">Loading…</button>
+                <div id="stats-popover" class="stats-popover" role="dialog" aria-label="Database statistics" hidden></div>
+            </div>
         </div>
         <nav class="tabs">
             <button class="tab active" data-tab="map">Map</button>
@@ -87,6 +90,14 @@
             <select id="filter-source"><option value="">All</option></select>
         </div>
         <div class="filter-group">
+            <label for="filter-country">Country</label>
+            <select id="filter-country"><option value="">All</option></select>
+        </div>
+        <div class="filter-group">
+            <label for="filter-state">State / Region</label>
+            <select id="filter-state"><option value="">All</option></select>
+        </div>
+        <div class="filter-group">
             <label for="filter-hynek">Hynek</label>
             <select id="filter-hynek"><option value="">All</option></select>
         </div>
@@ -103,6 +114,12 @@
         <!-- Map Panel -->
         <div id="panel-map" class="panel active">
             <div id="map"></div>
+            <div class="map-place-search">
+                <label class="sr-only" for="place-input">Find a place</label>
+                <input type="text" id="place-input" placeholder="Find a place — city, country, address..." autocomplete="off" />
+                <button id="btn-place-search" class="btn btn-primary btn-small" title="Search">Go</button>
+                <button id="btn-locate-me" class="btn btn-secondary btn-small" title="Use my current location">📍 Near me</button>
+            </div>
             <div class="map-mode-toggle">
                 <button class="map-mode-btn active" data-mode="clusters">Clusters</button>
                 <button class="map-mode-btn" data-mode="heatmap">Heatmap</button>
@@ -142,6 +159,11 @@
                     <option value="date_desc">Newest first</option>
                     <option value="date_asc">Oldest first</option>
                 </select>
+            </div>
+            <div class="search-actions">
+                <button id="btn-export-csv" class="btn btn-secondary btn-small" title="Download current results as CSV (max 5,000 rows)">⬇ CSV</button>
+                <button id="btn-export-json" class="btn btn-secondary btn-small" title="Download current results as JSON (max 5,000 rows)">⬇ JSON</button>
+                <button id="btn-copy-link" class="btn btn-secondary btn-small" title="Copy a shareable link to this filter view">🔗 Copy link</button>
             </div>
             <div id="search-active-filters" class="active-filters" aria-live="polite"></div>
             <div id="search-info" class="search-info" aria-live="polite"></div>

@@ -13,7 +13,7 @@ Run locally:
 import os
 import json
 import time
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, Response
 from flask_caching import Cache
 from flask_compress import Compress
 
@@ -216,6 +216,41 @@ def init_filters():
     """)
     FILTER_CACHE["match_methods"] = [r[0] for r in cur.fetchall()]
 
+    # Top countries by sighting count, used by the Country filter dropdown.
+    # We pick the top 60 to keep the dropdown manageable; users who need
+    # more granular geographic filtering can use the place-search box on
+    # the Map tab. The HAVING clause excludes single-row noise.
+    cur.execute("""
+        SELECT l.country, COUNT(*) AS n
+        FROM location l
+        JOIN sighting s ON s.location_id = l.id
+        WHERE l.country IS NOT NULL AND l.country != ''
+        GROUP BY l.country
+        HAVING COUNT(*) >= 5
+        ORDER BY n DESC
+        LIMIT 60
+    """)
+    FILTER_CACHE["countries"] = [
+        {"value": r[0], "count": r[1]} for r in cur.fetchall()
+    ]
+
+    # Top states by sighting count. The data is dominated by US states +
+    # Canadian provinces but also has some UK counties and stray noise;
+    # the HAVING + LIMIT keep the dropdown to the meaningful long tail.
+    cur.execute("""
+        SELECT l.state, COUNT(*) AS n
+        FROM location l
+        JOIN sighting s ON s.location_id = l.id
+        WHERE l.state IS NOT NULL AND l.state != ''
+        GROUP BY l.state
+        HAVING COUNT(*) >= 50
+        ORDER BY n DESC
+        LIMIT 100
+    """)
+    FILTER_CACHE["states"] = [
+        {"value": r[0], "count": r[1]} for r in cur.fetchall()
+    ]
+
     conn.close()
 
 
@@ -265,6 +300,19 @@ def add_common_filters(params, clauses, args, table_prefix="s"):
     if date_to:
         clauses.append(f"{p}.date_event <= %s")
         args.append(date_to + "-12-31" if len(date_to) == 4 else date_to)
+
+    # Geographic filters — exact match on the location table.
+    # IMPORTANT: any caller using these (or the coords filter below)
+    # must LEFT JOIN location l in its FROM clause.
+    country = params.get("country")
+    if country:
+        clauses.append("l.country = %s")
+        args.append(country)
+
+    state = params.get("state")
+    if state:
+        clauses.append("l.state = %s")
+        args.append(state)
 
     # Coordinate source filter (for map/heatmap)
     coords = params.get("coords")
@@ -685,6 +733,7 @@ def api_timeline():
                    COUNT(*) as cnt
             FROM sighting s
             JOIN source_database sd ON s.source_db_id = sd.id
+            LEFT JOIN location l ON s.location_id = l.id
             WHERE {where}
               AND LENGTH(s.date_event) >= 7
             GROUP BY period, sd.name
@@ -700,6 +749,7 @@ def api_timeline():
                    COUNT(*) as cnt
             FROM sighting s
             JOIN source_database sd ON s.source_db_id = sd.id
+            LEFT JOIN location l ON s.location_id = l.id
             WHERE {where}
             GROUP BY period, sd.name
             ORDER BY period
@@ -753,9 +803,13 @@ def api_search():
 
     where = " AND ".join(clauses) if clauses else "TRUE"
 
-    # Count total
+    # Count total. The LEFT JOIN location is required because the WHERE
+    # clause may reference l.country / l.state / l.geocode_src via
+    # add_common_filters. Without the join those references would error.
     count_sql = f"""
-        SELECT COUNT(*) FROM sighting s WHERE {where}
+        SELECT COUNT(*) FROM sighting s
+        LEFT JOIN location l ON s.location_id = l.id
+        WHERE {where}
     """
     cur.execute(count_sql, args)
     total = cur.fetchone()[0]
@@ -805,6 +859,119 @@ def api_search():
         "per_page": per_page,
         "pages": (total + per_page - 1) // per_page,
     })
+
+
+# ---------------------------------------------------------------------------
+# Export — CSV / JSON download of the current search filter set
+# ---------------------------------------------------------------------------
+# Reuses the same WHERE clause as /api/search so the file the user
+# downloads matches what they saw on screen. Capped at 5,000 rows by
+# default; the response always includes the total so the UI can show
+# "downloaded 5,000 of 12,408 — for the full dataset use the MCP API".
+
+EXPORT_MAX_ROWS = 5000
+
+EXPORT_COLUMNS = [
+    "id", "date_event", "shape", "hynek", "vallee", "num_witnesses",
+    "duration", "summary", "description",
+    "source", "collection",
+    "city", "state", "country",
+    "latitude", "longitude",
+]
+
+def _build_export_query(request_args):
+    """Return (sql, args) for the export query — same filters as /api/search."""
+    q = (request_args.get("q") or "").strip()
+    clauses = []
+    args = []
+    if q:
+        clauses.append("(s.description ILIKE %s OR s.summary ILIKE %s)")
+        like = f"%{q}%"
+        args.extend([like, like])
+    add_common_filters(request_args, clauses, args)
+    where = " AND ".join(clauses) if clauses else "TRUE"
+    sql = f"""
+        SELECT s.id, s.date_event, s.shape, s.hynek, s.vallee, s.num_witnesses,
+               s.duration, s.summary, s.description,
+               sd.name AS source,
+               COALESCE(sc.name, '') AS collection,
+               COALESCE(l.city, '') AS city,
+               COALESCE(l.state, '') AS state,
+               COALESCE(l.country, '') AS country,
+               l.latitude, l.longitude
+        FROM sighting s
+        JOIN source_database sd ON s.source_db_id = sd.id
+        LEFT JOIN source_collection sc ON sd.collection_id = sc.id
+        LEFT JOIN location l ON s.location_id = l.id
+        WHERE {where}
+        ORDER BY s.date_event DESC NULLS LAST
+        LIMIT %s
+    """
+    return sql, args + [EXPORT_MAX_ROWS]
+
+
+@app.route("/api/export.csv")
+def api_export_csv():
+    """CSV download of the current search filter set (capped at 5,000 rows)."""
+    import csv
+    import io
+    sql, args = _build_export_query(request.args)
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(sql, args)
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(EXPORT_COLUMNS)
+    for r in rows:
+        writer.writerow([
+            "" if v is None else str(v).replace("\n", " ").replace("\r", " ")
+            for v in r
+        ])
+    csv_data = buf.getvalue()
+    filename = "ufosint-export.csv"
+    return Response(
+        csv_data,
+        content_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Total-Rows": str(len(rows)),
+            "X-Max-Rows": str(EXPORT_MAX_ROWS),
+        },
+    )
+
+
+@app.route("/api/export.json")
+def api_export_json():
+    """JSON download of the current search filter set (capped at 5,000 rows)."""
+    sql, args = _build_export_query(request.args)
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(sql, args)
+        rows = [dict(zip(EXPORT_COLUMNS, r)) for r in cur.fetchall()]
+    finally:
+        conn.close()
+    payload = {
+        "exported_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "row_count": len(rows),
+        "max_rows": EXPORT_MAX_ROWS,
+        "rows": rows,
+    }
+    body = json.dumps(payload, default=str, indent=2)
+    return Response(
+        body,
+        mimetype="application/json",
+        headers={
+            "Content-Disposition": 'attachment; filename="ufosint-export.json"',
+            "X-Total-Rows": str(len(rows)),
+            "X-Max-Rows": str(EXPORT_MAX_ROWS),
+        },
+    )
 
 
 @app.route("/api/sighting/<int:sid>")

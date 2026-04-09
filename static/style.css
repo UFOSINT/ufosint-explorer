@@ -1856,3 +1856,213 @@ select:focus {
     font-size: var(--fs-12);
     text-align: center;
 }
+
+/* =========================================================================
+   Sprint 2 additions — geographic filters, map place search, export,
+   stats popover
+   ========================================================================= */
+
+/* The new Country and State filter dropdowns inherit .filter-group styles
+   automatically, but they can get wide because the option text includes
+   the count. Cap them. */
+#filter-country,
+#filter-state {
+    max-width: 180px;
+}
+
+/* The Date Range fieldset added in Sprint 1 needs a tiny bit of cleanup
+   so the legend doesn't read as a heading and the inputs sit flush. */
+.filter-group-date {
+    border: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+}
+.filter-group-date legend {
+    font-size: var(--fs-12);
+    color: var(--text-muted);
+    padding: 0;
+    margin: 0;
+}
+
+/* ---- Map place search (top-left) ---- */
+.map-place-search {
+    position: absolute;
+    top: var(--s-3);
+    left: 60px;          /* leave room for the Leaflet zoom controls */
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    gap: var(--s-1);
+    background: rgba(19, 25, 37, 0.95);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    padding: var(--s-1) var(--s-2);
+    box-shadow: var(--shadow-md);
+    backdrop-filter: blur(4px);
+}
+.map-place-search input[type="text"] {
+    width: 240px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-size: var(--fs-13);
+    padding: var(--s-1) var(--s-2);
+    border-radius: var(--r-sm);
+}
+.map-place-search input[type="text"]:focus {
+    border-color: var(--accent);
+}
+.map-place-search .btn {
+    font-size: var(--fs-12);
+    padding: var(--s-1) var(--s-2);
+    white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+    .map-place-search {
+        left: var(--s-2);
+        right: var(--s-2);
+        top: 60px;       /* below the Leaflet zoom + the cluster/heat toggle */
+        flex-wrap: wrap;
+    }
+    .map-place-search input[type="text"] {
+        width: 100%;
+        flex: 1 1 100%;
+        order: 1;
+    }
+    .map-place-search .btn { order: 2; flex: 1 1 auto; }
+}
+
+/* ---- Search panel: Export + Copy link toolbar row ---- */
+.search-actions {
+    display: flex;
+    gap: var(--s-2);
+    padding: 0 var(--s-4) var(--s-2);
+    flex-wrap: wrap;
+    flex-shrink: 0;
+}
+.search-actions .btn {
+    background: var(--bg-card);
+    border-color: var(--border);
+}
+.search-actions .btn:hover {
+    background: var(--bg-card-h);
+    border-color: var(--border-strong);
+    color: var(--text);
+}
+
+/* ---- Stats badge: compact button + click-to-open popover ---- */
+.stats-badge-wrap {
+    position: relative;
+}
+.stats-badge {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--r-md);
+    padding: var(--s-1) var(--s-2);
+    font-size: var(--fs-12);
+    color: var(--text-muted);
+    cursor: pointer;
+    font-family: inherit;
+    transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast);
+    line-height: 1.35;
+    text-align: left;
+}
+.stats-badge:hover {
+    background: var(--bg-card);
+    color: var(--text);
+    border-color: var(--border);
+}
+.stats-badge[aria-expanded="true"] {
+    background: var(--bg-card);
+    color: var(--text);
+    border-color: var(--border-strong);
+}
+.stats-sep {
+    color: var(--text-faint);
+    margin: 0 var(--s-1);
+}
+.stats-popover {
+    position: absolute;
+    top: calc(100% + var(--s-2));
+    left: 0;
+    z-index: 9000;
+    min-width: 320px;
+    max-width: 400px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    box-shadow: var(--shadow-lg);
+    padding: var(--s-4);
+    font-size: var(--fs-13);
+    color: var(--text);
+}
+.stats-popover[hidden] { display: none; }
+.stats-popover-section {
+    margin-bottom: var(--s-3);
+}
+.stats-popover-section:last-child {
+    margin-bottom: 0;
+}
+.stats-popover-title {
+    font-size: var(--fs-12);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-faint);
+    margin-bottom: var(--s-2);
+}
+.stats-popover-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: var(--s-1) 0;
+    color: var(--text);
+}
+.stats-popover-row span {
+    color: var(--text-muted);
+}
+.stats-popover-row strong {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+.stats-popover-sub {
+    padding-left: var(--s-3);
+    font-size: var(--fs-12);
+    color: var(--text-faint);
+}
+.stats-popover-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+.stats-popover-table td {
+    padding: var(--s-1) 0;
+    color: var(--text);
+}
+.stats-popover-table td:last-child {
+    text-align: right;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+}
+.stats-popover-foot {
+    margin-top: var(--s-3);
+    padding-top: var(--s-2);
+    border-top: 1px solid var(--border);
+    font-size: var(--fs-12);
+    color: var(--text-faint);
+}
+.stats-popover-foot a { color: var(--accent); }
+
+@media (max-width: 720px) {
+    .stats-popover {
+        position: fixed;
+        left: var(--s-3);
+        right: var(--s-3);
+        top: 80px;
+        min-width: 0;
+        max-width: none;
+    }
+}
