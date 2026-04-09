@@ -358,16 +358,30 @@ select:focus {
     position: relative;
 }
 
+/* Panels are always laid out (position: absolute covers #main) but only
+   the active one is visible + interactive. Using visibility + opacity
+   lets us transition between tabs instead of hard teleporting via
+   display: none. The `visibility 0s linear var(--t-fast)` delay on the
+   inactive state waits for the fade-out to finish before hiding, which
+   keeps tab-focus behavior correct. Respects prefers-reduced-motion
+   via the existing @media rule that kills all transitions. */
 .panel {
-    display: none;
+    display: flex;
+    flex-direction: column;
     position: absolute;
     inset: 0;
     overflow: auto;
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--t-fast) ease-out, visibility 0s linear var(--t-fast);
 }
 
 .panel.active {
-    display: flex;
-    flex-direction: column;
+    visibility: visible;
+    opacity: 1;
+    pointer-events: auto;
+    transition: opacity var(--t-fast) ease-out, visibility 0s;
 }
 
 .panel-status {
@@ -696,6 +710,17 @@ select:focus {
     align-items: center;
     justify-content: center;
     z-index: 9999;
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--t-fast) ease-out, visibility 0s linear var(--t-fast);
+}
+
+.modal-overlay.is-open {
+    visibility: visible;
+    opacity: 1;
+    pointer-events: auto;
+    transition: opacity var(--t-fast) ease-out, visibility 0s;
 }
 
 .modal {
@@ -708,7 +733,32 @@ select:focus {
     display: flex;
     flex-direction: column;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    transform: scale(0.96);
+    transition: transform var(--t-base) ease-out;
 }
+.modal-overlay.is-open .modal {
+    transform: scale(1);
+}
+
+/* Detail-modal loading skeleton — replaces the plain "Loading..." text
+   with layout-stable blocks so the modal doesn't flicker when the real
+   content arrives. */
+.detail-skeleton {
+    background: linear-gradient(
+        90deg,
+        var(--bg-card) 0%,
+        var(--bg-card-h) 50%,
+        var(--bg-card) 100%
+    );
+    background-size: 200% 100%;
+    animation: skeleton-shimmer 1.6s ease-in-out infinite;
+    border-radius: var(--r-sm);
+    margin-bottom: var(--s-3);
+}
+.detail-skeleton.skeleton-title    { height: 24px; width: 50%; }
+.detail-skeleton.skeleton-line     { height: 14px; width: 100%; }
+.detail-skeleton.skeleton-line-sm  { height: 14px; width: 70%; }
+.detail-skeleton.skeleton-block    { height: 72px; }
 
 .modal-header {
     display: flex;
@@ -2065,4 +2115,138 @@ select:focus {
         min-width: 0;
         max-width: none;
     }
+}
+
+/* =========================================================================
+   Sprint 3 additions — feel pass (motion, density, feedback)
+   ========================================================================= */
+
+/* ---- Filter bar: Primary + Advanced split ---- */
+/* The advanced filters (Collection, Hynek, Vallee) are wrapped in a
+   .filters-advanced container that's hidden by default. The
+   "More filters" toggle button reveals them. A count badge on the
+   toggle shows how many advanced filters are active.
+
+   On mobile (<720px) we add another layer: the entire filter bar
+   becomes collapsible behind a "Filters (n)" button, where n is the
+   total active count. */
+
+.filters-advanced {
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+    flex-wrap: wrap;
+}
+.filters-advanced[hidden] { display: none; }
+
+#btn-more-filters {
+    position: relative;
+}
+#btn-more-filters .filter-count-badge {
+    display: inline-block;
+    min-width: 18px;
+    padding: 0 6px;
+    margin-left: var(--s-1);
+    font-size: 10px;
+    font-weight: 700;
+    background: var(--accent);
+    color: #0b0f17;
+    border-radius: var(--r-pill);
+    line-height: 16px;
+    text-align: center;
+}
+#btn-more-filters .filter-count-badge[hidden] { display: none; }
+
+/* Mobile filter bar toggle (hidden on desktop) */
+#btn-mobile-filters {
+    display: none;
+}
+@media (max-width: 720px) {
+    #btn-mobile-filters {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--s-2);
+    }
+    #filters-bar.is-collapsed > *:not(#btn-mobile-filters):not(#btn-apply-filters):not(#btn-clear-filters) {
+        display: none;
+    }
+    #filters-bar.is-collapsed #btn-apply-filters,
+    #filters-bar.is-collapsed #btn-clear-filters {
+        display: none;
+    }
+    #filters-bar:not(.is-collapsed) #btn-mobile-filters .mobile-filters-chevron {
+        transform: rotate(180deg);
+    }
+    .mobile-filters-chevron {
+        display: inline-block;
+        transition: transform var(--t-fast) ease-out;
+    }
+}
+
+/* ---- "Unsaved changes" indicator on the Apply button ---- */
+/* Toggled on by text input events, removed when applyFilters runs or
+   the button is clicked. A subtle accent ring pulse draws the eye
+   without being loud. */
+.btn-primary.is-dirty {
+    box-shadow: 0 0 0 3px var(--accent-bg);
+    animation: dirty-pulse 1.8s ease-in-out infinite;
+}
+@keyframes dirty-pulse {
+    0%, 100% { box-shadow: 0 0 0 3px var(--accent-bg); }
+    50%      { box-shadow: 0 0 0 5px var(--accent-bg); }
+}
+
+/* ---- Map: top-edge progress bar on load ---- */
+/* Replaces the barely-visible bottom-left status pill as the primary
+   "map is busy" indicator. The pill stays for the count display
+   ("5,000 of 50,000 markers") but the bar is the loading affordance. */
+#map.is-loading::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: linear-gradient(
+        90deg,
+        transparent 0%,
+        var(--accent) 40%,
+        var(--accent-hover) 50%,
+        var(--accent) 60%,
+        transparent 100%
+    );
+    background-size: 60% 100%;
+    background-repeat: no-repeat;
+    animation: map-loading-slide 1.4s ease-in-out infinite;
+    z-index: 1200;
+    pointer-events: none;
+}
+@keyframes map-loading-slide {
+    0%   { background-position: -60% 0; }
+    100% { background-position: 160% 0; }
+}
+
+/* ---- Chart container: fade during drill-down fetch ---- */
+.chart-container {
+    position: relative;
+    transition: opacity var(--t-base) ease-out;
+}
+.chart-container.is-loading {
+    opacity: 0.45;
+    pointer-events: none;
+}
+
+/* ---- Load All: inline confirmation state ---- */
+/* Replaces the jarring native confirm() for large loads. First click
+   on Load All when the count is big swaps the button to a pulsing
+   "Tap again to confirm" state for 3 seconds; second click actually
+   loads. No second click = button reverts. */
+.btn-load-all.confirming {
+    background: var(--orange);
+    color: #0b0f17;
+    animation: confirm-pulse 1s ease-in-out infinite;
+}
+@keyframes confirm-pulse {
+    0%, 100% { filter: brightness(1); }
+    50%      { filter: brightness(1.15); }
 }

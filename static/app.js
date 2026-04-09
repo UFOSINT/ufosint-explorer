@@ -143,6 +143,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     // Settings dropdown menu (wraps the AI tools)
     initSettingsMenu();
 
+    // Sprint 3: filter bar polish — auto-apply selects, is-dirty on
+    // text inputs, "More filters" drawer, mobile filter bar toggle.
+    initFilterBarPolish();
+
     // Map place search (Nominatim) + browser geolocation
     initMapPlaceSearch();
 
@@ -444,6 +448,8 @@ function switchTab(tab) {
 
 async function applyFilters() {
     const applyBtn = document.getElementById("btn-apply-filters");
+    // Clear the "unsaved changes" pulse — filters are now committed.
+    applyBtn?.classList.remove("is-dirty");
     const restore = disableButtonWhilePending(applyBtn, "Applying…");
     try {
         if (state.activeTab === "map") {
@@ -706,7 +712,9 @@ window.drillToMonth = drillToMonth;
 
 async function loadMapMarkers(signal) {
     const status = document.getElementById("map-status");
+    const mapEl = document.getElementById("map");
     status.innerHTML = '<span class="loading-pulse">Plotting sightings...</span>';
+    mapEl?.classList.add("is-loading");
 
     const bounds = state.map.getBounds();
     const params = getFilterParams();
@@ -744,6 +752,8 @@ async function loadMapMarkers(signal) {
         document.getElementById("map-status").textContent = "Couldn't load sightings — check your connection or pan again to retry.";
         document.getElementById("btn-load-all").style.display = "none";
         console.error(err);
+    } finally {
+        mapEl?.classList.remove("is-loading");
     }
 }
 
@@ -769,14 +779,35 @@ function updateMapStatus(loaded, total, unit) {
 async function loadAll() {
     const btn = document.getElementById("btn-load-all");
     const status = document.getElementById("map-status");
-    const totalText = btn.textContent.replace("Load All ", "").replace(/,/g, "");
+    // When the button is in the "confirming" state, its label has been
+    // swapped to "Tap again…" — parse the count from the dataset we
+    // stashed, not the label.
+    const totalText = (btn.dataset.total || btn.textContent.replace(/[^0-9]/g, ""));
     const total = parseInt(totalText) || 100000;
 
-    // Show warning for very large loads
-    if (total > 30000 && state.mapMode === "clusters") {
-        if (!confirm(`Loading ${total.toLocaleString()} markers may take a moment. Continue?`)) return;
+    // Inline confirmation for very large cluster loads — replaces the
+    // jarring native confirm() dialog. First click swaps the button into
+    // a "Tap again to load NN,NNN" state for 3 seconds; second click
+    // proceeds. No second click = revert to original label.
+    if (total > 30000 && state.mapMode === "clusters" && !btn.classList.contains("confirming")) {
+        btn.dataset.total = String(total);
+        btn.dataset.originalText = btn.textContent;
+        btn.classList.add("confirming");
+        btn.textContent = `Tap again to load ${total.toLocaleString()}`;
+        btn.dataset.confirmTimer = String(setTimeout(() => {
+            btn.classList.remove("confirming");
+            btn.textContent = btn.dataset.originalText || `Load All ${total.toLocaleString()}`;
+            delete btn.dataset.confirmTimer;
+        }, 3000));
+        return;
     }
 
+    // User confirmed (or the load is small enough to skip confirmation)
+    if (btn.dataset.confirmTimer) {
+        clearTimeout(parseInt(btn.dataset.confirmTimer));
+        delete btn.dataset.confirmTimer;
+    }
+    btn.classList.remove("confirming");
     btn.style.display = "none";
     status.textContent = `Loading all ${total.toLocaleString()}...`;
 
@@ -845,7 +876,9 @@ function toggleMapMode(mode) {
 
 async function loadHeatmap(signal) {
     const status = document.getElementById("map-status");
+    const mapEl = document.getElementById("map");
     status.innerHTML = '<span class="loading-pulse">Building heatmap from sightings...</span>';
+    mapEl?.classList.add("is-loading");
 
     const bounds = state.map.getBounds();
     const params = getFilterParams();
@@ -863,6 +896,8 @@ async function loadHeatmap(signal) {
         document.getElementById("map-status").textContent = "Couldn't build heatmap — check your connection or pan again to retry.";
         document.getElementById("btn-load-all").style.display = "none";
         console.error(err);
+    } finally {
+        mapEl?.classList.remove("is-loading");
     }
 }
 
@@ -951,6 +986,14 @@ async function loadTimeline() {
         const period = periods[el.index];
         const sourceName = sourceList[el.datasetIndex];
 
+        // Visual feedback: fade the chart container while the drill-down
+        // or navigation happens. loadTimeline rebuilds the chart anyway
+        // (which clears this class via the next render), but for the
+        // month-click path (which navigates away) we remove it on a
+        // short delay so the user sees a flash of acknowledgement.
+        const chartContainer = document.querySelector(".chart-container");
+        chartContainer?.classList.add("is-loading");
+
         if (data.mode === "yearly") {
             // Click year bar -> drill down to monthly view (existing behavior).
             // If user clicked a stacked source segment we ALSO remember to
@@ -963,8 +1006,10 @@ async function loadTimeline() {
                 }
             }
             state.timelineYear = period;
-            loadTimeline();
+            loadTimeline().finally(() => chartContainer?.classList.remove("is-loading"));
         } else {
+            // Navigating away — clear the fade after a short delay
+            setTimeout(() => chartContainer?.classList.remove("is-loading"), 300);
             // Monthly view -> jump to filtered search for that month.
             // period is "YYYY-MM"
             const [y, m] = period.split("-");
@@ -1608,8 +1653,36 @@ async function openDetail(id) {
     // Remember where focus came from so we can restore it on close
     _modalReturnFocus = document.activeElement;
 
-    overlay.style.display = "flex";
-    body.innerHTML = '<p class="loading-pulse" style="padding:24px;text-align:center">Loading sighting details...</p>';
+    // Reset any leftover inline display from earlier code paths, then
+    // use the class-based transition. CSS handles the opacity fade on
+    // .modal-overlay and the scale on .modal.
+    overlay.style.display = "";
+    overlay.classList.add("is-open");
+    title.textContent = `Sighting #${id}`;
+
+    // Skeleton loading state — layout-stable blocks shaped roughly like
+    // the real detail sections, so the modal doesn't jump when content
+    // arrives. Uses the same shimmer animation as the search skeletons.
+    body.innerHTML = `
+        <div class="detail-grid">
+            <div class="detail-section">
+                <div class="detail-skeleton skeleton-title"></div>
+                <div class="detail-skeleton skeleton-line"></div>
+                <div class="detail-skeleton skeleton-line-sm"></div>
+                <div class="detail-skeleton skeleton-line"></div>
+            </div>
+            <div class="detail-section">
+                <div class="detail-skeleton skeleton-title"></div>
+                <div class="detail-skeleton skeleton-line"></div>
+                <div class="detail-skeleton skeleton-line-sm"></div>
+                <div class="detail-skeleton skeleton-line"></div>
+            </div>
+            <div class="detail-section" style="grid-column:1/-1">
+                <div class="detail-skeleton skeleton-title"></div>
+                <div class="detail-skeleton skeleton-block"></div>
+            </div>
+        </div>
+    `;
 
     // Move focus inside the modal (close button is the safest landing spot)
     document.getElementById("modal-close")?.focus();
@@ -1925,6 +1998,150 @@ function initSettingsMenu() {
         });
     });
 }
+
+
+// =========================================================================
+// Sprint 3: Filter bar polish — auto-apply, is-dirty, advanced drawer,
+// mobile collapse, active filter counts
+// =========================================================================
+
+// Selects that should auto-apply with a debounce. Text inputs (the
+// date range) keep the explicit Apply button because you don't want
+// fire-on-keystroke there.
+const AUTO_APPLY_SELECT_IDS = [
+    "filter-shape",
+    "filter-collection",
+    "filter-source",
+    "filter-country",
+    "filter-state",
+    "filter-hynek",
+    "filter-vallee",
+];
+
+// Text inputs that mark the Apply button "dirty" on input. User must
+// still click Apply to commit these since typing a date char-by-char
+// would thrash queries.
+const DIRTY_INPUT_IDS = [
+    "filter-date-from",
+    "filter-date-to",
+];
+
+// Which filters live in the advanced drawer — used for the count badge.
+const ADVANCED_FILTER_IDS = [
+    "filter-collection",
+    "filter-hynek",
+    "filter-vallee",
+];
+
+let _autoApplyTimer = null;
+
+function initFilterBarPolish() {
+    // ----- Auto-apply on select change (250ms debounce) -----
+    AUTO_APPLY_SELECT_IDS.forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener("change", () => {
+            clearTimeout(_autoApplyTimer);
+            _autoApplyTimer = setTimeout(() => {
+                if (typeof applyFilters === "function") applyFilters();
+            }, 250);
+        });
+    });
+
+    // ----- is-dirty on text inputs -----
+    const applyBtn = document.getElementById("btn-apply-filters");
+    DIRTY_INPUT_IDS.forEach(id => {
+        const el = document.getElementById(id);
+        if (!el || !applyBtn) return;
+        el.addEventListener("input", () => applyBtn.classList.add("is-dirty"));
+    });
+    applyBtn?.addEventListener("click", () => applyBtn.classList.remove("is-dirty"));
+
+    // ----- "More filters" drawer toggle + active-count badge -----
+    const moreBtn = document.getElementById("btn-more-filters");
+    const drawer = document.getElementById("filters-advanced");
+    const moreCount = document.getElementById("more-filter-count");
+
+    function updateMoreCount() {
+        if (!moreCount) return;
+        const n = ADVANCED_FILTER_IDS.reduce((count, id) => {
+            const el = document.getElementById(id);
+            return count + (el && el.value ? 1 : 0);
+        }, 0);
+        if (n > 0) {
+            moreCount.textContent = String(n);
+            moreCount.hidden = false;
+        } else {
+            moreCount.hidden = true;
+        }
+    }
+
+    if (moreBtn && drawer) {
+        moreBtn.addEventListener("click", () => {
+            const willShow = drawer.hidden;
+            drawer.hidden = !willShow;
+            moreBtn.setAttribute("aria-expanded", String(willShow));
+        });
+        // Auto-open the drawer if any advanced filter is active on page load
+        const hasActive = ADVANCED_FILTER_IDS.some(id => {
+            const el = document.getElementById(id);
+            return el && el.value;
+        });
+        if (hasActive) {
+            drawer.hidden = false;
+            moreBtn.setAttribute("aria-expanded", "true");
+        }
+        // Keep the count fresh on every change
+        ADVANCED_FILTER_IDS.forEach(id => {
+            const el = document.getElementById(id);
+            el?.addEventListener("change", updateMoreCount);
+        });
+        updateMoreCount();
+    }
+
+    // ----- Mobile filter bar toggle + active-count badge -----
+    const mobileBtn = document.getElementById("btn-mobile-filters");
+    const bar = document.getElementById("filters-bar");
+    const mobileCount = document.getElementById("mobile-filter-count");
+
+    function updateMobileCount() {
+        if (!mobileCount) return;
+        // Count every FILTER_FIELD that has a value, excluding "coords=all"
+        const n = FILTER_FIELDS.reduce((count, f) => {
+            if (f.key === "coords") return count;
+            const el = document.getElementById(f.id);
+            return count + (el && el.value ? 1 : 0);
+        }, 0);
+        if (n > 0) {
+            mobileCount.textContent = String(n);
+            mobileCount.hidden = false;
+        } else {
+            mobileCount.hidden = true;
+        }
+    }
+
+    if (mobileBtn && bar) {
+        // Start collapsed on narrow screens; initFilterBarPolish runs
+        // after DOMContentLoaded so we can just check the window width.
+        if (window.innerWidth <= 720) {
+            bar.classList.add("is-collapsed");
+            mobileBtn.setAttribute("aria-expanded", "false");
+        }
+        mobileBtn.addEventListener("click", () => {
+            const isCollapsed = bar.classList.toggle("is-collapsed");
+            mobileBtn.setAttribute("aria-expanded", String(!isCollapsed));
+        });
+        // Every filter change updates the mobile count
+        FILTER_FIELDS.forEach(f => {
+            if (f.key === "coords") return;
+            const el = document.getElementById(f.id);
+            el?.addEventListener("change", updateMobileCount);
+            el?.addEventListener("input", updateMobileCount);
+        });
+        updateMobileCount();
+    }
+}
+
 
 // =========================================================================
 // Map place search (Nominatim) + browser geolocation
@@ -2494,8 +2711,17 @@ window.clearFilters = clearFilters;
 window.doSearch     = doSearch;
 
 function closeModal() {
-    document.getElementById("modal-overlay").style.display = "none";
-    document.getElementById("modal-body").innerHTML = "";
+    const overlay = document.getElementById("modal-overlay");
+    // Class-based hide; CSS handles the fade-out and the delayed
+    // visibility change so the transition plays cleanly.
+    overlay.classList.remove("is-open");
+    // Clear the body after the transition to avoid flashing the old
+    // content if the same modal is reopened quickly.
+    setTimeout(() => {
+        if (!overlay.classList.contains("is-open")) {
+            document.getElementById("modal-body").innerHTML = "";
+        }
+    }, 200);
     document.removeEventListener("keydown", _modalEscapeHandler);
     // Return focus to whatever element opened the modal so keyboard users
     // don't get dropped at the top of the page.

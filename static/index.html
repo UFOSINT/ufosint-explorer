@@ -69,6 +69,11 @@
 
     <!-- Filters Bar -->
     <div id="filters-bar">
+        <button id="btn-mobile-filters" class="btn btn-secondary btn-small" type="button" aria-expanded="false" aria-controls="filters-bar">
+            <span>Filters</span>
+            <span class="filter-count-badge" id="mobile-filter-count" hidden>0</span>
+            <span class="mobile-filters-chevron" aria-hidden="true">▾</span>
+        </button>
         <fieldset class="filter-group filter-group-date">
             <legend>Date Range</legend>
             <label class="sr-only" for="filter-date-from">From date</label>
@@ -82,10 +87,6 @@
             <select id="filter-shape"><option value="">All</option></select>
         </div>
         <div class="filter-group">
-            <label for="filter-collection">Collection</label>
-            <select id="filter-collection"><option value="">All</option></select>
-        </div>
-        <div class="filter-group">
             <label for="filter-source">Source</label>
             <select id="filter-source"><option value="">All</option></select>
         </div>
@@ -97,13 +98,23 @@
             <label for="filter-state">State / Region</label>
             <select id="filter-state"><option value="">All</option></select>
         </div>
-        <div class="filter-group">
-            <label for="filter-hynek">Hynek</label>
-            <select id="filter-hynek"><option value="">All</option></select>
-        </div>
-        <div class="filter-group">
-            <label for="filter-vallee">Vallee</label>
-            <select id="filter-vallee"><option value="">All</option></select>
+        <button id="btn-more-filters" class="btn btn-secondary btn-small" type="button" aria-expanded="false" aria-controls="filters-advanced">
+            More filters
+            <span class="filter-count-badge" id="more-filter-count" hidden>0</span>
+        </button>
+        <div class="filters-advanced" id="filters-advanced" hidden>
+            <div class="filter-group">
+                <label for="filter-collection">Collection</label>
+                <select id="filter-collection"><option value="">All</option></select>
+            </div>
+            <div class="filter-group">
+                <label for="filter-hynek">Hynek</label>
+                <select id="filter-hynek"><option value="">All</option></select>
+            </div>
+            <div class="filter-group">
+                <label for="filter-vallee">Vallee</label>
+                <select id="filter-vallee"><option value="">All</option></select>
+            </div>
         </div>
         <button id="btn-apply-filters" class="btn btn-primary">Apply</button>
         <button id="btn-clear-filters" class="btn btn-secondary">Clear</button>
@@ -802,7 +813,7 @@ DATABASE_URL="postgresql://..." python mcp_server.py</code></pre>
     </main>
 
     <!-- Detail Modal -->
-    <div id="modal-overlay" class="modal-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div id="modal-overlay" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-title">
         <div class="modal">
             <div class="modal-header">
                 <h2 id="modal-title">Sighting Detail</h2>
