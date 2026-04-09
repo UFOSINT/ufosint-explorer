@@ -12,6 +12,7 @@ Run locally:
 """
 import os
 import json
+import time
 from flask import Flask, request, jsonify, send_from_directory
 from flask_caching import Cache
 
@@ -425,9 +426,18 @@ def api_map():
             [south_f, lat_step, west_f, lng_step] + args + [K_PER_CELL, req_limit],
         )
     else:
-        # Hash-based pseudo-random sample. ORDER BY ((id * large prime) % M)
-        # gives a deterministic shuffle over the bbox-filtered set; LIMIT
-        # then takes a representative slice.
+        # Hash-based pseudo-random sample using WHERE filter (not ORDER BY).
+        # ORDER BY ((id * prime) % M) would force PG to seq-scan, hash, and
+        # SORT every matching row before taking the LIMIT. With a WHERE
+        # filter the engine can stop scanning as soon as it has enough
+        # matching rows. We pick the modulo threshold so the expected sample
+        # is ~2x the requested limit (gives the engine some slack so the
+        # LIMIT actually clips, and PG's planner picks a sensible scan).
+        # Total geocoded population is ~106k; for limit=25000 we want
+        # ~50000 matches before the LIMIT, so threshold ~= 50000/106000
+        # = 47%. We use a 100-bucket modulo for granularity.
+        # Use a generous threshold (50%) for the common case so PG can
+        # short-circuit early via the LIMIT.
         sql = f"""
             SELECT s.id, l.latitude, l.longitude,
                    s.date_event, s.shape, sd.name AS source_name,
@@ -440,7 +450,7 @@ def api_map():
             JOIN source_database sd ON s.source_db_id = sd.id
             LEFT JOIN source_collection sc ON sd.collection_id = sc.id
             WHERE {where}
-            ORDER BY ((s.id * 2654435761) %% 1000000)
+              AND ((s.id * 2654435761) %% 100) < 50
             LIMIT %s
         """
         cur.execute(sql, args + [req_limit])
@@ -615,6 +625,7 @@ def api_timeline():
 
 
 @app.route("/api/search")
+@cache.cached(timeout=300, query_string=True)
 def api_search():
     """Search sightings by text and filters.
 
@@ -1092,7 +1103,54 @@ def _init_app():
         print("/health and routes will retry on first request.")
 
 
+def _prewarm_caches():
+    """Pre-warm PG's buffer cache and the flask response cache.
+
+    Runs in a background thread after gunicorn boots so the FIRST visitor
+    to the site doesn't pay the cold-cache cost. Hits the most common
+    landing-page queries via the in-process Flask test client (which
+    reuses the same cache and the same connection pool).
+
+    The map endpoint covers a couple of representative viewports so the
+    grid-sample CTE plan is also primed. ~30 seconds of background work
+    that turns the cold-user experience from "20-50 seconds" into "200ms".
+    """
+    import threading
+
+    def _warm():
+        try:
+            time.sleep(1)  # let the worker finish starting
+            client = app.test_client()
+            warm_paths = [
+                "/api/stats",
+                "/api/timeline",
+                "/api/sentiment/overview",
+                "/api/duplicates?page=0",
+                # Whole-world map view (the landing-page default)
+                "/api/map?south=-90&north=90&west=-180&east=180&zoom=2",
+                # A continental and a city viewport so both sample modes warm
+                "/api/map?south=25&north=50&west=-125&east=-65&zoom=4",
+                "/api/map?south=33.5&north=34.5&west=-118.5&east=-117.5&zoom=10",
+                "/api/heatmap?south=-90&north=90&west=-180&east=180",
+            ]
+            print(f"[prewarm] starting ({len(warm_paths)} queries)")
+            for p in warm_paths:
+                t0 = time.perf_counter()
+                try:
+                    r = client.get(p)
+                    print(f"[prewarm] {r.status_code}  {(time.perf_counter()-t0)*1000:6.0f}ms  {p[:60]}")
+                except Exception as e:
+                    print(f"[prewarm] FAIL {p}: {e}")
+            print("[prewarm] done")
+        except Exception as e:
+            print(f"[prewarm] thread crashed: {e}")
+
+    t = threading.Thread(target=_warm, daemon=True, name="prewarm")
+    t.start()
+
+
 _init_app()
+_prewarm_caches()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
