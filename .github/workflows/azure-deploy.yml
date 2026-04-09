@@ -147,14 +147,21 @@ jobs:
       - name: Wait for container restart
         run: sleep 30
 
+      # NB: we intentionally use bash pattern matching (`case`/`[[ ... == * ]]`)
+      # for these checks instead of `echo "$html" | grep -q`. Piping a 66KB
+      # variable into `grep -q` produces SIGPIPE (grep closes the pipe on
+      # first match before echo finishes writing), and `set -o pipefail`
+      # promotes the SIGPIPE to a failure for the whole step. Bash
+      # pattern matching runs in-process with no pipe.
+
       - name: Probe /health with retry
+        shell: bash
         run: |
           set -euo pipefail
           for attempt in 1 2 3 4 5 6 7 8 9 10; do
             echo "[$attempt/10] GET $LIVE_URL/health"
-            body=$(curl -sS --max-time 30 "$LIVE_URL/health" || echo "")
-            if echo "$body" | grep -q '"status":"ok"' && \
-               echo "$body" | grep -q '"sightings":[0-9]'; then
+            body=$(curl -sS --max-time 30 "$LIVE_URL/health" || true)
+            if [[ "$body" == *'"status":"ok"'* && "$body" == *'"sightings":'* ]]; then
               echo "OK: $body"
               exit 0
             fi
@@ -165,44 +172,50 @@ jobs:
           exit 1
 
       - name: Probe / for versioned asset URLs with retry
+        shell: bash
         run: |
           set -euo pipefail
+          html=""
           for attempt in 1 2 3 4 5 6 7 8 9 10; do
             echo "[$attempt/10] GET $LIVE_URL/"
-            html=$(curl -sS --max-time 30 "$LIVE_URL/?smoke=$(date +%s)" || echo "")
-            # All three conditions must hold at the same time, on the
-            # same response. Container-restart intermediate states can
-            # serve partial HTML — we only pass when it's all there.
-            if echo "$html" | grep -q 'style.css?v=' && \
-               echo "$html" | grep -q 'app.js?v=' && \
-               ! echo "$html" | grep -q '{{ASSET_VERSION}}'; then
-              version=$(echo "$html" | grep -oE 'style\.css\?v=[A-Za-z0-9]+' | head -1)
-              echo "OK: HTML contains versioned asset URLs ($version)"
+            html=$(curl -sS --max-time 30 "$LIVE_URL/?smoke=$(date +%s)" || true)
+            # All three conditions must hold on the *same* response.
+            # Bash in-process pattern match, no pipes → no SIGPIPE.
+            if [[ "$html" == *"style.css?v="* \
+               && "$html" == *"app.js?v="* \
+               && "$html" != *'{{ASSET_VERSION}}'* ]]; then
+              version="${html#*style.css?v=}"
+              version="${version%%\"*}"
+              echo "OK: HTML contains versioned asset URLs (v=$version)"
               exit 0
             fi
             echo "  HTML length: ${#html} bytes"
             sleep 15
           done
           echo "::error::rendered HTML never contained valid versioned asset URLs"
-          echo "--- last response (first 80 lines) ---"
-          echo "$html" | head -80
+          echo "--- last response (first 2000 bytes) ---"
+          printf '%s' "${html:0:2000}"
+          echo
           exit 1
 
       - name: Probe /api/filters and /api/stats
+        shell: bash
         run: |
           set -euo pipefail
           for endpoint in /api/filters /api/stats; do
+            ok=0
             for attempt in 1 2 3 4 5; do
               echo "[$attempt/5] GET $LIVE_URL$endpoint"
               if curl -sS --fail --max-time 30 "$LIVE_URL$endpoint" > /dev/null; then
                 echo "  OK"
+                ok=1
                 break
-              fi
-              if [ "$attempt" = "5" ]; then
-                echo "::error::$endpoint never responded 200"
-                exit 1
               fi
               sleep 10
             done
+            if [ "$ok" != "1" ]; then
+              echo "::error::$endpoint never responded 200"
+              exit 1
+            fi
           done
           echo "OK: core API endpoints respond 200"
