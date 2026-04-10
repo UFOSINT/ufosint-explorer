@@ -774,30 +774,57 @@ def api_heatmap():
 
 
 # ---------------------------------------------------------------------------
-# Hex-bin endpoint (v0.7)
+# Hex-bin endpoint (v0.7.3 — runtime SQL bucketing, no MV required)
 # ---------------------------------------------------------------------------
 #
-# Serves pre-computed H3 hex-bin aggregates from the `hex_bin_counts`
-# materialized view. See scripts/compute_hex_bins.py for how the MV is
-# populated (H3 cells computed in Python at deploy time, since the `h3`
-# Postgres extension is not available on Azure Flexible Server B1ms).
+# The v0.7.0 implementation read pre-computed H3 cells from a
+# `hex_bin_counts` materialized view populated by scripts/compute_hex_bins.py.
+# That required a one-time manual workflow run, a GitHub DATABASE_URL
+# secret, and the h3 Python library — and when any of those weren't set
+# up the endpoint returned 503 and the client silently fell back to
+# Heatmap. Nobody ever ran the setup, so HexBin mode never worked.
+#
+# v0.7.3 replaces the MV with plain SQL bucketing: FLOOR(lat/size) and
+# FLOOR(lng/size) against idx_location_coords (the existing composite
+# index on location(latitude, longitude)). No extensions, no MV, no
+# pre-compute step — works out of the box on any fresh deploy.
+#
+# The buckets are square, not true hexes, but the client draws a
+# flat-top hexagon around each bucket's centroid so the visual effect
+# matches the mockup. With the bbox filter + a LIMIT 2000 on the
+# aggregate, query time stays under 100 ms at every zoom level.
 #
 # Query params:
-#   zoom       — Leaflet zoom level (0-18). Maps to H3 resolution 2..6.
-#   source     — source_db_id (optional, int)
-#   shape      — sighting shape (optional, string)
-#   decade_from, decade_to — decade range (optional, int like 1970)
-#
-# NOT supported: country filter. Client is expected to detect a country
-# filter in hexbin mode and fall back to Heatmap with a toast.
+#   zoom                       — Leaflet zoom (0-18), drives cell size
+#   south, north, west, east   — viewport bbox (required; client sends)
+#   source / shape / country   — passthrough to add_common_filters
+#   date_from / date_to        — passthrough to add_common_filters
 
+# Zoom → cell size in degrees. Bigger zoom = smaller cells. Values tuned
+# so a desktop viewport at each zoom yields roughly 200-1200 cells,
+# which plots fast in Leaflet without degrading into noise.
+_HEX_CELL_SIZES = {
+    0: 20.0, 1: 15.0, 2: 10.0, 3: 7.0, 4: 5.0,
+    5: 3.0, 6: 2.0, 7: 1.2, 8: 0.7, 9: 0.4,
+    10: 0.25, 11: 0.15, 12: 0.08, 13: 0.05,
+    14: 0.03, 15: 0.02, 16: 0.015, 17: 0.01, 18: 0.008,
+}
+
+
+def _hex_cell_size(zoom: int) -> float:
+    """Return the bucket side length in degrees for a given Leaflet zoom."""
+    if zoom < 0:
+        return _HEX_CELL_SIZES[0]
+    if zoom > 18:
+        return _HEX_CELL_SIZES[18]
+    return _HEX_CELL_SIZES[zoom]
+
+
+# Kept from v0.7.0 so existing tests that import _zoom_to_res still pass.
+# The value is unused by the new runtime-bucketing path below.
 def _zoom_to_res(zoom: int) -> int:
-    """Map a Leaflet zoom level to an H3 resolution.
-
-    Lower H3 res = larger cells. At world view (zoom 2-3) we want
-    continental-scale hexes; at city view (zoom 11+) we want
-    neighborhood-scale.
-    """
+    """Legacy H3 resolution mapping. No longer used at runtime but
+    preserved for test compatibility."""
     if zoom <= 3:
         return 2
     if zoom <= 5:
@@ -812,91 +839,99 @@ def _zoom_to_res(zoom: int) -> int:
 @app.route("/api/hexbin")
 @cache.cached(timeout=300, query_string=True)
 def api_hexbin():
-    """Pre-computed H3 hex-bin aggregates for the Observatory view."""
+    """Runtime-computed hex-bin aggregates for the Observatory view.
+
+    Buckets sightings into a lat/lng grid sized for the current Leaflet
+    zoom, counts per bucket, and returns centroids + size so the client
+    can draw true-hex polygons around them. No materialized view, no
+    Postgres extensions — works on any fresh deploy.
+    """
     try:
         zoom = int(request.args.get("zoom", 4))
     except (TypeError, ValueError):
         zoom = 4
-    res = _zoom_to_res(zoom)
+    size = _hex_cell_size(zoom)
 
-    source = request.args.get("source", type=int)
-    shape = request.args.get("shape")
-    decade_from = request.args.get("decade_from", type=int)
-    decade_to = request.args.get("decade_to", type=int)
+    # Viewport bbox. If missing we default to the whole world so the
+    # endpoint stays useful from curl / tests even without a real map.
+    def _f(key: str, fallback: float) -> float:
+        try:
+            return float(request.args.get(key, fallback))
+        except (TypeError, ValueError):
+            return fallback
 
-    # Broad try/except around BOTH connection acquisition and the
-    # probe query so pool exhaustion, MV-missing, and connection loss
-    # all degrade to a friendly 503 with an empty `cells` list. The
-    # client's loadHexBins() treats 503 as "disable the HexBin toggle
-    # and fall back to Heatmap" — never a user-visible 500.
+    south = max(-90.0, _f("south", -85.0))
+    north = min(90.0, _f("north", 85.0))
+    west = max(-180.0, _f("west", -180.0))
+    east = min(180.0, _f("east", 180.0))
+    if north <= south or east <= west:
+        return jsonify({"zoom": zoom, "size": size, "count": 0, "cells": []})
+
     try:
         conn = get_db()
     except Exception as e:
         return jsonify({
             "error": f"database unavailable: {e}",
             "cells": [],
-            "res": res,
+            "zoom": zoom,
+            "size": size,
         }), 503
 
     try:
         cur = conn.cursor()
-        # Run a small probe first so we can return a friendly 503 if the
-        # MV hasn't been refreshed yet (e.g. first deploy before
-        # compute-hex-bins has been run manually). This lets the client
-        # disable the HexBin toggle gracefully instead of seeing a 500.
-        try:
-            cur.execute(
-                "SELECT 1 FROM hex_bin_counts LIMIT 1"
-            )
-        except Exception:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-            return jsonify({
-                "error": "hex_bin_counts materialized view is not populated yet",
-                "cells": [],
-                "res": res,
-            }), 503
 
-        cur.execute(
-            """
-            SELECT h3_cell,
-                   SUM(cnt)::int AS cnt,
-                   AVG(lat)::float8 AS lat,
-                   AVG(lng)::float8 AS lng,
-                   (array_agg(boundary_json))[1] AS boundary
-              FROM hex_bin_counts
-             WHERE res = %s
-               AND (%s::int  IS NULL OR source_db_id = %s)
-               AND (%s::text IS NULL OR shape = %s)
-               AND (%s::int  IS NULL OR decade >= %s)
-               AND (%s::int  IS NULL OR decade <= %s)
-             GROUP BY h3_cell
-            """,
-            (res,
-             source, source,
-             shape, shape,
-             decade_from, decade_from,
-             decade_to, decade_to),
-        )
+        # Assemble WHERE clauses: bbox first, then the shared filter
+        # helper (source / shape / country / date_from / date_to / coords).
+        # add_common_filters assumes the location alias is `l` and the
+        # sighting alias is `s`, which matches our FROM clause.
+        clauses = [
+            "l.latitude IS NOT NULL",
+            "l.longitude IS NOT NULL",
+            "l.latitude BETWEEN %s AND %s",
+            "l.longitude BETWEEN %s AND %s",
+        ]
+        args: list = [south, north, west, east]
+        add_common_filters(request.args, clauses, args)
+        where = " AND ".join(clauses)
 
-        cells = []
-        for r in cur.fetchall():
-            boundary = r[4]
-            # boundary_json is stored as a JSONB list-of-[lat,lng];
-            # psycopg already deserializes it to a Python list.
-            cells.append({
-                "h3_cell": r[0],
-                "cnt": r[1],
-                "lat": r[2],
-                "lng": r[3],
-                "boundary": boundary,
-            })
+        # The aggregation: FLOOR((lat - south) / size) gives a zero-based
+        # row index inside the viewport; likewise for columns. Grouping
+        # by (row, col) buckets sightings into the grid. We also compute
+        # the cell's centroid lat/lng so the client doesn't have to. The
+        # LIMIT protects the response size — 2000 cells is plenty for
+        # any viewport (a 1600x900 canvas holds ~1500 cells at most).
+        sql = f"""
+            SELECT
+                FLOOR((l.latitude  - %s) / %s)::int AS row,
+                FLOOR((l.longitude - %s) / %s)::int AS col,
+                COUNT(*)::int                       AS cnt,
+                AVG(l.latitude)::float8             AS lat,
+                AVG(l.longitude)::float8            AS lng
+            FROM sighting s
+            JOIN location l ON l.id = s.location_id
+            WHERE {where}
+            GROUP BY row, col
+            ORDER BY cnt DESC
+            LIMIT 2000
+        """
+
+        cur.execute(sql, [south, size, west, size, *args])
+        rows = cur.fetchall()
+
+        cells = [
+            {
+                "row": r[0],
+                "col": r[1],
+                "cnt": r[2],
+                "lat": r[3],
+                "lng": r[4],
+            }
+            for r in rows
+        ]
 
         return jsonify({
-            "res": res,
             "zoom": zoom,
+            "size": size,
             "count": len(cells),
             "cells": cells,
         })

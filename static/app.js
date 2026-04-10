@@ -1421,50 +1421,54 @@ function _sampleRamp(t) {
 }
 function _rgb(c) { return `rgb(${c[0]}, ${c[1]}, ${c[2]})`; }
 
+// Build a flat-top hexagon polygon (list of [lat, lng] vertices)
+// centered on (cLat, cLng) with a cell side length of `sizeDeg`
+// degrees. Longitude is stretched by 1/cos(lat) so the hex renders
+// as roughly equilateral on the Mercator projection, which is what
+// Leaflet uses. Returns 6 vertices — Leaflet closes the loop.
+function _hexPolygonAround(cLat, cLng, sizeDeg) {
+    const latFactor = Math.max(0.15, Math.cos(cLat * Math.PI / 180));
+    const r = sizeDeg * 0.58;  // visual radius ≈ half the bucket side, nudged larger
+    const pts = [];
+    for (let i = 0; i < 6; i++) {
+        const angle = (Math.PI / 3) * i + Math.PI / 6;  // flat-top orientation
+        pts.push([
+            cLat + r * Math.sin(angle),
+            cLng + (r * Math.cos(angle)) / latFactor,
+        ]);
+    }
+    return pts;
+}
+
 async function loadHexBins() {
     const status = document.getElementById("map-status");
     const hudStatus = document.getElementById("hud-status");
     if (!state.map) return;
 
-    // Country filter is NOT supported by the /api/hexbin endpoint (the
-    // pre-computed MV doesn't carry country). Auto-fall-back to Heatmap
-    // with a small toast so the user isn't stuck.
-    if (document.getElementById("filter-country")?.value) {
-        showToast("Hex binning unavailable with a country filter — showing Heatmap");
-        toggleMapMode("heatmap");
-        return;
-    }
+    // v0.7.3: the endpoint now computes bins on the fly in SQL with
+    // the same add_common_filters() helper used by /api/map, so
+    // country + date filters work out of the box. No more fallback
+    // to Heatmap, no more 503 state, no more pre-compute setup.
 
+    const bounds = state.map.getBounds();
     const zoom = state.map.getZoom();
     const params = getFilterParams();
     params.set("zoom", zoom);
-
-    // Convert date filters to decade params the MV understands.
-    const dfrom = document.getElementById("filter-date-from")?.value;
-    const dto = document.getElementById("filter-date-to")?.value;
-    if (dfrom && /^\d{4}/.test(dfrom)) {
-        params.set("decade_from", String(Math.floor(parseInt(dfrom.substring(0, 4), 10) / 10) * 10));
-    }
-    if (dto && /^\d{4}/.test(dto)) {
-        params.set("decade_to", String(Math.floor(parseInt(dto.substring(0, 4), 10) / 10) * 10));
-    }
+    params.set("south", bounds.getSouth().toFixed(4));
+    params.set("north", bounds.getNorth().toFixed(4));
+    params.set("west",  bounds.getWest().toFixed(4));
+    params.set("east",  bounds.getEast().toFixed(4));
 
     if (status) status.textContent = "BUILDING HEX GRID";
     if (hudStatus) hudStatus.textContent = "BUILDING HEX GRID";
 
     try {
-        const resp = await fetch(`/api/hexbin?${params}`);
-        if (resp.status === 503) {
-            showToast("Hex bins not computed yet — falling back to Heatmap");
-            _disableHexMode();
-            toggleMapMode("heatmap");
-            return;
-        }
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const data = await resp.json();
-
+        const data = await fetchJSON(`/api/hexbin?${params}`);
         state.hexLayer.clearLayers();
+
         const cells = data.cells || [];
+        const size = Number(data.size) || 2.0;
+
         if (cells.length === 0) {
             if (status) status.textContent = "0 hex cells in view";
             if (hudStatus) hudStatus.textContent = "NO DATA";
@@ -1472,8 +1476,8 @@ async function loadHexBins() {
             return;
         }
 
-        // Min/max for the color ramp scale — use log so one huge cell
-        // doesn't wash out everything else.
+        // Log scale on the color ramp so one huge cell doesn't wash
+        // out the rest. A single-cell bucket still gets a warm tint.
         let max = 0;
         for (const c of cells) if (c.cnt > max) max = c.cnt;
         const logMax = Math.log(max + 1);
@@ -1483,18 +1487,17 @@ async function loadHexBins() {
             total += c.cnt;
             const t = Math.log(c.cnt + 1) / logMax;
             const color = _rgb(_sampleRamp(t));
-            // boundary is a list of [lat, lng] pairs from the MV.
-            // Leaflet L.polygon expects a list of LatLng or [lat, lng].
-            const polygon = L.polygon(c.boundary, {
+            const ring = _hexPolygonAround(c.lat, c.lng, size);
+            const polygon = L.polygon(ring, {
                 color: color,
                 weight: 1,
-                opacity: 0.8,
+                opacity: 0.85,
                 fillColor: color,
-                fillOpacity: 0.45,
+                fillOpacity: 0.5,
             });
             polygon.bindTooltip(
                 `<div class="hex-tooltip">${c.cnt.toLocaleString()} sightings</div>`,
-                { sticky: true }
+                { sticky: true },
             );
             polygon.addTo(state.hexLayer);
         }
@@ -1504,16 +1507,9 @@ async function loadHexBins() {
         if (hudStatus) hudStatus.textContent = "READY";
     } catch (err) {
         console.error("loadHexBins error:", err);
-        if (status) status.textContent = "Couldn't load hex bins";
+        if (status) status.textContent = "Couldn't load hex bins — " + (err.message || err);
         if (hudStatus) hudStatus.textContent = "ERROR";
     }
-}
-
-function _disableHexMode() {
-    document.querySelectorAll('.mode-btn[data-mode="hexbin"], .map-mode-btn[data-mode="hexbin"]').forEach(btn => {
-        btn.disabled = true;
-        btn.title = "Hex bins not yet computed on the server";
-    });
 }
 
 // =========================================================================

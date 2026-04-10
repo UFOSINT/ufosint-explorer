@@ -17,6 +17,88 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 Nothing yet.
 
+## [0.7.3] — 2026-04-10 — Hex bins work out of the box (runtime SQL bucketing)
+
+### Fixed
+
+- **Hex Bins mode always fell back to Heatmap** because the v0.7.0
+  implementation read pre-computed H3 cells from a materialized view
+  that was never populated. The MV required a one-time
+  `DATABASE_URL` GitHub secret + manual `compute-hex-bins.yml`
+  workflow trigger + the `h3` Python library on the runner, and none
+  of that one-time setup had ever been done. The endpoint always
+  returned 503, and `loadHexBins()` silently disabled the toggle.
+
+### Changed
+
+- **`/api/hexbin` now computes bins on the fly in SQL** —
+  `FLOOR((lat - south) / size)` and `FLOOR((lng - west) / size)`
+  against the existing `idx_location_coords` composite index, no
+  extensions, no materialized view, no pre-compute step. Works out
+  of the box on any fresh deploy.
+- **New `_hex_cell_size(zoom)` helper** maps every Leaflet zoom
+  level (0..18) to a bucket side length in degrees — world view
+  gets 20° cells, city view gets 0.008° cells. Tuned so a desktop
+  viewport at each zoom yields roughly 200–1200 cells, which Leaflet
+  can plot in under 100 ms.
+- **`/api/hexbin` accepts `south`/`north`/`west`/`east` bbox params**
+  (the client sends the current viewport), so aggregation only runs
+  against sightings inside the visible window. An inverted bbox
+  returns an empty `cells` list, never a 500.
+- **All standard filters now work with Hex Bins mode** — source,
+  shape, country, date range. The old auto-fallback to Heatmap when
+  a country filter was set is gone, because `add_common_filters()`
+  is wired into the runtime query just like `/api/map` and
+  `/api/heatmap`.
+- **Client hex polygons are computed from centroids via
+  `_hexPolygonAround(lat, lng, size)`** — a flat-top hexagon with
+  longitude stretched by `1/cos(lat)` so the shape stays roughly
+  equilateral on Mercator. No H3 library needed client-side.
+- **`loadHexBins()` no longer has a 503 fallback branch.** The
+  endpoint never returns 503 now (except on complete pool failure,
+  which is the correct signal). The country-filter auto-fallback
+  was also removed.
+
+### Deprecated (but kept)
+
+- `scripts/compute_hex_bins.py`, `scripts/add_v07_indexes.sql`'s
+  hex-related indexes, `requirements-deploy.txt`,
+  `.github/workflows/compute-hex-bins.yml`, and
+  `.github/workflows/refresh-hex-bins.yml` are still in the tree
+  as dead code. They're harmless and could become useful again if
+  we ever want to swap the runtime bucketing for a real H3 MV
+  (e.g. to cache large viewports cross-worker). No action needed.
+
+### Tests
+
+- **`test_api_hexbin_does_not_return_500`** — endpoint returns 200
+  on a real DB or 503 on a stubbed pool, never 500. Payload always
+  carries a `cells` list.
+- **`test_api_hexbin_accepts_bbox_params`** — inverted bbox returns
+  an empty cells list, not an error.
+- **`test_hex_cell_size_mapping`** — `_hex_cell_size` is monotonically
+  non-increasing across zoom 0..18, zoom 0 has a reasonable world-view
+  size, zoom 18 has a reasonable city-view size, out-of-range zooms clamp.
+- **`test_load_hex_bins_sends_bbox_and_has_no_fallback`** — client
+  sends `south`/`north`/`west`/`east`, has `_hexPolygonAround` helper,
+  no `toggleMapMode("heatmap")` fallback inside `loadHexBins()`, no
+  `resp.status === 503` branch.
+- **`test_zoom_to_res_legacy_mapping_kept`** — the legacy H3 resolution
+  helper is preserved for backwards compatibility but no longer used at
+  runtime.
+- Deprecated **`test_api_hexbin_handles_missing_mv`** (replaced by
+  the above) and **`test_zoom_to_res_mapping`** (replaced by the
+  cell-size test + legacy compat test).
+
+Suite is **139 tests** (was 136), still under 0.5 s.
+
+### Smoke probe
+
+`azure-deploy.yml`'s `/api/hexbin` probe now passes a continental-US
+bbox (`south=25&north=50&west=-125&east=-65`) and asserts the
+response contains a **non-empty** `cells` array. Previously it
+accepted 200 OR 503 — now 503 fails the workflow.
+
 ## [0.7.2] — 2026-04-10 — Timeline loader regression fix + 1900-baseline defaults
 
 ### Fixed

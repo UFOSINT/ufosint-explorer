@@ -122,36 +122,68 @@ def test_api_hexbin_route_registered(flask_app):
     assert "/api/hexbin" in rules, "/api/hexbin route is not registered"
 
 
-def test_api_hexbin_handles_missing_mv(client):
-    """When the hex_bin_counts MV hasn't been populated yet (fresh
-    deploy), the endpoint should return 503 with an error JSON so the
-    client can disable the HexBin toggle gracefully instead of seeing
-    a raw 500."""
-    # We don't hit a real DB here — the tests stub the pool. The route
-    # will raise trying to query, catch it, and return 503. What we're
-    # asserting is that it does NOT return 500 (the old behavior).
-    resp = client.get("/api/hexbin?zoom=4")
+def test_api_hexbin_does_not_return_500(client):
+    """v0.7.3: /api/hexbin now buckets sightings on the fly via SQL
+    FLOOR(lat/size) — no MV, no extensions. On a stubbed DB the route
+    returns 503 (pool unavailable); against a real DB it should
+    return 200 with a cells array. It must NEVER return 500."""
+    resp = client.get("/api/hexbin?zoom=4&south=25&north=50&west=-125&east=-65")
     assert resp.status_code in (200, 503), (
-        f"/api/hexbin returned {resp.status_code} on a stubbed DB — "
-        f"should be 503 (no data) or 200 (success), never 500"
+        f"/api/hexbin returned {resp.status_code} — must be 200 (real DB) "
+        f"or 503 (stubbed DB / pool down), never 500"
     )
+    # Response must carry a cells list even on the 503 degrade path,
+    # so the client's loadHexBins() never crashes on missing fields.
+    payload = resp.get_json()
+    assert payload is not None
+    assert "cells" in payload
+    assert isinstance(payload["cells"], list)
+    assert "zoom" in payload
 
 
-def test_zoom_to_res_mapping():
-    """The zoom→resolution helper must cover all Leaflet zoom levels."""
+def test_api_hexbin_accepts_bbox_params(client):
+    """v0.7.3: the endpoint takes south/north/west/east like /api/map
+    so it only aggregates sightings in the current viewport. Missing
+    bbox params fall back to the whole world. An inverted bbox
+    (north <= south) returns an empty cells list."""
+    resp = client.get("/api/hexbin?zoom=4&south=50&north=25&west=-125&east=-65")
+    assert resp.status_code in (200, 503)
+    if resp.status_code == 200:
+        payload = resp.get_json()
+        assert payload["cells"] == [], (
+            "inverted bbox should return empty cells, not a 500"
+        )
+
+
+def test_hex_cell_size_mapping():
+    """v0.7.3: _hex_cell_size maps every Leaflet zoom level (0..18)
+    to a degrees-per-cell value. Larger zoom = smaller cells."""
+    import importlib
+    app_mod = importlib.import_module("app")
+    f = app_mod._hex_cell_size
+    # Monotonically non-increasing as zoom grows
+    sizes = [f(z) for z in range(0, 19)]
+    for i in range(1, len(sizes)):
+        assert sizes[i] <= sizes[i - 1], (
+            f"cell size should shrink with zoom; got {sizes[i-1]} at z{i-1} "
+            f"and {sizes[i]} at z{i}"
+        )
+    # Reasonable bounds
+    assert sizes[0] >= 10.0, "zoom 0 cell is smaller than 10° — world view would be empty"
+    assert sizes[18] <= 0.02, "zoom 18 cell is larger than 0.02° — city view would be coarse"
+    # Out-of-range clamps
+    assert f(-5) == f(0)
+    assert f(99) == f(18)
+
+
+def test_zoom_to_res_legacy_mapping_kept():
+    """The legacy H3 resolution helper is unused at runtime after v0.7.3
+    but is kept for backwards compatibility with anyone importing it."""
     import importlib
     app_mod = importlib.import_module("app")
     z2r = app_mod._zoom_to_res
     assert z2r(0) == 2
-    assert z2r(3) == 2
-    assert z2r(4) == 3
-    assert z2r(5) == 3
-    assert z2r(6) == 4
-    assert z2r(7) == 4
-    assert z2r(8) == 5
-    assert z2r(9) == 5
     assert z2r(10) == 6
-    assert z2r(18) == 6
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +284,43 @@ def test_app_js_has_load_observatory():
     # Timeline is its own first-class tab again. Asserted more
     # specifically in test_switch_tab_no_longer_aliases_timeline.
     assert 'if (tab === "map") {' in content
+
+
+def test_load_hex_bins_sends_bbox_and_has_no_fallback():
+    """v0.7.3: loadHexBins() must pass the current Leaflet viewport
+    bounds to /api/hexbin, must build client-side hexagons from the
+    response centroids via _hexPolygonAround, and must NOT auto-
+    fall-back to Heatmap on 503 or when a country filter is set
+    (both fallbacks were removed because the runtime endpoint
+    handles all filter combos and never needs a pre-compute setup)."""
+    content = _read(APP_JS)
+    # Bbox plumbing
+    assert 'params.set("south"' in content
+    assert 'params.set("north"' in content
+    assert 'params.set("west"' in content
+    assert 'params.set("east"' in content
+    # Client-side polygon construction
+    assert "function _hexPolygonAround" in content, (
+        "_hexPolygonAround helper missing — hex cells will render "
+        "without any geometry"
+    )
+    # The old fallbacks must be gone from the loadHexBins body
+    import re as _re
+    body_match = _re.search(
+        r"async function loadHexBins\(\).*?^\}",
+        content,
+        _re.DOTALL | _re.MULTILINE,
+    )
+    assert body_match, "couldn't find loadHexBins body"
+    body = body_match.group(0)
+    assert 'toggleMapMode("heatmap")' not in body, (
+        "loadHexBins still auto-falls-back to Heatmap — v0.7.3 removed "
+        "that path because the runtime endpoint handles every filter combo"
+    )
+    assert "resp.status === 503" not in body, (
+        "loadHexBins still has the 503 fallback branch — not needed in "
+        "v0.7.3 since the endpoint computes on the fly"
+    )
 
 
 def test_app_js_has_hex_mode_branch():

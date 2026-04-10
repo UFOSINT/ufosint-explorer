@@ -263,24 +263,30 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # /api/hexbin returns 200 when the hex_bin_counts MV is populated
-          # or 503 when it isn't (first deploy before compute-hex-bins
-          # has been triggered manually). Both are acceptable — the
-          # client handles 503 by disabling the HexBin mode toggle. We
-          # fail ONLY on unexpected statuses (500, 404, timeouts).
+          # v0.7.3: /api/hexbin buckets sightings on the fly in SQL —
+          # no MV, no extensions. It should return 200 with a non-empty
+          # `cells` array for any reasonable viewport. We pass a
+          # sensible desktop bbox (continental US) so we're not counting
+          # zero cells by default.
           for attempt in 1 2 3; do
-            echo "[$attempt/3] GET $LIVE_URL/api/hexbin?zoom=4"
-            code=$(curl -sS -o /tmp/hexbin.json -w '%{http_code}' --max-time 30 \
-                        "$LIVE_URL/api/hexbin?zoom=4" || echo "000")
+            url="$LIVE_URL/api/hexbin?zoom=4&south=25&north=50&west=-125&east=-65"
+            echo "[$attempt/3] GET $url"
+            code=$(curl -sS -o /tmp/hexbin.json -w '%{http_code}' --max-time 30 "$url" || echo "000")
             case "$code" in
-              200) echo "  OK: hex_bin_counts is populated"; exit 0 ;;
-              503) echo "  OK: 503 (MV not yet populated — client falls back to Heatmap)"; exit 0 ;;
+              200)
+                cells=$(python -c "import json; print(len(json.load(open('/tmp/hexbin.json'))['cells']))" 2>/dev/null || echo 0)
+                if [ "$cells" -gt 0 ]; then
+                  echo "  OK: $cells hex cells returned"
+                  exit 0
+                fi
+                echo "  200 but empty cells list — retrying"
+                ;;
               000) echo "  curl failed, retrying…" ;;
               *)   echo "  unexpected code $code" ;;
             esac
             sleep 10
           done
-          echo "::error::/api/hexbin never returned 200 or 503"
+          echo "::error::/api/hexbin didn't return 200 with a non-empty cells list"
           cat /tmp/hexbin.json || true
           exit 1
 
