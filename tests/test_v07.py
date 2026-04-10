@@ -349,6 +349,57 @@ def test_switch_tab_no_longer_aliases_timeline():
     )
 
 
+def test_switch_tab_has_timeline_branch():
+    """v0.7.2 regression guard: switchTab() must call loadTimeline()
+    when the user clicks the Timeline tab. When the timeline → observatory
+    alias was removed in v0.7.1 the corresponding `else if (tab ===
+    "timeline") loadTimeline()` branch was missing, so clicking Timeline
+    activated the panel but never rendered the chart. Keep the branch
+    pinned."""
+    content = _read(APP_JS)
+    import re as _re
+    # Must contain the exact `else if (tab === "timeline")` branch
+    # followed by a loadTimeline() call, all inside the switchTab body.
+    tl_branch = _re.search(
+        r'else if \(tab === "timeline"\)\s*\{\s*[^}]*loadTimeline\(\)',
+        content,
+    )
+    assert tl_branch, (
+        "switchTab() is missing the `else if (tab === \"timeline\") { "
+        "loadTimeline() }` branch — the Timeline tab will activate the "
+        "panel but the chart will never render."
+    )
+
+
+def test_default_date_range_helper_exists_and_is_called_at_boot():
+    """v0.7.2: applyDefaultDateRange() seeds filter-date-from=1900
+    and filter-date-to=<current year> on fresh page loads so every
+    view opens on the modern sighting era. The helper has to run
+    BEFORE applyHashToFilters() so deep-link hashes still win."""
+    content = _read(APP_JS)
+    assert "function applyDefaultDateRange()" in content, (
+        "applyDefaultDateRange() helper is missing from app.js"
+    )
+    assert 'fromEl.value = "1900"' in content, (
+        "applyDefaultDateRange() doesn't seed 1900 as the default from year"
+    )
+    # Must be called at boot before the hash restore runs. We assert
+    # the call appears somewhere in the DOMContentLoaded handler.
+    assert "applyDefaultDateRange();" in content, (
+        "applyDefaultDateRange() is defined but never called at boot"
+    )
+
+
+def test_time_brush_min_year_is_1900():
+    """v0.7.2: the Observatory time brush floor moved from 1947 to
+    1900. Keeps the pre-Roswell context visible (foo fighters, 1896
+    airship wave references, etc) on the histogram."""
+    content = _read(APP_JS)
+    assert "const BRUSH_MIN_YEAR = 1900;" in content, (
+        "BRUSH_MIN_YEAR is no longer 1900 — the brush floor regressed"
+    )
+
+
 def test_map_place_search_is_at_bottom_middle():
     """v0.7.1: the place search moved from top-left (where it covered
     the mode toggle) to bottom-middle. The CSS rule must use `bottom`

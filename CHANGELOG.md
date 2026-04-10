@@ -17,6 +17,44 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 Nothing yet.
 
+## [0.7.2] — 2026-04-10 — Timeline loader regression fix + 1900-baseline defaults
+
+### Fixed
+
+- **Timeline tab rendered a blank chart.** When v0.7.1 de-aliased
+  Timeline from Observatory, the corresponding `else if (tab ===
+  "timeline") loadTimeline()` branch was missing from `switchTab()`,
+  so clicking Timeline activated the panel but never called the
+  chart renderer. Network panel showed `/api/map` firing instead of
+  `/api/timeline`. Restored the branch + pinned it with a regression
+  test (`test_switch_tab_has_timeline_branch`).
+
+### Changed
+
+- **Default date range is now 1900 → current year.** New
+  `applyDefaultDateRange()` helper seeds `filter-date-from=1900` and
+  `filter-date-to=<current year>` on fresh page loads, before
+  `applyHashToFilters()` runs so deep-link hashes still win. Only
+  fills fields that are empty, so the Clear button still resets to
+  an empty range for users who want pre-1900 data. Applied across
+  Map, Timeline, and Search — the modern sighting era is now the
+  default view instead of the full 34 AD → 2026 span.
+- **`TimeBrush.BRUSH_MIN_YEAR` moved from 1947 → 1900.** Keeps the
+  pre-Roswell context visible on the histogram (1896 airship wave,
+  foo fighters, etc.) so users see continuity rather than a hard
+  floor at WWII.
+
+### Tests
+
+Three new regression tests in `tests/test_v07.py`:
+- `test_switch_tab_has_timeline_branch` — asserts the missing branch
+  is back. This is the invariant that failed in v0.7.1.
+- `test_default_date_range_helper_exists_and_is_called_at_boot` —
+  pins `applyDefaultDateRange()` + its call in `DOMContentLoaded`.
+- `test_time_brush_min_year_is_1900` — pins the brush floor constant.
+
+Suite is now **136 tests** (was 133), still under 0.5s.
+
 ## [0.7.1] — 2026-04-10 — UFOSINT rename, place search reflow, Timeline restored
 
 Small polish patch on top of v0.7.0 based on a round of immediate feedback.

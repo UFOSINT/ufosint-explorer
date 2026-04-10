@@ -191,12 +191,21 @@ document.addEventListener("DOMContentLoaded", async () => {
     // v0.7: Theme toggle (SIGNAL / DECLASS)
     initThemeToggle();
 
+    // v0.7.2: default date range is 1900 → current year. The UFOSINT
+    // DB technically has records back to year 34 AD, but 1900+ is the
+    // meaningful modern era and users expect a sane starting range
+    // across Map, Timeline, and Search. Applied BEFORE the hash-
+    // restore below so any #/...?date_from=1950 deep link still wins.
+    // The Clear button resets both fields to empty, so users who
+    // want to explore pre-1900 data can opt out at any time.
+    applyDefaultDateRange();
+
     // Init map
     initMap();
 
     // v0.7: Observatory is the default tab. switchTab() validates the
-    // name against VALID_TABS, aliases map/timeline → observatory, and
-    // falls back to observatory for any garbage (including a polluted
+    // name against VALID_TABS, aliases map → observatory, and falls
+    // back to observatory for any garbage (including a polluted
     // #/undefined hash from older buggy sessions).
     switchTab("observatory");
 
@@ -726,6 +735,13 @@ function switchTab(tab) {
         // subsequent activations just invalidateSize on the Leaflet map
         // so it reflows after a panel switch.
         loadObservatory();
+    } else if (tab === "timeline") {
+        // v0.7.2 fix: when Timeline was de-aliased from Observatory in
+        // v0.7.1, this branch was missing — the panel would activate
+        // but loadTimeline() never ran, so the chart canvas stayed
+        // blank. Now it renders the Chart.js histogram + drill-down
+        // exactly like the v0.6 Timeline tab.
+        loadTimeline();
     } else if (tab === "insights") {
         loadInsights();
     } else if (tab === "duplicates") {
@@ -1541,7 +1557,12 @@ function showToast(msg, ms = 3000) {
 // Play button auto-scrubs the window forward.
 // =========================================================================
 
-const BRUSH_MIN_YEAR = 1947;
+// v0.7.2: brush starts at 1900 instead of 1947 so the full modern
+// sighting era is visible (the database has records back to the
+// mid-1800s but 1900+ is where the curve becomes meaningful, and
+// 1947 arbitrarily cut off the pre-Roswell context). BRUSH_MAX_YEAR
+// uses the current year + 1 so in-progress year bars are visible.
+const BRUSH_MIN_YEAR = 1900;
 const BRUSH_MAX_YEAR = new Date().getFullYear() + 1;
 
 class TimeBrush {
@@ -1849,6 +1870,19 @@ function debounce(fn, ms) {
 // =========================================================================
 // Theme toggle (v0.7) — SIGNAL (cyan on void) / DECLASS (burgundy on paper)
 // =========================================================================
+
+// v0.7.2: Seeds the global date-range filter with 1900 → current year
+// the first time the page loads, so every view (Observatory map,
+// Timeline chart, Search results) opens on the modern sighting era
+// instead of the full 34 AD → 2026 span. Only fills fields that are
+// actually empty — a hash like #/search?date_from=1973-10-15 still
+// wins because applyHashToFilters() runs after this.
+function applyDefaultDateRange() {
+    const fromEl = document.getElementById("filter-date-from");
+    const toEl = document.getElementById("filter-date-to");
+    if (fromEl && !fromEl.value) fromEl.value = "1900";
+    if (toEl && !toEl.value) toEl.value = String(new Date().getFullYear());
+}
 
 function initThemeToggle() {
     const opts = document.querySelectorAll(".theme-opt");
