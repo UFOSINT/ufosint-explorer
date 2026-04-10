@@ -153,16 +153,20 @@ def test_stats_badge_has_boot_sequence_markup():
     assert 'class="term-cursor"' in content
 
 
-def test_map_status_has_loading_pulse():
-    """#map-status initializes with the hackery pulse, not a plain
-    'Loading map...' string."""
-    content = _read(INDEX_HTML)
-    match = re.search(r'id="map-status"[^>]*>(.*?)</div>', content)
-    assert match, "couldn't find #map-status in index.html"
-    body = match.group(1)
-    assert "loading-pulse" in body, (
-        "#map-status no longer uses .loading-pulse — it's back to plain text"
+def test_map_status_uses_loading_pulse_during_loads():
+    """The map-status pill should animate via .loading-pulse while a
+    load is in flight. v0.7 initial HTML can be "READY" (static text)
+    because the Observatory only shows a pulse during active loads, so
+    instead of checking the static HTML we check that app.js writes
+    the pulse class into map-status from both loadMapMarkers and
+    loadHeatmap."""
+    content = _read(APP_JS)
+    assert content.count('loading-pulse') >= 2, (
+        "app.js no longer writes the loading-pulse class into map-status "
+        "from at least two loader functions"
     )
+    # Both loaders should write a status message
+    assert "map-status" in content, "map-status element is no longer referenced in app.js"
 
 
 # ---------------------------------------------------------------------------

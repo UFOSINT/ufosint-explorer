@@ -107,7 +107,7 @@ jobs:
           retention-days: 3
 
   # -----------------------------------------------------------------
-  # 3. DEPLOY — upload to Azure App Service
+  # 3. DEPLOY — run v0.7 DB migrations, then upload to Azure App Service
   # -----------------------------------------------------------------
   deploy:
     runs-on: ubuntu-latest
@@ -116,6 +116,9 @@ jobs:
       name: Production
       url: ${{ steps.deploy-to-webapp.outputs.webapp-url }}
     steps:
+      - name: Checkout (for migration SQL files)
+        uses: actions/checkout@v4
+
       - name: Download artifact from build job
         uses: actions/download-artifact@v4
         with:
@@ -123,6 +126,31 @@ jobs:
 
       - name: Unzip artifact for deployment
         run: unzip release.zip
+
+      # v0.7: apply idempotent index migrations BEFORE the code deploy,
+      # so the new /api/sighting/<id> UNION ALL query has indexes ready
+      # the instant the new container comes up. The migration file uses
+      # CREATE INDEX IF NOT EXISTS everywhere — safe to run on every
+      # deploy. Skipped if DATABASE_URL secret is not configured so a
+      # fresh repo clone can deploy without this one-time setup.
+      - name: Install postgresql-client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql-client
+
+      - name: Apply v0.7 index migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DATABASE_URL:-}" ]; then
+            echo "::warning::DATABASE_URL secret not set — skipping index migration"
+            echo "Add DATABASE_URL to repo secrets to enable automatic schema updates"
+            exit 0
+          fi
+          echo "Running scripts/add_v07_indexes.sql …"
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f scripts/add_v07_indexes.sql
+          echo "Index migration complete."
 
       - name: Deploy to Azure Web App
         id: deploy-to-webapp
@@ -219,3 +247,47 @@ jobs:
             fi
           done
           echo "OK: core API endpoints respond 200"
+
+      - name: Probe /api/hexbin (v0.7)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # /api/hexbin returns 200 when the hex_bin_counts MV is populated
+          # or 503 when it isn't (first deploy before compute-hex-bins
+          # has been triggered manually). Both are acceptable — the
+          # client handles 503 by disabling the HexBin mode toggle. We
+          # fail ONLY on unexpected statuses (500, 404, timeouts).
+          for attempt in 1 2 3; do
+            echo "[$attempt/3] GET $LIVE_URL/api/hexbin?zoom=4"
+            code=$(curl -sS -o /tmp/hexbin.json -w '%{http_code}' --max-time 30 \
+                        "$LIVE_URL/api/hexbin?zoom=4" || echo "000")
+            case "$code" in
+              200) echo "  OK: hex_bin_counts is populated"; exit 0 ;;
+              503) echo "  OK: 503 (MV not yet populated — client falls back to Heatmap)"; exit 0 ;;
+              000) echo "  curl failed, retrying…" ;;
+              *)   echo "  unexpected code $code" ;;
+            esac
+            sleep 10
+          done
+          echo "::error::/api/hexbin never returned 200 or 503"
+          cat /tmp/hexbin.json || true
+          exit 1
+
+      - name: Probe /api/sighting/136613 (v0.7 504 fix)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # This was the endpoint that 504'd on cold cache. With the
+          # new btree indexes + @cache.cached the warm path should
+          # respond in under 500 ms and the cold path under 3 s.
+          for attempt in 1 2 3; do
+            echo "[$attempt/3] GET $LIVE_URL/api/sighting/136613"
+            if curl -sS --fail --max-time 15 "$LIVE_URL/api/sighting/136613" \
+                    -o /tmp/sighting.json; then
+              echo "  OK — sighting detail returned under 15s"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::/api/sighting/<id> still timing out — the 504 is back"
+          exit 1

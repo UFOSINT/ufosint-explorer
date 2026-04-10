@@ -12,7 +12,7 @@ const state = {
     map: null,
     markerLayer: null,
     heatLayer: null,
-    mapMode: "clusters",  // "clusters" or "heatmap"
+    mapMode: "points",    // "points" (clustered markers) | "heatmap" | "hexbin" — v0.7 renamed "clusters" → "points"
     chart: null,
     timelineYear: null,  // null = yearly view, "2005" = monthly drill-down
     searchPage: 0,
@@ -106,8 +106,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     // the dropdowns so we serialize the rest of init behind that.
     await filtersPromise.catch(() => {});
 
-    // Setup tabs
-    document.querySelectorAll(".tab").forEach(btn => {
+    // Setup tabs. Filter to nav tabs with a data-tab AND skip the gear
+    // icon — it shares the .tab class for consistent styling but has
+    // its own click handler in initSettingsMenu() that opens the
+    // dropdown instead of switching panels. Without the filter, clicking
+    // the gear would call switchTab(undefined) and blank out the
+    // entire panel area.
+    document.querySelectorAll(".tab[data-tab]").forEach(btn => {
+        if (btn.id === "settings-btn") return;
         btn.addEventListener("click", () => switchTab(btn.dataset.tab));
     });
 
@@ -182,24 +188,33 @@ document.addEventListener("DOMContentLoaded", async () => {
     applySettingsToUI();
     aiInitListeners();
 
+    // v0.7: Theme toggle (SIGNAL / DECLASS)
+    initThemeToggle();
+
     // Init map
     initMap();
+
+    // v0.7: Observatory is the default tab. switchTab() validates the
+    // name against VALID_TABS, aliases map/timeline → observatory, and
+    // falls back to observatory for any garbage (including a polluted
+    // #/undefined hash from older buggy sessions).
+    switchTab("observatory");
 
     // ----- URL hash routing: load any deep-linked tab + filters -----
     const initial = readHash();
     if (initial) {
         applyHashToFilters(initial.params);
-        if (initial.tab && initial.tab !== "map") {
+        if (initial.tab && VALID_TABS.has(initial.tab) &&
+                initial.tab !== "map" && initial.tab !== "timeline" &&
+                initial.tab !== "observatory") {
             switchTab(initial.tab);
             if (initial.tab === "search") {
                 doSearch();
             }
-        } else if (initial.tab === "map") {
-            // applyHashToFilters above already populated the filter inputs;
-            // re-fire the map load with them
-            if (state.mapMode === "heatmap") loadHeatmap();
-            else loadMapMarkers();
         }
+        // If tab is map/timeline/observatory or garbage we stay on
+        // observatory (already set above). The legacy alias in
+        // switchTab() handles any subsequent navigations.
     }
 
     // Back/forward navigation
@@ -670,24 +685,50 @@ function formatLocation(city, st, country) {
 // =========================================================================
 // Tabs
 // =========================================================================
+// Whitelist of real tab names. Used by switchTab as a guard so a
+// stray call or a polluted URL hash (e.g. "#/undefined" from an
+// earlier buggy click handler) can't blank out the whole panel area.
+const VALID_TABS = new Set([
+    "observatory", "map", "timeline", "search",
+    "duplicates", "insights", "methodology", "ai", "connect",
+]);
+
 function switchTab(tab) {
+    // Guard against stray calls: missing tab, literal "undefined"
+    // from a polluted URL hash, or any name not in our whitelist.
+    // Falls back to the Observatory so the user never sees a blank
+    // panel area.
+    if (!tab || !VALID_TABS.has(tab)) {
+        tab = "observatory";
+    }
+
+    // v0.7 alias: Map + Timeline are now both the Observatory dashboard.
+    // Legacy deep links like #/map?shape=triangle or #/timeline?year=1997
+    // still resolve to the right tab by remembering the original intent
+    // in state.legacyView and then falling through to the observatory
+    // branch. The time-brush below picks up state.timelineYear on load
+    // so drill-down from the old Timeline tab path still works.
+    if (tab === "map" || tab === "timeline") {
+        state.legacyView = tab;
+        tab = "observatory";
+    }
+
     state.activeTab = tab;
 
     document.querySelectorAll(".tab").forEach(b => b.classList.remove("active"));
-    document.querySelector(`.tab[data-tab="${tab}"]`).classList.add("active");
+    const tabBtn = document.querySelector(`.tab[data-tab="${tab}"]:not([hidden])`);
+    if (tabBtn) tabBtn.classList.add("active");
 
     document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
-    document.getElementById(`panel-${tab}`).classList.add("active");
+    const panel = document.getElementById(`panel-${tab}`);
+    if (panel) panel.classList.add("active");
 
-    if (tab === "map") {
-        // Leaflet needs an invalidateSize when shown
-        setTimeout(() => {
-            if (state.map) state.map.invalidateSize();
-            if (state.mapMode === "heatmap") loadHeatmap();
-            else loadMapMarkers();
-        }, 100);
-    } else if (tab === "timeline") {
-        loadTimeline();
+    if (tab === "observatory") {
+        // Observatory owns the #map node + the time brush. On first
+        // activation we populate the left rail and bind the brush;
+        // subsequent activations just invalidateSize on the Leaflet map
+        // so it reflows after a panel switch.
+        loadObservatory();
     } else if (tab === "insights") {
         loadInsights();
     } else if (tab === "duplicates") {
@@ -881,6 +922,28 @@ function initMap() {
         },
     });
 
+    // Hex bin layer (v0.7) — initially not added to the map. Populated
+    // by loadHexBins() from /api/hexbin which returns pre-computed H3
+    // cell boundaries + counts. Stays a plain LayerGroup because each
+    // cell is a small L.polygon and we clear + re-add on every load.
+    state.hexLayer = L.layerGroup();
+
+    // HUD readout wiring: mousemove over the map updates the top-right
+    // LAT/LON readout so users get a live crosshair feel. Throttled by
+    // the DOM update cost of setting textContent — no rAF needed.
+    const hudLat = document.getElementById("hud-lat");
+    const hudLon = document.getElementById("hud-lon");
+    if (hudLat && hudLon) {
+        state.map.on("mousemove", (e) => {
+            hudLat.textContent = e.latlng.lat.toFixed(3) + "°";
+            hudLon.textContent = e.latlng.lng.toFixed(3) + "°";
+        });
+        state.map.on("mouseout", () => {
+            hudLat.textContent = "—";
+            hudLon.textContent = "—";
+        });
+    }
+
     // Load data on move end, debounced + abortable. A casual pan fires
     // multiple moveend events in rapid succession; without this each one
     // triggered a full /api/map request and stale responses could arrive
@@ -898,6 +961,7 @@ function initMap() {
             mapReloadAbort = new AbortController();
             const signal = mapReloadAbort.signal;
             if (state.mapMode === "heatmap") loadHeatmap(signal);
+            else if (state.mapMode === "hexbin") loadHexBins();
             else loadMapMarkers(signal);
         }, 200);
     }
@@ -1088,7 +1152,7 @@ async function loadAll() {
     // jarring native confirm() dialog. First click swaps the button into
     // a "Tap again to load NN,NNN" state for 3 seconds; second click
     // proceeds. No second click = revert to original label.
-    if (total > 30000 && state.mapMode === "clusters" && !btn.classList.contains("confirming")) {
+    if (total > 30000 && state.mapMode === "points" && !btn.classList.contains("confirming")) {
         btn.dataset.total = String(total);
         btn.dataset.originalText = btn.textContent;
         btn.classList.add("confirming");
@@ -1149,27 +1213,671 @@ async function loadAll() {
 }
 
 // =========================================================================
-// Map Mode Toggle (Clusters / Heatmap)
+// Map Mode Toggle (Points / Heatmap / HexBin)
+// -------------------------------------------------------------------------
+// Three modes: "points" = markercluster layer, "heatmap" = leaflet.heat,
+// "hexbin" = L.layerGroup of L.polygon H3 cells from /api/hexbin.
+// The v0.7 Observatory mode toggle calls this with .mode-btn instead of
+// .map-mode-btn, so we update both selectors for backward compat.
 // =========================================================================
 function toggleMapMode(mode) {
     if (mode === state.mapMode) return;
+    const prev = state.mapMode;
     state.mapMode = mode;
 
-    // Update toggle button styles
-    document.querySelectorAll(".map-mode-btn").forEach(btn => {
+    // Update toggle button styles (both old .map-mode-btn AND new .mode-btn)
+    document.querySelectorAll(".map-mode-btn, .mode-btn").forEach(btn => {
         btn.classList.toggle("active", btn.dataset.mode === mode);
     });
 
+    // Remove whichever layer was active, add the new one.
+    if (prev === "heatmap")  state.map.removeLayer(state.heatLayer);
+    else if (prev === "hexbin") state.map.removeLayer(state.hexLayer);
+    else                      state.map.removeLayer(state.markerLayer);
+
     if (mode === "heatmap") {
-        // Remove clusters, add heat
-        state.map.removeLayer(state.markerLayer);
         state.map.addLayer(state.heatLayer);
         loadHeatmap();
+    } else if (mode === "hexbin") {
+        state.map.addLayer(state.hexLayer);
+        loadHexBins();
     } else {
-        // Remove heat, add clusters
-        state.map.removeLayer(state.heatLayer);
+        // "points" — the legacy clusters mode
         state.map.addLayer(state.markerLayer);
         loadMapMarkers();
+    }
+}
+// Legacy alias — the old "clusters" name maps to the new "points" mode.
+function _modeAlias(mode) { return mode === "clusters" ? "points" : mode; }
+
+// =========================================================================
+// Observatory (v0.7) — unified dashboard for map + timeline
+// -------------------------------------------------------------------------
+// Entry point called from switchTab("observatory"). Idempotent: first
+// call mounts the rail, binds the mode toggle, and creates the TimeBrush.
+// Subsequent calls just invalidateSize() on the Leaflet map so it
+// reflows after a panel switch.
+// =========================================================================
+
+function loadObservatory() {
+    // Leaflet needs an explicit invalidateSize when its container was
+    // hidden via display:none (which .panel:not(.active) does). Delay
+    // one tick so the browser has applied the class change.
+    setTimeout(() => {
+        if (state.map) state.map.invalidateSize();
+    }, 50);
+
+    if (!state.observatoryMounted) {
+        mountObservatoryRail();
+        wireObservatoryModeToggle();
+        state.observatoryMounted = true;
+    }
+
+    // Initialize the time brush lazily on first Observatory visit.
+    if (!state.timeBrush) {
+        const canvas = document.getElementById("brush-canvas");
+        if (canvas) {
+            state.timeBrush = new TimeBrush(canvas, onBrushWindowChange);
+            state.timeBrush.ensureData();
+        }
+    }
+
+    // Trigger the right data load based on current mode.
+    if (state.mapMode === "heatmap") loadHeatmap();
+    else if (state.mapMode === "hexbin") loadHexBins();
+    else loadMapMarkers();
+}
+
+function wireObservatoryModeToggle() {
+    document.querySelectorAll(".mode-toggle .mode-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+            const mode = btn.dataset.mode;
+            if (mode) toggleMapMode(mode);
+        });
+    });
+}
+
+// Populate the left rail from /api/filters (already fetched at boot)
+// and from /api/stats by-source counts. Rail checkboxes mirror the
+// existing filter dropdowns one-way: toggling a rail checkbox writes
+// into #filter-source / #filter-shape and calls applyFilters().
+// First version supports single-select (matches the existing <select>
+// semantics); multi-select is a future improvement.
+function mountObservatoryRail() {
+    const srcList = document.getElementById("rail-source-list");
+    const shapeList = document.getElementById("rail-shape-list");
+    if (!srcList || !shapeList) return;
+
+    // Source list: read options from #filter-source (already populated
+    // at boot from /api/filters).
+    const srcSelect = document.getElementById("filter-source");
+    srcList.innerHTML = "";
+    if (srcSelect) {
+        for (const opt of srcSelect.options) {
+            if (!opt.value) continue;  // skip "All"
+            const li = document.createElement("li");
+            li.innerHTML = `
+                <input type="checkbox" id="rail-src-${opt.value}"
+                       data-src-id="${opt.value}" checked>
+                <label for="rail-src-${opt.value}">${escapeHtml(opt.text)}</label>
+            `;
+            srcList.appendChild(li);
+            li.querySelector("input").addEventListener("change", (e) => {
+                // Single-source select semantics: ticking one checks it,
+                // unticking reverts to "all". Real multi-select would
+                // need backend support for IN lists.
+                if (e.target.checked) {
+                    srcSelect.value = opt.value;
+                    // Uncheck all other rail source checkboxes to mirror
+                    // the single-value state of the underlying <select>.
+                    srcList.querySelectorAll("input[data-src-id]").forEach(c => {
+                        if (c !== e.target) c.checked = false;
+                    });
+                } else {
+                    srcSelect.value = "";
+                }
+                applyFilters();
+            });
+        }
+    }
+
+    // Shape list: same story for shapes.
+    const shapeSelect = document.getElementById("filter-shape");
+    shapeList.innerHTML = "";
+    if (shapeSelect) {
+        for (const opt of shapeSelect.options) {
+            if (!opt.value) continue;
+            const li = document.createElement("li");
+            li.innerHTML = `
+                <input type="checkbox" id="rail-shape-${opt.value}"
+                       data-shape="${opt.value}" checked>
+                <label for="rail-shape-${opt.value}">${escapeHtml(opt.text)}</label>
+            `;
+            shapeList.appendChild(li);
+            li.querySelector("input").addEventListener("change", (e) => {
+                if (e.target.checked) {
+                    shapeSelect.value = opt.value;
+                    shapeList.querySelectorAll("input[data-shape]").forEach(c => {
+                        if (c !== e.target) c.checked = false;
+                    });
+                } else {
+                    shapeSelect.value = "";
+                }
+                applyFilters();
+            });
+        }
+    }
+}
+
+// =========================================================================
+// Hex bin rendering (v0.7)
+// =========================================================================
+//
+// loadHexBins() fetches pre-computed H3 cells from /api/hexbin and draws
+// each as a Leaflet polygon. The color ramp mirrors the mockup's cold→hot
+// gradient (void → plasma → amber → hot). Cells with counts near the
+// dataset max get warm colors; cells near the min stay cold.
+//
+// Graceful degradation: if the backend returns 503 (MV not populated
+// yet) we disable the HexBin toggle and fall back to Points mode so
+// the user never sees an empty canvas.
+
+const HEX_RAMP = [
+    [0.00, [0, 59, 92]],     // cold plasma
+    [0.25, [0, 140, 180]],
+    [0.50, [0, 240, 255]],   // hot plasma
+    [0.75, [255, 179, 0]],   // amber
+    [1.00, [255, 78, 0]],    // hot
+];
+
+function _sampleRamp(t) {
+    t = Math.max(0, Math.min(1, t));
+    for (let i = 1; i < HEX_RAMP.length; i++) {
+        if (t <= HEX_RAMP[i][0]) {
+            const [t0, c0] = HEX_RAMP[i - 1];
+            const [t1, c1] = HEX_RAMP[i];
+            const k = (t - t0) / (t1 - t0);
+            return [
+                Math.round(c0[0] + (c1[0] - c0[0]) * k),
+                Math.round(c0[1] + (c1[1] - c0[1]) * k),
+                Math.round(c0[2] + (c1[2] - c0[2]) * k),
+            ];
+        }
+    }
+    return HEX_RAMP[HEX_RAMP.length - 1][1];
+}
+function _rgb(c) { return `rgb(${c[0]}, ${c[1]}, ${c[2]})`; }
+
+async function loadHexBins() {
+    const status = document.getElementById("map-status");
+    const hudStatus = document.getElementById("hud-status");
+    if (!state.map) return;
+
+    // Country filter is NOT supported by the /api/hexbin endpoint (the
+    // pre-computed MV doesn't carry country). Auto-fall-back to Heatmap
+    // with a small toast so the user isn't stuck.
+    if (document.getElementById("filter-country")?.value) {
+        showToast("Hex binning unavailable with a country filter — showing Heatmap");
+        toggleMapMode("heatmap");
+        return;
+    }
+
+    const zoom = state.map.getZoom();
+    const params = getFilterParams();
+    params.set("zoom", zoom);
+
+    // Convert date filters to decade params the MV understands.
+    const dfrom = document.getElementById("filter-date-from")?.value;
+    const dto = document.getElementById("filter-date-to")?.value;
+    if (dfrom && /^\d{4}/.test(dfrom)) {
+        params.set("decade_from", String(Math.floor(parseInt(dfrom.substring(0, 4), 10) / 10) * 10));
+    }
+    if (dto && /^\d{4}/.test(dto)) {
+        params.set("decade_to", String(Math.floor(parseInt(dto.substring(0, 4), 10) / 10) * 10));
+    }
+
+    if (status) status.textContent = "BUILDING HEX GRID";
+    if (hudStatus) hudStatus.textContent = "BUILDING HEX GRID";
+
+    try {
+        const resp = await fetch(`/api/hexbin?${params}`);
+        if (resp.status === 503) {
+            showToast("Hex bins not computed yet — falling back to Heatmap");
+            _disableHexMode();
+            toggleMapMode("heatmap");
+            return;
+        }
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+
+        state.hexLayer.clearLayers();
+        const cells = data.cells || [];
+        if (cells.length === 0) {
+            if (status) status.textContent = "0 hex cells in view";
+            if (hudStatus) hudStatus.textContent = "NO DATA";
+            document.getElementById("rail-visible-count").textContent = "0";
+            return;
+        }
+
+        // Min/max for the color ramp scale — use log so one huge cell
+        // doesn't wash out everything else.
+        let max = 0;
+        for (const c of cells) if (c.cnt > max) max = c.cnt;
+        const logMax = Math.log(max + 1);
+
+        let total = 0;
+        for (const c of cells) {
+            total += c.cnt;
+            const t = Math.log(c.cnt + 1) / logMax;
+            const color = _rgb(_sampleRamp(t));
+            // boundary is a list of [lat, lng] pairs from the MV.
+            // Leaflet L.polygon expects a list of LatLng or [lat, lng].
+            const polygon = L.polygon(c.boundary, {
+                color: color,
+                weight: 1,
+                opacity: 0.8,
+                fillColor: color,
+                fillOpacity: 0.45,
+            });
+            polygon.bindTooltip(
+                `<div class="hex-tooltip">${c.cnt.toLocaleString()} sightings</div>`,
+                { sticky: true }
+            );
+            polygon.addTo(state.hexLayer);
+        }
+
+        document.getElementById("rail-visible-count").textContent = total.toLocaleString();
+        if (status) status.textContent = `${cells.length.toLocaleString()} hex cells (${total.toLocaleString()} sightings)`;
+        if (hudStatus) hudStatus.textContent = "READY";
+    } catch (err) {
+        console.error("loadHexBins error:", err);
+        if (status) status.textContent = "Couldn't load hex bins";
+        if (hudStatus) hudStatus.textContent = "ERROR";
+    }
+}
+
+function _disableHexMode() {
+    document.querySelectorAll('.mode-btn[data-mode="hexbin"], .map-mode-btn[data-mode="hexbin"]').forEach(btn => {
+        btn.disabled = true;
+        btn.title = "Hex bins not yet computed on the server";
+    });
+}
+
+// =========================================================================
+// Small toast helper — used by the hex-bin country-filter fall-back
+// and future warnings. Appends a transient pill to the top-right corner
+// that auto-dismisses after 3 s.
+// =========================================================================
+function showToast(msg, ms = 3000) {
+    let host = document.getElementById("toast-host");
+    if (!host) {
+        host = document.createElement("div");
+        host.id = "toast-host";
+        host.style.cssText = "position:fixed;top:70px;right:24px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none";
+        document.body.appendChild(host);
+    }
+    const el = document.createElement("div");
+    el.className = "toast";
+    el.style.cssText = "background:var(--bg-panel);border:1px solid var(--accent);color:var(--text);font-family:var(--font-mono);font-size:11px;padding:8px 14px;border-radius:4px;box-shadow:0 4px 12px rgba(0,0,0,0.4);opacity:0;transform:translateY(-6px);transition:opacity 180ms,transform 180ms;pointer-events:auto;max-width:320px";
+    el.textContent = msg;
+    host.appendChild(el);
+    requestAnimationFrame(() => {
+        el.style.opacity = "1";
+        el.style.transform = "none";
+    });
+    setTimeout(() => {
+        el.style.opacity = "0";
+        el.style.transform = "translateY(-6px)";
+        setTimeout(() => el.remove(), 200);
+    }, ms);
+}
+
+// =========================================================================
+// TimeBrush — draggable time window + histogram + key sighting annotations
+// -------------------------------------------------------------------------
+// Lives at the bottom of the Observatory panel. Fetches the full-range
+// monthly histogram once from /api/timeline?bins=monthly&full_range=1
+// and the key sightings list from static/data/key_sightings.json.
+//
+// Dragging the window or its handles updates state.filters.date_from/to
+// (debounced 300 ms) and triggers a map reload via applyFilters().
+// Play button auto-scrubs the window forward.
+// =========================================================================
+
+const BRUSH_MIN_YEAR = 1947;
+const BRUSH_MAX_YEAR = new Date().getFullYear() + 1;
+
+class TimeBrush {
+    constructor(canvas, onChange) {
+        this.canvas = canvas;
+        this.ctx = canvas.getContext("2d");
+        this.onChange = debounce(onChange, 300);
+        this.minT = Date.UTC(BRUSH_MIN_YEAR, 0, 1);
+        this.maxT = Date.UTC(BRUSH_MAX_YEAR, 0, 1);
+        // Default window covers the entire range so nothing's filtered
+        // until the user drags.
+        this.window = [this.minT, this.maxT];
+        this.bins = null;
+        this.annotations = null;
+        this.playing = false;
+        this.playRaf = null;
+        this.windowEl = document.getElementById("brush-window");
+        this.annEl = document.getElementById("brush-annotations");
+        this._bindEvents();
+    }
+
+    async ensureData() {
+        // Fire both fetches in parallel.
+        const [histResp, annResp] = await Promise.all([
+            fetch("/api/timeline?bins=monthly&full_range=1").catch(() => null),
+            fetch("/static/data/key_sightings.json").catch(() => null),
+        ]);
+        if (histResp && histResp.ok) {
+            const data = await histResp.json();
+            this.bins = this._collapseTimelineToMonthly(data);
+        }
+        if (annResp && annResp.ok) {
+            this.annotations = await annResp.json();
+        }
+        this._resize();
+        this._draw();
+        this._drawAnnotations();
+        this._syncWindow();
+    }
+
+    // /api/timeline's default shape groups by year across sources. For
+    // the brush we flatten it to total-per-year and treat that as the
+    // histogram. When the backend supports monthly binning we'll swap
+    // this out. Returns [{year, count}].
+    _collapseTimelineToMonthly(data) {
+        const rows = data?.data || {};
+        const out = [];
+        for (const year of Object.keys(rows).sort()) {
+            const sourceMap = rows[year] || {};
+            let total = 0;
+            for (const k of Object.keys(sourceMap)) total += Number(sourceMap[k] || 0);
+            out.push({ year: parseInt(year, 10), count: total });
+        }
+        return out;
+    }
+
+    _resize() {
+        const r = this.canvas.getBoundingClientRect();
+        const dpr = window.devicePixelRatio || 1;
+        this.canvas.width = Math.max(1, Math.round(r.width * dpr));
+        this.canvas.height = Math.max(1, Math.round(r.height * dpr));
+        this.w = r.width;
+        this.h = r.height;
+        this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    _draw() {
+        const ctx = this.ctx;
+        const w = this.w, h = this.h;
+        if (!w || !h) return;
+        ctx.clearRect(0, 0, w, h);
+
+        // Read theme tokens so the histogram inherits SIGNAL or DECLASS colors.
+        const accent = getComputedStyle(document.body).getPropertyValue("--accent").trim() || "#00F0FF";
+        const line = getComputedStyle(document.body).getPropertyValue("--border").trim() || "#13203A";
+
+        if (!this.bins || this.bins.length === 0) {
+            // Empty state
+            ctx.fillStyle = line;
+            ctx.fillRect(0, h - 1, w, 1);
+            return;
+        }
+
+        const yearSpan = BRUSH_MAX_YEAR - BRUSH_MIN_YEAR;
+        let max = 1;
+        for (const b of this.bins) if (b.count > max) max = b.count;
+
+        // Histogram bars — one per year. Width = w / yearSpan.
+        const barW = Math.max(1, w / yearSpan);
+        ctx.fillStyle = accent;
+        ctx.globalAlpha = 0.85;
+        for (const b of this.bins) {
+            if (b.year < BRUSH_MIN_YEAR || b.year > BRUSH_MAX_YEAR) continue;
+            const x = ((b.year - BRUSH_MIN_YEAR) / yearSpan) * w;
+            const hBar = (b.count / max) * (h - 14);
+            ctx.fillRect(x, h - hBar - 2, Math.max(0.6, barW - 0.4), hBar);
+        }
+        ctx.globalAlpha = 1;
+
+        // Baseline
+        ctx.strokeStyle = line;
+        ctx.lineWidth = 0.5;
+        ctx.beginPath();
+        ctx.moveTo(0, h - 0.5);
+        ctx.lineTo(w, h - 0.5);
+        ctx.stroke();
+    }
+
+    _drawAnnotations() {
+        if (!this.annEl || !this.annotations) return;
+        this.annEl.innerHTML = "";
+        const yearSpan = BRUSH_MAX_YEAR - BRUSH_MIN_YEAR;
+        for (const a of this.annotations) {
+            if (!a.year) continue;
+            const x = ((a.year - BRUSH_MIN_YEAR) / yearSpan) * 100; // percent
+            const line = document.createElement("div");
+            line.className = "brush-ann";
+            line.style.left = x + "%";
+            line.title = `${a.label} (${a.year}) — ${a.tag || ""}`;
+            this.annEl.appendChild(line);
+            const label = document.createElement("div");
+            label.className = "brush-ann-label";
+            label.style.left = x + "%";
+            label.textContent = a.label;
+            this.annEl.appendChild(label);
+        }
+    }
+
+    _syncWindow() {
+        if (!this.windowEl || !this.w) return;
+        const span = this.maxT - this.minT;
+        const leftPct = ((this.window[0] - this.minT) / span) * 100;
+        const rightPct = ((this.window[1] - this.minT) / span) * 100;
+        this.windowEl.style.left = leftPct + "%";
+        this.windowEl.style.width = (rightPct - leftPct) + "%";
+        // Update readout
+        const y0 = new Date(this.window[0]).getUTCFullYear();
+        const y1 = new Date(this.window[1]).getUTCFullYear();
+        const rangeLabel = document.getElementById("brush-range-label");
+        const railLabel = document.getElementById("rail-time-label");
+        const text = `${y0} — ${y1}`;
+        if (rangeLabel) rangeLabel.textContent = text;
+        if (railLabel) railLabel.textContent = text;
+    }
+
+    _pxToTime(px) {
+        const span = this.maxT - this.minT;
+        return this.minT + (px / this.w) * span;
+    }
+
+    _bindEvents() {
+        if (!this.windowEl || !this.canvas) return;
+
+        const wrap = this.canvas.parentElement;
+        let dragging = null;  // { mode: "move" | "l" | "r", startX, startL, startR }
+
+        const onPointerDown = (e) => {
+            if (e.target.classList.contains("brush-handle")) {
+                const handle = e.target.dataset.handle;
+                dragging = {
+                    mode: handle,
+                    startX: e.clientX,
+                    startL: this.window[0],
+                    startR: this.window[1],
+                };
+                this.windowEl.classList.add("dragging");
+                e.preventDefault();
+                return;
+            }
+            if (e.target === this.windowEl) {
+                dragging = {
+                    mode: "move",
+                    startX: e.clientX,
+                    startL: this.window[0],
+                    startR: this.window[1],
+                };
+                this.windowEl.classList.add("dragging");
+                e.preventDefault();
+                return;
+            }
+        };
+
+        const onPointerMove = (e) => {
+            if (!dragging) return;
+            const wrapRect = wrap.getBoundingClientRect();
+            const dx = e.clientX - dragging.startX;
+            const span = this.maxT - this.minT;
+            const dt = (dx / wrapRect.width) * span;
+
+            let newL = dragging.startL;
+            let newR = dragging.startR;
+            if (dragging.mode === "move") {
+                newL = dragging.startL + dt;
+                newR = dragging.startR + dt;
+                // Clamp within bounds
+                if (newL < this.minT) { newR += (this.minT - newL); newL = this.minT; }
+                if (newR > this.maxT) { newL -= (newR - this.maxT); newR = this.maxT; }
+            } else if (dragging.mode === "l") {
+                newL = Math.max(this.minT, Math.min(newR - 30 * 86400000, dragging.startL + dt));
+            } else if (dragging.mode === "r") {
+                newR = Math.min(this.maxT, Math.max(newL + 30 * 86400000, dragging.startR + dt));
+            }
+            this.window = [newL, newR];
+            this._syncWindow();
+            this.onChange(this._isoDate(newL), this._isoDate(newR));
+        };
+
+        const onPointerUp = () => {
+            if (!dragging) return;
+            dragging = null;
+            this.windowEl.classList.remove("dragging");
+        };
+
+        wrap.addEventListener("pointerdown", onPointerDown);
+        window.addEventListener("pointermove", onPointerMove);
+        window.addEventListener("pointerup", onPointerUp);
+
+        // Resize observer so the histogram redraws on viewport changes.
+        const ro = new ResizeObserver(() => {
+            this._resize();
+            this._draw();
+            this._syncWindow();
+        });
+        ro.observe(this.canvas);
+
+        // Play / reset buttons
+        const playBtn = document.getElementById("brush-play");
+        const resetBtn = document.getElementById("brush-reset");
+        if (playBtn) playBtn.addEventListener("click", () => this.togglePlay());
+        if (resetBtn) resetBtn.addEventListener("click", () => this.reset());
+    }
+
+    _isoDate(ms) {
+        return new Date(ms).toISOString().substring(0, 10);
+    }
+
+    togglePlay() {
+        const playBtn = document.getElementById("brush-play");
+        if (this.playing) {
+            this.playing = false;
+            cancelAnimationFrame(this.playRaf);
+            if (playBtn) {
+                playBtn.classList.remove("playing");
+                playBtn.textContent = "▶ PLAY";
+                playBtn.setAttribute("aria-pressed", "false");
+            }
+            // Commit the final window on stop.
+            this.onChange.flush?.();
+            return;
+        }
+        this.playing = true;
+        if (playBtn) {
+            playBtn.classList.add("playing");
+            playBtn.textContent = "■ STOP";
+            playBtn.setAttribute("aria-pressed", "true");
+        }
+        const span = this.maxT - this.minT;
+        const winSpan = this.window[1] - this.window[0];
+        const step = () => {
+            if (!this.playing) return;
+            let a = this.window[0] + span * 0.004;
+            let b = a + winSpan;
+            if (b > this.maxT) { a = this.minT; b = a + winSpan; }
+            this.window = [a, b];
+            this._syncWindow();
+            this.onChange(this._isoDate(a), this._isoDate(b));
+            this.playRaf = requestAnimationFrame(step);
+        };
+        step();
+    }
+
+    reset() {
+        this.window = [this.minT, this.maxT];
+        this._syncWindow();
+        this.onChange(this._isoDate(this.minT), this._isoDate(this.maxT));
+    }
+}
+
+// Called by TimeBrush on every (debounced) window change. Writes the
+// new date range into the global filter inputs and re-fires the active
+// view's data load.
+function onBrushWindowChange(fromISO, toISO) {
+    const fromEl = document.getElementById("filter-date-from");
+    const toEl   = document.getElementById("filter-date-to");
+    if (!fromEl || !toEl) return;
+    fromEl.value = fromISO;
+    toEl.value = toISO;
+    // Update the window count on the brush header from /api/stats count,
+    // or just fall back to "—" — the full count requires a fresh query.
+    // For now re-run the map via applyFilters().
+    applyFilters();
+}
+
+// Small debounce helper used by TimeBrush.
+function debounce(fn, ms) {
+    let t = null;
+    const wrapped = (...args) => {
+        clearTimeout(t);
+        t = setTimeout(() => fn(...args), ms);
+    };
+    wrapped.flush = () => { /* no-op for now */ };
+    return wrapped;
+}
+
+// =========================================================================
+// Theme toggle (v0.7) — SIGNAL (cyan on void) / DECLASS (burgundy on paper)
+// =========================================================================
+
+function initThemeToggle() {
+    const opts = document.querySelectorAll(".theme-opt");
+    if (opts.length === 0) return;
+    opts.forEach(btn => {
+        btn.addEventListener("click", () => {
+            const theme = btn.dataset.theme;
+            if (theme !== "signal" && theme !== "declass") return;
+            setTheme(theme);
+        });
+    });
+}
+
+function setTheme(theme) {
+    document.body.classList.remove("theme-signal", "theme-declass");
+    document.body.classList.add("theme-" + theme);
+    document.querySelectorAll(".theme-opt").forEach(b => {
+        const active = b.dataset.theme === theme;
+        b.classList.toggle("active", active);
+        b.setAttribute("aria-checked", String(active));
+    });
+    try { localStorage.setItem("ufosint-theme", theme); } catch (e) {}
+    // Re-draw the time brush so histogram picks up the new accent color.
+    if (state.timeBrush) {
+        state.timeBrush._draw();
+        state.timeBrush._drawAnnotations();
     }
 }
 
@@ -1420,16 +2128,16 @@ async function executeSearch() {
 
     // Progressive loading: if we already have real result cards on
     // screen, keep them visible (dimmed) while the new request runs.
-    // The terminal mounts in the info bar AND a centered overlay
-    // appears over the results list. Cold starts (first search of the
-    // session, or a result list that's currently empty) fall back to
-    // the v0.5 skeleton + terminal pattern so the user has *something*
-    // to look at instead of a blank panel.
+    // v0.7: The terminal mounts in the info bar (edge HUD), but we
+    // NEVER cover the existing result cards with an overlay — that
+    // was the v0.6 behavior and it blocked interaction with cards
+    // users were trying to read. On cold start (empty results list)
+    // we still show the skeleton shimmer so the panel isn't blank.
+    // On refresh, existing cards stay fully visible and clickable
+    // until the new ones land and swap in.
     mountLoadingTerminal(info, "search", { compact: true, header: "SEARCH" });
     const hasExistingResults = !!resultsEl.querySelector(".result-card:not(.skeleton)");
-    if (hasExistingResults) {
-        showProgressiveLoading(resultsEl, "search", { header: "SEARCH" });
-    } else {
+    if (!hasExistingResults) {
         resultsEl.innerHTML = `
             <div class="result-card skeleton"></div>
             <div class="result-card skeleton"></div>

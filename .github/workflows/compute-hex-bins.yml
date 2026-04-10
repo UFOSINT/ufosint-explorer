@@ -1,0 +1,63 @@
+name: Compute H3 hex bins (one-shot)
+
+# Manual-only workflow. Runs scripts/compute_hex_bins.py against the
+# live Postgres database to populate the location_hex support table and
+# rebuild the hex_bin_counts materialized view that /api/hexbin reads.
+#
+# Run this after:
+#   - the initial v0.7 deploy (to populate an empty MV for the first time)
+#   - any large data reload via migrate_sqlite_to_pg.py
+#   - adding new H3 resolutions or changing the MV schema
+#
+# Requires the GitHub repo secret DATABASE_URL to point at the live DB
+# with write privileges (same credentials the migration script uses).
+# The runtime App Service container does NOT have h3 installed — only
+# this workflow's runner does, via requirements-deploy.txt.
+#
+# Expected runtime: ~5-10 minutes for ~105K geocoded locations.
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why are you running this? (logged only)"
+        required: false
+        default: "routine refresh"
+
+permissions:
+  contents: read
+
+jobs:
+  compute:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install deploy-time dependencies (includes h3)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-deploy.txt
+
+      - name: Verify DATABASE_URL is set
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::DATABASE_URL secret is not configured in repo settings"
+            exit 1
+          fi
+          echo "DATABASE_URL is set (length: ${#DATABASE_URL})"
+          echo "Reason for this run: ${{ github.event.inputs.reason }}"
+
+      - name: Compute hex bins and rebuild materialized view
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python scripts/compute_hex_bins.py

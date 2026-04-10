@@ -773,6 +773,137 @@ def api_heatmap():
     })
 
 
+# ---------------------------------------------------------------------------
+# Hex-bin endpoint (v0.7)
+# ---------------------------------------------------------------------------
+#
+# Serves pre-computed H3 hex-bin aggregates from the `hex_bin_counts`
+# materialized view. See scripts/compute_hex_bins.py for how the MV is
+# populated (H3 cells computed in Python at deploy time, since the `h3`
+# Postgres extension is not available on Azure Flexible Server B1ms).
+#
+# Query params:
+#   zoom       — Leaflet zoom level (0-18). Maps to H3 resolution 2..6.
+#   source     — source_db_id (optional, int)
+#   shape      — sighting shape (optional, string)
+#   decade_from, decade_to — decade range (optional, int like 1970)
+#
+# NOT supported: country filter. Client is expected to detect a country
+# filter in hexbin mode and fall back to Heatmap with a toast.
+
+def _zoom_to_res(zoom: int) -> int:
+    """Map a Leaflet zoom level to an H3 resolution.
+
+    Lower H3 res = larger cells. At world view (zoom 2-3) we want
+    continental-scale hexes; at city view (zoom 11+) we want
+    neighborhood-scale.
+    """
+    if zoom <= 3:
+        return 2
+    if zoom <= 5:
+        return 3
+    if zoom <= 7:
+        return 4
+    if zoom <= 9:
+        return 5
+    return 6
+
+
+@app.route("/api/hexbin")
+@cache.cached(timeout=300, query_string=True)
+def api_hexbin():
+    """Pre-computed H3 hex-bin aggregates for the Observatory view."""
+    try:
+        zoom = int(request.args.get("zoom", 4))
+    except (TypeError, ValueError):
+        zoom = 4
+    res = _zoom_to_res(zoom)
+
+    source = request.args.get("source", type=int)
+    shape = request.args.get("shape")
+    decade_from = request.args.get("decade_from", type=int)
+    decade_to = request.args.get("decade_to", type=int)
+
+    # Broad try/except around BOTH connection acquisition and the
+    # probe query so pool exhaustion, MV-missing, and connection loss
+    # all degrade to a friendly 503 with an empty `cells` list. The
+    # client's loadHexBins() treats 503 as "disable the HexBin toggle
+    # and fall back to Heatmap" — never a user-visible 500.
+    try:
+        conn = get_db()
+    except Exception as e:
+        return jsonify({
+            "error": f"database unavailable: {e}",
+            "cells": [],
+            "res": res,
+        }), 503
+
+    try:
+        cur = conn.cursor()
+        # Run a small probe first so we can return a friendly 503 if the
+        # MV hasn't been refreshed yet (e.g. first deploy before
+        # compute-hex-bins has been run manually). This lets the client
+        # disable the HexBin toggle gracefully instead of seeing a 500.
+        try:
+            cur.execute(
+                "SELECT 1 FROM hex_bin_counts LIMIT 1"
+            )
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            return jsonify({
+                "error": "hex_bin_counts materialized view is not populated yet",
+                "cells": [],
+                "res": res,
+            }), 503
+
+        cur.execute(
+            """
+            SELECT h3_cell,
+                   SUM(cnt)::int AS cnt,
+                   AVG(lat)::float8 AS lat,
+                   AVG(lng)::float8 AS lng,
+                   (array_agg(boundary_json))[1] AS boundary
+              FROM hex_bin_counts
+             WHERE res = %s
+               AND (%s::int  IS NULL OR source_db_id = %s)
+               AND (%s::text IS NULL OR shape = %s)
+               AND (%s::int  IS NULL OR decade >= %s)
+               AND (%s::int  IS NULL OR decade <= %s)
+             GROUP BY h3_cell
+            """,
+            (res,
+             source, source,
+             shape, shape,
+             decade_from, decade_from,
+             decade_to, decade_to),
+        )
+
+        cells = []
+        for r in cur.fetchall():
+            boundary = r[4]
+            # boundary_json is stored as a JSONB list-of-[lat,lng];
+            # psycopg already deserializes it to a Python list.
+            cells.append({
+                "h3_cell": r[0],
+                "cnt": r[1],
+                "lat": r[2],
+                "lng": r[3],
+                "boundary": boundary,
+            })
+
+        return jsonify({
+            "res": res,
+            "zoom": zoom,
+            "count": len(cells),
+            "cells": cells,
+        })
+    finally:
+        conn.close()
+
+
 @app.route("/api/timeline")
 @cache.cached(timeout=600, query_string=True)
 def api_timeline():
@@ -1040,8 +1171,18 @@ def api_export_json():
 
 
 @app.route("/api/sighting/<int:sid>")
+@cache.cached(timeout=600, query_string=False)
 def api_sighting(sid):
-    """Full detail for a single sighting."""
+    """Full detail for a single sighting.
+
+    Cached for 10 minutes per-worker because individual record detail is
+    immutable for the lifetime of a DB revision (the ETL pipeline only
+    rebuilds the entire snapshot). Cold hits previously timed out with
+    HTTP 504 on B1ms because the duplicate-candidate subquery used an OR
+    across two columns with no supporting index — see idx_duplicate_a /
+    idx_duplicate_b added in scripts/add_v07_indexes.sql, and the
+    UNION ALL rewrite below.
+    """
     conn = get_db()
     try:
         cur = conn.cursor()
@@ -1074,23 +1215,42 @@ def api_sighting(sid):
             except (json.JSONDecodeError, TypeError):
                 record["raw_json"] = "(parse error)"
 
-        # Check for duplicate candidates
+        # Check for duplicate candidates.
+        #
+        # v0.7 fix: the old query used WHERE sighting_id_a = %s OR
+        # sighting_id_b = %s which can't use an index on either column.
+        # Rewritten as a UNION ALL of two equality scans — the planner
+        # now uses idx_duplicate_a for the first branch and idx_duplicate_b
+        # for the second, both O(log n). This is the core 504 fix.
         cur.execute("""
-            SELECT dc.sighting_id_a, dc.sighting_id_b,
-                   dc.similarity_score, dc.match_method, dc.status,
-                   s2.date_event, sd2.name as other_source,
-                   COALESCE(l2.city, '') as other_city,
-                   COALESCE(l2.state, '') as other_state
-            FROM duplicate_candidate dc
-            JOIN sighting s2 ON s2.id = CASE
-                WHEN dc.sighting_id_a = %s THEN dc.sighting_id_b
-                ELSE dc.sighting_id_a END
-            JOIN source_database sd2 ON s2.source_db_id = sd2.id
-            LEFT JOIN location l2 ON s2.location_id = l2.id
-            WHERE dc.sighting_id_a = %s OR dc.sighting_id_b = %s
-            ORDER BY dc.similarity_score DESC
+            (
+                SELECT dc.sighting_id_a, dc.sighting_id_b,
+                       dc.similarity_score, dc.match_method, dc.status,
+                       s2.date_event, sd2.name as other_source,
+                       COALESCE(l2.city, '') as other_city,
+                       COALESCE(l2.state, '') as other_state
+                  FROM duplicate_candidate dc
+                  JOIN sighting s2 ON s2.id = dc.sighting_id_b
+                  JOIN source_database sd2 ON s2.source_db_id = sd2.id
+                  LEFT JOIN location l2 ON s2.location_id = l2.id
+                 WHERE dc.sighting_id_a = %s
+            )
+            UNION ALL
+            (
+                SELECT dc.sighting_id_a, dc.sighting_id_b,
+                       dc.similarity_score, dc.match_method, dc.status,
+                       s2.date_event, sd2.name as other_source,
+                       COALESCE(l2.city, '') as other_city,
+                       COALESCE(l2.state, '') as other_state
+                  FROM duplicate_candidate dc
+                  JOIN sighting s2 ON s2.id = dc.sighting_id_a
+                  JOIN source_database sd2 ON s2.source_db_id = sd2.id
+                  LEFT JOIN location l2 ON s2.location_id = l2.id
+                 WHERE dc.sighting_id_b = %s
+            )
+            ORDER BY similarity_score DESC NULLS LAST
             LIMIT 10
-        """, (sid, sid, sid))
+        """, (sid, sid))
 
         duplicates = []
         for r in cur.fetchall():

@@ -1,0 +1,13 @@
+# Deployment-only extras — intentionally separate from requirements.txt
+# so the Azure App Service runtime container stays lean. This file is
+# installed ONLY by the GitHub Actions workflow that runs
+# scripts/compute_hex_bins.py (see .github/workflows/compute-hex-bins.yml).
+#
+# The `h3` library is the canonical Uber H3 geospatial indexing library;
+# it's used to compute H3 cell IDs + cell boundaries for every geocoded
+# location once at deploy time, then stored in the location_hex table
+# and aggregated into the hex_bin_counts materialized view. The Flask
+# app reads the MV at query time and never imports h3 itself.
+-r requirements.txt
+
+h3>=4.0,<5.0

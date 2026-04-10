@@ -222,6 +222,11 @@ CREATE INDEX idx_location_city_state ON location(city, state);
 
 -- duplicate_candidate
 CREATE INDEX idx_duplicate_status ON duplicate_candidate(status);
+-- v0.7: single-column btree on each side of the pair so the
+-- /api/sighting/<id> UNION ALL lookup can use an index for each
+-- equality scan instead of falling back to a seqscan over the OR.
+CREATE INDEX idx_duplicate_a ON duplicate_candidate(sighting_id_a);
+CREATE INDEX idx_duplicate_b ON duplicate_candidate(sighting_id_b);
 
 -- sentiment_analysis
 CREATE INDEX idx_sentiment_compound ON sentiment_analysis(vader_compound);

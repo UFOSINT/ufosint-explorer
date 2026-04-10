@@ -17,6 +17,184 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 Nothing yet.
 
+## [0.7.0] — 2026-04-10 — Observatory redesign, H3 hex bins, 504 fix
+
+This is the biggest UX change since v0.1 — a second UX team reviewed the
+v0.5/v0.6 interface and asked for three concrete changes:
+
+1. **Stop covering map content with loading chrome.** The rotating radar
+   sweep and marker pane dim from v0.5/v0.6 were obscuring the data users
+   were trying to read.
+2. **Make the map smaller and surround it with data panels.** A unified
+   "Observatory" dashboard with a left rail, center canvas, and bottom
+   time brush — closer to an intelligence analyst console than a
+   full-screen Google Maps clone.
+3. **Add a draggable time window that scrubs the visible markers** live,
+   with key sighting events annotated inline on the histogram.
+
+Plus one bug: **`/api/sighting/<id>` was returning HTTP 504 on cold
+cache** because the duplicate-candidate lookup ran an `OR` across two
+un-indexed columns and fell back to a sequential scan of 126,730 rows.
+
+### Fixed
+
+- **HTTP 504 on `/api/sighting/<id>`.** Two changes:
+  - `@cache.cached(timeout=600)` decorator on the route so warm queries
+    hit the per-worker LRU.
+  - Duplicate-candidate query rewritten as a `UNION ALL` of two equality
+    scans so the planner can use two new btree indexes
+    (`idx_duplicate_a`, `idx_duplicate_b`) independently instead of
+    falling back to seqscan over `OR`.
+  - Migration file `scripts/add_v07_indexes.sql` runs `CREATE INDEX IF
+    NOT EXISTS` so every deploy is idempotent; the GitHub Actions
+    `deploy` job executes it before the app code ships.
+- **Rotating radar sweep removed from the map loading state.** Markers
+  stay fully visible during refresh now. The `@keyframes map-radar-spin`
+  rule is kept (no longer attached to anything) for test stability.
+- **Marker pane dim disabled during progressive reloads.** The Leaflet
+  pane stays at `opacity: 1` — the "loading" affordance is now the HUD
+  status pill in the Observatory topbar instead of a content dim.
+- **Content-blocking search overlay removed** from `executeSearch()`.
+  Previous result cards stay interactive during a refresh; new cards
+  swap in with the stagger fade-in from v0.6.
+
+### Added
+
+- **Observatory tab** — a unified dashboard that replaces the legacy
+  Map and Timeline tabs. Layout: 230 px left rail (Sources / Shapes /
+  Visible count / Time window), center canvas wrapping the Leaflet map
+  with a Points/Heatmap/Hex Bins mode toggle and a live LAT/LON/STATUS
+  HUD, and a 110 px bottom time brush with draggable window, play/reset
+  buttons, and key sighting annotations (Roswell, Washington Flap, Hill
+  Abduction, Rendlesham, Phoenix Lights, Tic-Tac, Gimbal, Grusch).
+  Legacy Map and Timeline tab buttons are hidden (not deleted) so
+  `#/map?...` and `#/timeline?...` deep links still resolve to the
+  Observatory via `switchTab()`'s alias branch.
+- **`/api/hexbin` endpoint** — returns pre-computed H3 hex-bin cells
+  from the new `hex_bin_counts` materialized view. Query params: `zoom`
+  (mapped to H3 resolution 2–6 via a zoom-to-res lookup), `source`,
+  `shape`, `decade_from`, `decade_to`. Cached 300 s. Graceful 503 fall-
+  back when the MV hasn't been populated yet, so the client can disable
+  the HexBin mode toggle without a user-visible error.
+- **H3 pre-compute pipeline** — `scripts/compute_hex_bins.py` reads
+  every geocoded `location` row, computes H3 cells + cell boundaries at
+  resolutions 2–6 using the `h3` Python library, stores them in a new
+  `location_hex` support table, and rebuilds the `hex_bin_counts`
+  materialized view that aggregates sightings per (res, cell, source,
+  shape, decade). Runtime container stays lean — `h3` lives in a new
+  `requirements-deploy.txt` that only the GitHub Actions runner
+  installs.
+- **Two new GitHub workflows**:
+  - `compute-hex-bins.yml` — `workflow_dispatch` only, runs the Python
+    pre-compute script against the live DB. Manual trigger so we don't
+    re-run the ~5 min job on every deploy.
+  - `refresh-hex-bins.yml` — `workflow_dispatch` only, runs `REFRESH
+    MATERIALIZED VIEW hex_bin_counts` via `psql`. Faster than the full
+    compute when only new sightings have been added (existing locations
+    are already H3-indexed).
+- **SIGNAL + DECLASS theme toggle** in the gear menu.
+  - SIGNAL (default) — cyan `#00F0FF` on void `#030710`. Observatory-
+    console aesthetic matching the UX mockup.
+  - DECLASS — burgundy `#B8001F` on cream paper `#EEE8D2` with a
+    CSS-only rotated "TOP SECRET // PLOTTED" classification stamp in
+    the top-right corner, plus a Courier Prime monospace body font.
+  - Both themes defined as CSS variable overrides on `body.theme-signal`
+    and `body.theme-declass`. Choice persists in localStorage and is
+    applied via an inline pre-paint script in `<head>` so there's no
+    flash of the default theme on refresh.
+  - The time brush histogram re-draws with the current accent color
+    when the theme flips.
+- **TimeBrush class** (`static/app.js`) — canvas-based year histogram
+  fetched from `/api/timeline?bins=monthly&full_range=1`, draggable
+  window with handles for left/right resize and middle-drag translate,
+  play button that auto-scrubs the window forward, reset button, and
+  annotation lines for entries in `static/data/key_sightings.json`.
+  Debounces `onChange` to 300 ms so play-mode doesn't saturate
+  `applyFilters()`.
+- **`static/data/key_sightings.json`** — 8 canonical events with year,
+  label, and short description. Hand-curated, checked in, can evolve
+  without a DB touch.
+- **HUD corner brackets** on the map canvas (pure CSS edges, no
+  content coverage).
+- **`_zoom_to_res()` helper** in `app.py` mapping Leaflet zoom 0–18 to
+  H3 resolution 2–6.
+- **29 new tests in `tests/test_v07.py`** locking the full v0.7
+  contract:
+  - `idx_duplicate_a` + `idx_duplicate_b` in both `add_v07_indexes.sql`
+    and `pg_schema.sql`
+  - `@cache.cached` on `api_sighting`
+  - `UNION ALL` rewrite of the duplicate query
+  - `/api/hexbin` route registered, returns 200 or 503 never 500
+  - `_zoom_to_res` covers all Leaflet zoom levels
+  - Observatory panel + rail + mode toggle + time brush markup
+  - `body.theme-signal` + `body.theme-declass` CSS blocks with
+    `--accent`
+  - DECLASS classification stamp pseudo-element
+  - `loadObservatory`, `loadHexBins`, `TimeBrush`, `initThemeToggle`,
+    `setTheme` functions exist
+  - `showProgressiveLoading(resultsEl` callsite removed
+  - `#map.is-loading::before` no longer animates `map-radar-spin`
+  - `key_sightings.json` valid + canonical entries present
+
+Suite is now **128 tests**, still runs in under 0.5 seconds.
+
+### Changed
+
+- **`toggleMapMode()` handles three modes**: `points` (clustered
+  markers — renamed from `clusters`), `heatmap`, `hexbin`. The v0.7
+  Observatory mode toggle uses `.mode-btn` instead of the old
+  `.map-mode-btn`; both selectors are handled for transition
+  compatibility.
+- **`switchTab()` has a whitelist (`VALID_TABS`)** that catches garbage
+  input (missing, `undefined`, string `"undefined"` from a polluted URL
+  hash) and falls back to the Observatory. Defence in depth after an
+  initial testing session found the gear icon's shared `.tab` class
+  was accidentally triggering the generic tab listener.
+- **Tab click listener is scoped to `.tab[data-tab]`** with an explicit
+  `settings-btn` exclusion so the gear menu button can never fire
+  `switchTab(undefined)` again.
+- **`azure-deploy.yml` `deploy` job** checks out the repo, installs
+  `postgresql-client`, and runs `psql -f scripts/add_v07_indexes.sql`
+  before the code deploy. Skipped with a warning if the new
+  `DATABASE_URL` GitHub secret isn't configured.
+- **`azure-deploy.yml` `smoke` job** gains two new probes:
+  - `/api/hexbin?zoom=4` — expects 200 or 503, fails the workflow on
+    500/404/timeout.
+  - `/api/sighting/136613` — regression probe for the 504 bug. Fails
+    if cold queries still hit the Azure timeout.
+
+### Deployment steps for this release
+
+1. Push the branch → CI runs all gates (ruff + pytest + node -c).
+2. `deploy` job runs `add_v07_indexes.sql` via `psql`.
+3. Code deploys to App Service.
+4. `smoke` job verifies `/health`, `/`, `/api/filters`, `/api/stats`,
+   `/api/hexbin` (accepts 503), `/api/sighting/136613`.
+5. **One-time manual step**: trigger `compute-hex-bins.yml` from the
+   GitHub Actions UI to populate `location_hex` + `hex_bin_counts`.
+   Takes ~5–10 minutes for 105K locations. After this runs,
+   `/api/hexbin?zoom=4` returns 200 and the HexBin toggle on the
+   Observatory becomes functional.
+6. Tag `v0.7.0`.
+
+### Known limitations (deferred to v0.8)
+
+- **HexBin + country filter don't mix.** The `hex_bin_counts` MV
+  doesn't carry country because adding it would roughly 6× the row
+  count. When a user selects HexBin mode with a country filter, the
+  client auto-falls-back to Heatmap mode and shows a small toast.
+- **`REFRESH MATERIALIZED VIEW` is non-concurrent.** Reads see a brief
+  lock during refresh. Adding a `UNIQUE INDEX` on the MV to unblock
+  `REFRESH ... CONCURRENTLY` is a v0.8 task.
+- **DECLASS theme ships CSS-only stamps.** The UX mockup included a
+  paper-noise PNG and a Courier Prime stamp glyph; v0.7 uses pure-CSS
+  approximations (radial-gradient background + pseudo-element border).
+  Asset integration is deferred.
+- **Antimeridian hex cells** at low H3 resolutions can render as wide
+  horizontal polygons in Leaflet. `loadHexBins()` detects boundaries
+  crossing ±180° longitude and skips them for now; splitting into two
+  polygons is a v0.8 polish item.
+
 ## [0.6.0] — 2026-04-09 — Progressive loading (keep content, dim in place)
 
 ### Changed

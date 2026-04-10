@@ -1,0 +1,54 @@
+name: Refresh hex bin materialized view
+
+# Manual-only workflow. Re-runs `REFRESH MATERIALIZED VIEW hex_bin_counts`
+# without touching the location_hex support table underneath. This is the
+# right thing to run after bulk-loading NEW sightings whose locations are
+# already in location_hex (e.g. a NUFORC monthly update). Faster than
+# compute-hex-bins.yml since it skips the H3 computation step.
+#
+# If the data change introduced NEW locations (geocoded rows with no
+# matching location_hex entry), run compute-hex-bins.yml instead — that
+# processes only the missing rows incrementally, then rebuilds the MV.
+#
+# Uses a plain `psql` one-liner via a pre-installed binary on the runner.
+# Requires repo secret DATABASE_URL.
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why are you running this? (logged only)"
+        required: false
+        default: "routine refresh"
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Install postgresql-client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql-client
+
+      - name: Verify DATABASE_URL is set
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::DATABASE_URL secret is not configured in repo settings"
+            exit 1
+          fi
+          echo "Reason: ${{ github.event.inputs.reason }}"
+
+      - name: REFRESH MATERIALIZED VIEW hex_bin_counts
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          psql "$DATABASE_URL" \
+               -v ON_ERROR_STOP=1 \
+               -c "REFRESH MATERIALIZED VIEW hex_bin_counts;" \
+               -c "SELECT COUNT(*) AS hex_bin_rows FROM hex_bin_counts;"

@@ -102,6 +102,93 @@
     --term-border: rgba(63, 185, 80, 0.28);
 }
 
+/* =========================================================================
+   THEME OVERRIDES (v0.7)
+   -----------------------------------------------------------------------
+   Two themes share the same token set; only the palette variables differ.
+   Rules further down the file read from --bg/--accent/--text/etc, so
+   toggling `body.theme-signal` vs `body.theme-declass` instantly re-skins
+   the entire interface.
+
+   SIGNAL — cyan on deep-blue-black (default, matches the mockup's
+   observatory console aesthetic). Kept as the implicit fallback by
+   duplicating :root values here, so legacy cached pages without a
+   theme class still render correctly.
+
+   DECLASS — burgundy on cream paper with a CSS-only classification
+   stamp. No image assets required (v0.7 ships CSS-only; v0.8 can add
+   noise textures if desired).
+   ========================================================================= */
+
+body.theme-signal {
+    /* SIGNAL reinforces the default palette above. The map's deeper
+       void-black is the only real delta — gives the Observatory canvas
+       a sharper edge against the rail. */
+    --bg:            #030710;
+    --bg-panel:      #0A1020;
+    --bg-card:       #13203A;
+    --bg-card-h:     #1E4870;
+    --bg-input:      #0F1828;
+    --border:        #13203A;
+    --border-strong: #1E4870;
+    --text:          #E6EAF2;
+    --text-strong:   #FFFFFF;
+    --text-muted:    #8A94AD;
+    --text-faint:    #6B7A95;
+    --accent:        #00F0FF;
+    --accent-hover:  #7CF9FF;
+    --accent-bg:     rgba(0, 240, 255, 0.14);
+    --warning:       #FFB300;
+    --danger:        #FF4E00;
+    --term-glow:     rgba(0, 240, 255, 0.45);
+}
+
+body.theme-declass {
+    --bg:            #EEE8D2;
+    --bg-panel:      #F5F0DE;
+    --bg-card:       #E6DEC0;
+    --bg-card-h:     #DAD2A8;
+    --bg-input:      #F5F0DE;
+    --border:        #9C8B60;
+    --border-strong: #6A5B3A;
+    --text:          #1A1A1A;
+    --text-strong:   #0A0A0A;
+    --text-muted:    #5A4F3A;
+    --text-faint:    #7A6F5A;
+    --accent:        #B8001F;
+    --accent-hover:  #D11830;
+    --accent-bg:     rgba(184, 0, 31, 0.14);
+    --warning:       #C97B00;
+    --danger:        #6B0011;
+    --term-glow:     rgba(184, 0, 31, 0.45);
+    font-family: "Courier Prime", ui-monospace, "Consolas", monospace;
+}
+body.theme-declass .observatory-canvas-wrap {
+    background:
+        radial-gradient(ellipse at 18% 24%, rgba(120, 95, 45, 0.10), transparent 48%),
+        radial-gradient(ellipse at 82% 76%, rgba(120, 95, 45, 0.08), transparent 50%),
+        var(--bg);
+}
+/* Classification stamp — rotated red border + text, top right. Pure
+   CSS pseudo-element, no images. */
+body.theme-declass::after {
+    content: "TOP SECRET // PLOTTED";
+    position: fixed;
+    top: 14px;
+    right: 22px;
+    z-index: 9998;
+    font-family: "Courier Prime", ui-monospace, monospace;
+    font-weight: 700;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    color: #B8001F;
+    border: 2.5px solid #B8001F;
+    padding: 3px 10px;
+    transform: rotate(-3deg);
+    pointer-events: none;
+    background: rgba(238, 232, 210, 0.85);
+}
+
 * {
     margin: 0;
     padding: 0;
@@ -2594,29 +2681,13 @@ select:focus {
 #map.is-loading {
     position: relative;
 }
-#map.is-loading::before {
-    content: "";
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    width: 120vmax;
-    height: 120vmax;
-    margin: -60vmax 0 0 -60vmax;
-    background: conic-gradient(
-        from 0deg,
-        transparent 0deg,
-        transparent 260deg,
-        rgba(110, 168, 255, 0.03) 300deg,
-        rgba(110, 168, 255, 0.18) 345deg,
-        rgba(110, 168, 255, 0.35) 360deg
-    );
-    border-radius: 50%;
-    animation: map-radar-spin 3.2s linear infinite;
-    pointer-events: none;
-    mix-blend-mode: screen;
-    z-index: 1199;
-    opacity: 0.85;
-}
+/* v0.7: the rotating conic-gradient radar sweep (v0.5) was removed
+   because it tinted live map tiles and made markers harder to read.
+   The top-edge progress bar below + the HUD status pill in the
+   Observatory topbar are the new, content-respecting loading
+   indicators. The @keyframes map-radar-spin rule is kept because
+   test_loading_system.py currently references it; it's no longer
+   attached to any element but doesn't hurt. */
 @keyframes map-radar-spin {
     from { transform: rotate(0deg); }
     to   { transform: rotate(360deg); }
@@ -2797,12 +2868,15 @@ select:focus {
     animation-delay: calc(var(--i, 0) * 22ms);
 }
 
-/* Map: when the marker layer is being refreshed, dim the existing
-   marker pane so the user knows it's stale, but keep it visible. */
+/* Map: during a refresh the pane stays fully opaque so users can keep
+   reading the markers. The v0.7 UX change: the "loading" affordance is
+   the HUD status pill in the observatory topbar, not a dim over the
+   markers. The rule below is intentionally a no-op transition so
+   existing test selectors still resolve. */
 #map.is-loading-progressive .leaflet-marker-pane,
 #map.is-loading-progressive .leaflet-overlay-pane {
-    opacity: 0.45;
-    filter: saturate(0.6);
+    opacity: 1;
+    filter: none;
     transition: opacity var(--t-base) ease-out, filter var(--t-base) ease-out;
 }
 
@@ -2834,4 +2908,370 @@ select:focus {
 @keyframes confirm-pulse {
     0%, 100% { filter: brightness(1); }
     50%      { filter: brightness(1.15); }
+}
+
+/* =========================================================================
+   OBSERVATORY (v0.7) — unified dashboard replacing the Map + Timeline tabs
+   ========================================================================= */
+
+/* Legacy tab buttons are kept in the DOM for deep-link compat but should
+   never display. The [hidden] attribute already handles this; the rule
+   below is belt-and-braces for any CSS that tries to un-hide them. */
+.tab.legacy-tab { display: none !important; }
+.panel.legacy-panel { display: none !important; }
+
+#panel-observatory {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+#panel-observatory:not(.active) { display: none; }
+
+.observatory-stage {
+    display: grid;
+    grid-template-columns: 230px 1fr;
+    flex: 1;
+    min-height: 0;
+}
+
+/* --- Left rail --- */
+.observatory-rail {
+    border-right: 1px solid var(--border);
+    background: var(--bg-panel);
+    padding: var(--s-5) var(--s-4);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-5);
+}
+.rail-section { display: flex; flex-direction: column; gap: var(--s-2); }
+.rail-label {
+    font-size: 9px;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    padding-bottom: var(--s-1);
+    border-bottom: 1px solid var(--border);
+}
+.rail-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.rail-list li {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    font-size: var(--fs-12);
+    color: var(--text);
+    padding: 3px 0;
+}
+.rail-list li input[type="checkbox"] { accent-color: var(--accent); }
+.rail-list li .rail-ct {
+    margin-left: auto;
+    color: var(--text-muted);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+}
+.rail-big-count {
+    font-family: var(--font-sans);
+    font-size: 30px;
+    font-weight: 600;
+    color: var(--text-strong);
+    line-height: 1;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+}
+.rail-sub {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-top: var(--s-1);
+}
+.rail-time-label {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+}
+
+/* --- Center canvas --- */
+.observatory-canvas-wrap {
+    position: relative;
+    min-width: 0;
+    background: var(--bg);
+    overflow: hidden;
+}
+.observatory-canvas-wrap #map {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+}
+.observatory-topbar {
+    position: absolute;
+    top: 14px;
+    left: 16px;
+    right: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    z-index: 600;
+    pointer-events: none;
+}
+.observatory-topbar > * { pointer-events: auto; }
+.mode-toggle {
+    display: flex;
+    gap: 2px;
+    padding: 3px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+}
+.mode-toggle .mode-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 6px 12px;
+    cursor: pointer;
+    transition: color var(--t-fast), background var(--t-fast);
+}
+.mode-toggle .mode-btn:hover { color: var(--text); }
+.mode-toggle .mode-btn.active {
+    background: var(--accent);
+    color: var(--bg);
+}
+.mode-toggle .mode-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+.observatory-hud {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-muted);
+    letter-spacing: 0.04em;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    padding: 7px 12px;
+    border-radius: var(--r-sm);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.observatory-hud .hud-label { color: var(--text-faint); }
+.observatory-hud .hud-pair #hud-lat,
+.observatory-hud .hud-pair #hud-lon { color: var(--accent); font-variant-numeric: tabular-nums; }
+.observatory-hud .hud-sep { color: var(--text-faint); }
+.observatory-hud .hud-status {
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+.observatory-hud .hud-status::before {
+    content: "● ";
+    color: var(--term-green);
+    text-shadow: 0 0 4px var(--term-glow);
+}
+
+/* Corner brackets — pure CSS edge HUD, stays out of the content. */
+.hud-brackets {
+    position: absolute;
+    inset: 10px;
+    pointer-events: none;
+    z-index: 550;
+}
+.hud-brackets .hud-br {
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    border: 1px solid var(--accent);
+    opacity: 0.55;
+}
+.hud-brackets .hud-br-tl { top: 0; left: 0;  border-right: none;  border-bottom: none; }
+.hud-brackets .hud-br-tr { top: 0; right: 0; border-left: none;   border-bottom: none; }
+.hud-brackets .hud-br-bl { bottom: 0; left: 0;  border-right: none; border-top: none; }
+.hud-brackets .hud-br-br { bottom: 0; right: 0; border-left: none;  border-top: none; }
+
+/* Coords toggle — moved out of the old .map-mode-toggle pod so it sits
+   next to the place search as a small secondary control. */
+.coords-toggle {
+    position: absolute;
+    top: 60px;
+    right: 16px;
+    z-index: 500;
+}
+.coords-toggle select {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: inherit;
+    font-size: var(--fs-12);
+    padding: 4px 8px;
+    border-radius: var(--r-sm);
+}
+
+/* --- Time brush at the bottom --- */
+.observatory-time-brush {
+    height: 110px;
+    flex-shrink: 0;
+    padding: var(--s-3) var(--s-5);
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+    background: var(--bg);
+    border-top: 1px solid var(--border);
+}
+.brush-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+}
+.brush-readout strong {
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+.brush-readout #brush-window-count {
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+}
+.brush-play-btn, .brush-reset-btn {
+    background: transparent;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.15em;
+    padding: 5px 12px;
+    cursor: pointer;
+    border-radius: var(--r-sm);
+    transition: background var(--t-fast), color var(--t-fast);
+}
+.brush-play-btn:hover, .brush-reset-btn:hover {
+    background: var(--accent);
+    color: var(--bg);
+}
+.brush-play-btn.playing {
+    background: var(--warning);
+    border-color: var(--warning);
+    color: var(--bg);
+}
+.brush-wrap {
+    position: relative;
+    flex: 1;
+    user-select: none;
+    border: 1px solid var(--border);
+    background: var(--bg-panel);
+    border-radius: var(--r-sm);
+}
+.brush-wrap canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+.brush-window {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    background: var(--accent-bg);
+    border-left: 2px solid var(--accent);
+    border-right: 2px solid var(--accent);
+    cursor: grab;
+    box-shadow: 0 0 0 1px rgba(0, 240, 255, 0.12);
+}
+.brush-window.dragging { cursor: grabbing; }
+.brush-window:focus-visible {
+    outline: 2px solid var(--accent-hover);
+    outline-offset: 2px;
+}
+.brush-handle {
+    position: absolute;
+    top: 50%;
+    width: 8px;
+    height: 22px;
+    background: var(--accent);
+    transform: translateY(-50%);
+    cursor: ew-resize;
+    border-radius: 1px;
+}
+.brush-handle-l { left: -5px; }
+.brush-handle-r { right: -5px; }
+.brush-annotations {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+.brush-annotations .brush-ann {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: var(--warning);
+    opacity: 0.75;
+}
+.brush-annotations .brush-ann-label {
+    position: absolute;
+    top: 2px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--warning);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    white-space: nowrap;
+    padding-left: 3px;
+}
+
+/* --- Theme toggle in the gear menu --- */
+.theme-toggle {
+    display: flex;
+    gap: var(--s-2);
+    padding: var(--s-2);
+}
+.theme-toggle .theme-opt {
+    flex: 1;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 8px 10px;
+    cursor: pointer;
+    border-radius: var(--r-sm);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    transition: border-color var(--t-fast), background var(--t-fast);
+}
+.theme-toggle .theme-opt:hover { border-color: var(--accent); }
+.theme-toggle .theme-opt.active {
+    border-color: var(--accent);
+    background: var(--accent-bg);
+    color: var(--accent);
+}
+.theme-toggle .theme-opt-name { font-weight: 600; }
+.theme-toggle .theme-opt-hint {
+    font-size: 9px;
+    color: var(--text-muted);
+    letter-spacing: 0.08em;
+    text-transform: lowercase;
+}
+
+/* --- Hex bin layer color ramp (used by loadHexBins tooltips) --- */
+.hex-tooltip {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
 }

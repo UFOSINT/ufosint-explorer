@@ -24,6 +24,30 @@
     <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
     <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
 
+    <!-- Pre-paint theme script (v0.7): reads the persisted theme from
+         localStorage and applies `body.theme-signal` or `body.theme-declass`
+         BEFORE the stylesheet loads, so there's no flash of the default
+         palette when a DECLASS user refreshes the page. Keep this inline
+         — a deferred script runs too late. -->
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem("ufosint-theme") || "signal";
+          if (t !== "signal" && t !== "declass") { t = "signal"; }
+          document.documentElement.dataset.themePreload = t;
+          document.addEventListener("DOMContentLoaded", function () {
+            var body = document.body;
+            body.classList.remove("theme-signal", "theme-declass");
+            body.classList.add("theme-" + t);
+            document.querySelectorAll(".theme-opt").forEach(function (b) {
+              b.setAttribute("aria-checked", b.dataset.theme === t ? "true" : "false");
+              b.classList.toggle("active", b.dataset.theme === t);
+            });
+          });
+        } catch (e) { /* localStorage blocked — stay on default */ }
+      })();
+    </script>
+
     <!-- App CSS — version query busts browser cache on every deploy -->
     <link rel="stylesheet" href="/static/style.css?v={{ASSET_VERSION}}" />
 </head>
@@ -38,8 +62,14 @@
             </div>
         </div>
         <nav class="tabs">
-            <button class="tab active" data-tab="map">Map</button>
-            <button class="tab" data-tab="timeline">Timeline</button>
+            <!-- v0.7: Observatory unifies Map + Timeline into one dashboard.
+                 The legacy Map/Timeline tabs are hidden (not deleted) so
+                 existing deep links like #/map?q=... still resolve in
+                 switchTab() and so v0.6-era tests that look up the
+                 buttons don't break. -->
+            <button class="tab active" data-tab="observatory">Observatory</button>
+            <button class="tab legacy-tab" data-tab="map" hidden>Map</button>
+            <button class="tab legacy-tab" data-tab="timeline" hidden>Timeline</button>
             <button class="tab" data-tab="search">Search</button>
             <button class="tab" data-tab="duplicates">Duplicates</button>
             <button class="tab" data-tab="insights">Insights</button>
@@ -62,6 +92,17 @@
                             <span class="settings-menu-hint">MCP server &amp; API for your own AI client</span>
                         </span>
                     </button>
+                    <div class="settings-menu-section">Theme</div>
+                    <div class="theme-toggle" role="radiogroup" aria-label="Interface theme">
+                        <button class="theme-opt active" data-theme="signal" role="radio" aria-checked="true" type="button">
+                            <span class="theme-opt-name">SIGNAL</span>
+                            <span class="theme-opt-hint">cyan on void</span>
+                        </button>
+                        <button class="theme-opt" data-theme="declass" role="radio" aria-checked="false" type="button">
+                            <span class="theme-opt-name">DECLASS</span>
+                            <span class="theme-opt-hint">ink on paper</span>
+                        </button>
+                    </div>
                 </div>
             </div>
         </nav>
@@ -122,28 +163,95 @@
 
     <!-- Main Content Panels -->
     <main id="main">
-        <!-- Map Panel -->
-        <div id="panel-map" class="panel active">
-            <div id="map"></div>
-            <div class="map-place-search">
-                <label class="sr-only" for="place-input">Find a place</label>
-                <input type="text" id="place-input" placeholder="Find a place — city, country, address..." autocomplete="off" />
-                <button id="btn-place-search" class="btn btn-primary btn-small" title="Search">Go</button>
-                <button id="btn-locate-me" class="btn btn-secondary btn-small" title="Use my current location"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg> Near me</button>
+        <!-- Observatory panel (v0.7): unified dashboard replacing the
+             legacy Map + Timeline tabs. Layout is rail | canvas | brush.
+             The Leaflet #map node lives inside this panel. -->
+        <div id="panel-observatory" class="panel active">
+            <div class="observatory-stage">
+                <aside class="observatory-rail" aria-label="Observatory filters">
+                    <section class="rail-section">
+                        <div class="rail-label">Sources</div>
+                        <ul id="rail-source-list" class="rail-list"></ul>
+                    </section>
+                    <section class="rail-section">
+                        <div class="rail-label">Shapes</div>
+                        <ul id="rail-shape-list" class="rail-list"></ul>
+                    </section>
+                    <section class="rail-section rail-meta">
+                        <div class="rail-label">Visible</div>
+                        <div id="rail-visible-count" class="rail-big-count">—</div>
+                        <div class="rail-sub">of <span id="rail-total-count">614,505</span> in view</div>
+                    </section>
+                    <section class="rail-section rail-meta">
+                        <div class="rail-label">Time window</div>
+                        <div id="rail-time-label" class="rail-time-label">1947 — 2026</div>
+                    </section>
+                </aside>
+                <div class="observatory-canvas-wrap">
+                    <div class="observatory-topbar">
+                        <div class="mode-toggle" role="tablist" aria-label="Map render mode">
+                            <button class="mode-btn active" data-mode="points" type="button" role="tab">Points</button>
+                            <button class="mode-btn" data-mode="heatmap" type="button" role="tab">Heatmap</button>
+                            <button class="mode-btn" data-mode="hexbin" type="button" role="tab">Hex Bins</button>
+                        </div>
+                        <div class="observatory-hud" id="observatory-hud">
+                            <span class="hud-pair"><span class="hud-label">LAT</span> <span id="hud-lat">—</span></span>
+                            <span class="hud-sep">·</span>
+                            <span class="hud-pair"><span class="hud-label">LON</span> <span id="hud-lon">—</span></span>
+                            <span class="hud-sep">·</span>
+                            <span id="hud-status" class="hud-status">READY</span>
+                        </div>
+                    </div>
+                    <div id="map"></div>
+                    <div class="map-place-search">
+                        <label class="sr-only" for="place-input">Find a place</label>
+                        <input type="text" id="place-input" placeholder="Find a place — city, country, address..." autocomplete="off" />
+                        <button id="btn-place-search" class="btn btn-primary btn-small" title="Search">Go</button>
+                        <button id="btn-locate-me" class="btn btn-secondary btn-small" title="Use my current location"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg> Near me</button>
+                    </div>
+                    <div class="coords-toggle">
+                        <label class="sr-only" for="coords-filter">Coordinate source</label>
+                        <select id="coords-filter" title="Coordinate source" aria-label="Coordinate source">
+                            <option value="all">All Coords</option>
+                            <option value="original">Original Only</option>
+                            <option value="geocoded">Geocoded Only</option>
+                        </select>
+                    </div>
+                    <div id="map-status" class="panel-status" aria-live="polite">READY</div>
+                    <button id="btn-load-all" class="btn-load-all" style="display:none" onclick="loadAll()">Load All</button>
+                    <div class="hud-brackets" aria-hidden="true">
+                        <span class="hud-br hud-br-tl"></span>
+                        <span class="hud-br hud-br-tr"></span>
+                        <span class="hud-br hud-br-bl"></span>
+                        <span class="hud-br hud-br-br"></span>
+                    </div>
+                </div>
             </div>
-            <div class="map-mode-toggle">
-                <button class="map-mode-btn active" data-mode="clusters">Clusters</button>
-                <button class="map-mode-btn" data-mode="heatmap">Heatmap</button>
-                <label class="sr-only" for="coords-filter">Coordinate source</label>
-                <select id="coords-filter" title="Coordinate source" aria-label="Coordinate source">
-                    <option value="all">All Coords</option>
-                    <option value="original">Original Only</option>
-                    <option value="geocoded">Geocoded Only</option>
-                </select>
+            <div class="observatory-time-brush" aria-label="Time window brush">
+                <div class="brush-header">
+                    <button id="brush-play" class="brush-play-btn" type="button" aria-pressed="false">▶ PLAY</button>
+                    <div class="brush-readout">
+                        TIME WINDOW · <strong id="brush-range-label">1947 — 2026</strong>
+                        · <span id="brush-window-count">—</span> in range
+                    </div>
+                    <button id="brush-reset" class="brush-reset-btn" type="button">RESET</button>
+                </div>
+                <div class="brush-wrap">
+                    <canvas id="brush-canvas" width="2000" height="80" aria-hidden="true"></canvas>
+                    <div id="brush-annotations" class="brush-annotations" aria-hidden="true"></div>
+                    <div id="brush-window" class="brush-window" role="slider" aria-label="Time window"
+                         tabindex="0" aria-valuemin="1947" aria-valuemax="2026">
+                        <span class="brush-handle brush-handle-l" data-handle="l"></span>
+                        <span class="brush-handle brush-handle-r" data-handle="r"></span>
+                    </div>
+                </div>
             </div>
-            <div id="map-status" class="panel-status" aria-live="polite"><span class="loading-pulse">INITIALIZING MAP</span></div>
-            <button id="btn-load-all" class="btn-load-all" style="display:none" onclick="loadAll()">Load All</button>
         </div>
+
+        <!-- Legacy Map panel: kept in the DOM as an empty shell so v0.6
+             deep links like #/map?q=... still resolve through
+             switchTab()'s alias path. Hidden via the .legacy-tab CSS rule. -->
+        <div id="panel-map" class="panel legacy-panel" hidden></div>
 
         <!-- Timeline Panel -->
         <div id="panel-timeline" class="panel">
