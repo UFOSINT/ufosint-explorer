@@ -241,16 +241,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Cold-start patience: the background prewarm thread serializes
+          # HTTP warmup queries through the same 8-slot connection pool,
+          # and one of them (/api/sentiment/overview) can take 20+ seconds
+          # against a cold PG buffer cache. So we need ~2.5 minutes of
+          # retry runway here, matching the /health + / probes above.
+          # Run `psql -f scripts/pg_tuning.sql` on the DB side (see
+          # docs/DEPLOYMENT.md §7.2) to cut this down drastically.
           for endpoint in /api/filters /api/stats; do
             ok=0
-            for attempt in 1 2 3 4 5; do
-              echo "[$attempt/5] GET $LIVE_URL$endpoint"
-              if curl -sS --fail --max-time 30 "$LIVE_URL$endpoint" > /dev/null; then
+            for attempt in 1 2 3 4 5 6 7 8 9 10; do
+              echo "[$attempt/10] GET $LIVE_URL$endpoint"
+              if curl -sS --fail --max-time 45 "$LIVE_URL$endpoint" > /dev/null; then
                 echo "  OK"
                 ok=1
                 break
               fi
-              sleep 10
+              sleep 15
             done
             if [ "$ok" != "1" ]; then
               echo "::error::$endpoint never responded 200"
