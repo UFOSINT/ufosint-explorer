@@ -626,6 +626,7 @@ select:focus {
     flex: 1;
     padding: 0 16px 16px;
     min-height: 0;
+    position: relative;  /* needed for the .progressive-overlay anchor */
 }
 
 #timeline-chart {
@@ -2714,6 +2715,110 @@ select:focus {
 .chart-container.is-loading {
     opacity: 0.45;
     pointer-events: none;
+}
+
+/* =========================================================================
+   PROGRESSIVE LOADING — keep previous content visible while new data loads
+   -----------------------------------------------------------------------
+   Strategy:
+   - Container gains `is-progressive` (sets position: relative) and
+     `is-loading-progressive` (active loading flag).
+   - Direct children, except the overlay, dim slightly + blur + saturate
+     down. They stay visible — that's the whole point.
+   - A `.progressive-overlay` is appended; its child is a centered
+     `.loading-terminal` (mounted via the existing helper). Pointer-
+     events are off so the user can still interact with the dimmed
+     content if they want.
+   - When new data arrives, the JS removes the loading flag, the
+     children fade back to full opacity, and any new children rendered
+     in the swap can carry `.is-new` to stagger-fade in on top.
+   ========================================================================= */
+.is-progressive {
+    position: relative;
+}
+.is-progressive > *:not(.progressive-overlay) {
+    transition:
+        opacity var(--t-base) ease-out,
+        filter var(--t-base) ease-out;
+}
+.is-progressive.is-loading-progressive > *:not(.progressive-overlay) {
+    opacity: 0.4;
+    filter: blur(0.6px) saturate(0.7);
+    pointer-events: none;
+}
+
+.progressive-overlay {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 50;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity var(--t-base) ease-out;
+    /* the centered .loading-terminal inherits its own styling */
+}
+.is-loading-progressive > .progressive-overlay {
+    opacity: 1;
+}
+/* Compact terminal inside an overlay should still feel like an "incoming
+   message" panel — give it a card background so it reads against any
+   underlying content. */
+.progressive-overlay > .loading-terminal.compact {
+    background: var(--term-bg);
+    border-color: var(--term-border);
+    box-shadow:
+        0 0 0 1px rgba(63, 185, 80, 0.08),
+        0 8px 24px rgba(0, 0, 0, 0.5);
+    padding: var(--s-2) var(--s-4);
+    pointer-events: auto;
+    /* Slight backdrop blur so the dim+blur on the content shows through
+       cleanly without competing with the overlay text. */
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+}
+
+/* Stagger fade-in for newly rendered children (e.g. search result cards
+   that just landed). JS sets `--i` per child to delay each one a bit. */
+@keyframes stagger-fade-in {
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+        filter: blur(2px);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+        filter: none;
+    }
+}
+.is-new {
+    animation: stagger-fade-in 320ms ease-out both;
+    animation-delay: calc(var(--i, 0) * 22ms);
+}
+
+/* Map: when the marker layer is being refreshed, dim the existing
+   marker pane so the user knows it's stale, but keep it visible. */
+#map.is-loading-progressive .leaflet-marker-pane,
+#map.is-loading-progressive .leaflet-overlay-pane {
+    opacity: 0.45;
+    filter: saturate(0.6);
+    transition: opacity var(--t-base) ease-out, filter var(--t-base) ease-out;
+}
+
+/* Reduced-motion: skip the blur transitions and the stagger animation,
+   keep the dim so the user still gets the "stale" affordance. */
+@media (prefers-reduced-motion: reduce) {
+    .is-progressive.is-loading-progressive > *:not(.progressive-overlay) {
+        filter: none;
+    }
+    .is-new {
+        animation: none;
+    }
+    #map.is-loading-progressive .leaflet-marker-pane,
+    #map.is-loading-progressive .leaflet-overlay-pane {
+        filter: none;
+    }
 }
 
 /* ---- Load All: inline confirmation state ---- */

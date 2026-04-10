@@ -17,6 +17,93 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 Nothing yet.
 
+## [0.6.0] — 2026-04-09 — Progressive loading (keep content, dim in place)
+
+### Changed
+- **Timeline refresh is now a live chart update, not a destroy + recreate.**
+  `loadTimeline()` no longer calls `state.chart.destroy()` on every
+  reload — instead it mutates `state.chart.data.labels` and
+  `state.chart.data.datasets` in place and calls
+  `state.chart.update("active")`, which animates the bars smoothly
+  between old and new values. Chart.js interpolates bar heights over
+  600 ms with `easeOutQuart`, so changing the date range no longer
+  flashes a blank canvas.
+- **Search keeps previous results visible while the new query runs.**
+  `executeSearch()` only renders skeleton cards on a cold start
+  (empty results list); every subsequent search leaves the existing
+  cards on screen, dims them via `.is-loading-progressive`, and
+  overlays a centered terminal. When the new data arrives, the cards
+  swap and each new one fades in with a staggered 22ms delay via
+  `.is-new` + `--i`.
+- **Map markers stay visible while panning / filtering.** Both
+  `loadMapMarkers()` and `loadHeatmap()` add `.is-loading-progressive`
+  on entry, which dims the Leaflet marker + overlay panes via CSS
+  (`opacity: 0.45; filter: saturate(0.6)`) instead of clearing them
+  immediately. The old markers stay on screen until the new batch is
+  ready — no more "flash of empty map" while the request is in
+  flight.
+- **Boot parallelism: filters render the instant they arrive.** The
+  `DOMContentLoaded` handler no longer uses `Promise.all` to block on
+  both `/api/filters` and `/api/stats`. Each promise has its own
+  `.then()` — `populateFilterDropdowns` fires as soon as filters land
+  (usually milliseconds), while the slower `/api/stats` keeps cycling
+  the badge boot sequence until its response arrives.
+
+### Added
+- **`.loading-terminal` progressive overlay** — new CSS that places a
+  compact terminal card absolutely-centered over a container without
+  removing its existing content. Three new base classes:
+  - `.is-progressive` — opts a container into progressive loading
+    (just sets `position: relative` on descendants).
+  - `.is-loading-progressive` — active flag; dims children
+    (`opacity: 0.4; filter: blur(0.6px) saturate(0.7)`) and fades in
+    the `.progressive-overlay`.
+  - `.progressive-overlay` — absolutely-positioned child that hosts
+    the centered terminal. Pointer-events off so the user can still
+    interact with the dimmed content underneath.
+- **`showProgressiveLoading(container, bank, opts)`** /
+  **`hideProgressiveLoading(container)`** — JS helpers that wrap the
+  CSS class toggling + terminal mount/unmount. The hide helper
+  removes the overlay node on a 240 ms timer so the CSS opacity fade
+  finishes cleanly, and bails if a new load started before the fade
+  finished (prevents the overlay from getting removed mid-transition).
+- **`staggerNewChildren(parent, selector)`** — tags freshly rendered
+  children with `.is-new` and a `--i` custom property so they fade in
+  sequentially via the CSS `stagger-fade-in` keyframe.
+- **`@keyframes stagger-fade-in`** — 320 ms opacity + translateY +
+  blur fade, per-child delay via `calc(var(--i, 0) * 22ms)`. Applied
+  to new search result cards.
+- **Map pane dim rules** — `#map.is-loading-progressive
+  .leaflet-marker-pane` and `.leaflet-overlay-pane` drop to 45%
+  opacity + desaturate.
+- **20 new tests in `tests/test_progressive_loading.py`** covering:
+  - 9 required CSS selectors (`.is-progressive`, `.progressive-overlay`,
+    etc.)
+  - `stagger-fade-in` keyframe + `calc(var(--i ...))` delay
+  - `prefers-reduced-motion` block neutralizes the stagger + blur
+  - `.chart-container` has `position: relative` (overlay anchor)
+  - `showProgressiveLoading` + `hideProgressiveLoading` +
+    `staggerNewChildren` helpers exist
+  - ≥ 2 callsites for `showProgressiveLoading` (timeline + search)
+  - ≥ 3 callsites for `hideProgressiveLoading` (success + catch +
+    timeline finally)
+  - `loadTimeline` uses `chart.update("active")` and does NOT call
+    `chart.destroy()`
+  - `executeSearch` has the `hasExistingResults` gate
+  - Search result cards render with `.is-new` + `--i`
+  - Both map loaders add `is-loading-progressive`
+  - Boot block stores `filtersPromise` / `statsPromise` separately
+    and calls `populateFilterDropdowns` inside `filtersPromise.then()`
+
+Suite is now **99 tests**, still runs in under 0.5 seconds.
+
+### Accessibility
+- **`prefers-reduced-motion: reduce`** freezes the stagger fade-in
+  and kills the blur filter on dimmed content; the content still
+  dims so the "stale" affordance stays, but there's no vestibular
+  trigger from the blur/translate animations. Map pane filter
+  saturation also normalizes under reduced motion.
+
 ## [0.5.0] — 2026-04-09 — Hackery loading system
 
 ### Added

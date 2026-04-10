@@ -76,16 +76,35 @@ document.addEventListener("DOMContentLoaded", async () => {
     // something moving while /api/filters + /api/stats fetch in parallel.
     const _stopBadgeBoot = startStatsBadgeBoot();
 
-    // Load filters and stats in parallel
-    const [filtersData, statsData] = await Promise.all([
-        fetchJSON("/api/filters"),
-        fetchJSON("/api/stats"),
-    ]);
+    // Progressive boot: kick off both fetches in parallel and apply
+    // each one the instant it returns, rather than waiting for both
+    // via Promise.all. /api/filters usually wins (it's tiny + cached
+    // server-side) — populating the dropdowns first lets the user
+    // start typing into search/filter fields before /api/stats has
+    // even resolved.
+    const filtersPromise = fetchJSON("/api/filters");
+    const statsPromise = fetchJSON("/api/stats");
 
-    populateFilterDropdowns(filtersData);
-    _stopBadgeBoot();
-    showStats(statsData);
-    initStatsBadge();
+    filtersPromise
+        .then(populateFilterDropdowns)
+        .catch(err => console.error("filters fetch failed:", err));
+
+    statsPromise
+        .then(statsData => {
+            _stopBadgeBoot();
+            showStats(statsData);
+            initStatsBadge();
+        })
+        .catch(err => {
+            _stopBadgeBoot();
+            console.error("stats fetch failed:", err);
+        });
+
+    // Wait for both before doing anything that needs them. Most of the
+    // setup below only depends on the filters being populated, but a
+    // handful of routes (timeline / search) read filter values out of
+    // the dropdowns so we serialize the rest of init behind that.
+    await filtersPromise.catch(() => {});
 
     // Setup tabs
     document.querySelectorAll(".tab").forEach(btn => {
@@ -342,6 +361,70 @@ function unmountLoadingTerminal(el) {
     if (!el) return;
     const handle = _activeTerminals.get(el);
     if (handle) handle.stop();
+}
+
+// =========================================================================
+// Progressive loading — keep previous content visible while new data loads
+// -------------------------------------------------------------------------
+// Pattern:
+//   1. showProgressiveLoading(container, bank, opts) — adds the
+//      .is-loading-progressive class (which dims existing children via
+//      CSS) and mounts a centered terminal overlay on top.
+//   2. await fetchJSON(...)
+//   3. hideProgressiveLoading(container) — removes the class, leaves the
+//      overlay node in place but stops its message cycle.
+//   4. Replace the dimmed children with new ones, optionally adding the
+//      `.is-new` class with a `--i` index for stagger fade-in.
+//
+// Reuses mountLoadingTerminal under the hood, so the visual language is
+// identical to the v0.5 loading system — just placed over existing
+// content instead of replacing it.
+// =========================================================================
+
+function showProgressiveLoading(container, bank = "generic", opts = {}) {
+    if (!container) return;
+    container.classList.add("is-progressive", "is-loading-progressive");
+
+    // Reuse an existing overlay if there is one (same container loaded
+    // twice in a row), otherwise create one. We always render the
+    // terminal in compact form here — the overlay style assumes it.
+    let overlay = container.querySelector(":scope > .progressive-overlay");
+    if (!overlay) {
+        overlay = document.createElement("div");
+        overlay.className = "progressive-overlay";
+        container.appendChild(overlay);
+    }
+    mountLoadingTerminal(overlay, bank, { compact: true, ...opts });
+}
+
+function hideProgressiveLoading(container) {
+    if (!container) return;
+    container.classList.remove("is-loading-progressive");
+    const overlay = container.querySelector(":scope > .progressive-overlay");
+    if (overlay) {
+        unmountLoadingTerminal(overlay);
+        // Defer removal so the CSS opacity fade has time to finish.
+        // 240ms covers --t-base (180ms) plus a small margin.
+        setTimeout(() => {
+            // Bail if a new load started before the fade finished.
+            if (!container.classList.contains("is-loading-progressive")) {
+                overlay.remove();
+            }
+        }, 240);
+    }
+}
+
+/**
+ * Stagger-tag a freshly-rendered NodeList so each element fades in
+ * sequentially via the CSS .is-new keyframe + --i index.
+ */
+function staggerNewChildren(parent, selector = ".result-card") {
+    if (!parent) return;
+    const newOnes = parent.querySelectorAll(selector);
+    newOnes.forEach((el, i) => {
+        el.classList.add("is-new");
+        el.style.setProperty("--i", String(i));
+    });
 }
 
 // =========================================================================
@@ -892,7 +975,11 @@ async function loadMapMarkers(signal) {
     const status = document.getElementById("map-status");
     const mapEl = document.getElementById("map");
     status.innerHTML = '<span class="loading-pulse">PLOTTING SIGHTINGS</span>';
-    mapEl?.classList.add("is-loading");
+    // Progressive: keep old markers visible but dimmed via the
+    // is-loading-progressive class. The radar HUD overlays them.
+    // Old markers do NOT get cleared until the new ones are ready —
+    // see the clearLayers() call moved into the success branch below.
+    mapEl?.classList.add("is-loading", "is-loading-progressive");
     ensureMapScanframe("PLOTTING / GRID LIVE");
 
     const bounds = state.map.getBounds();
@@ -908,6 +995,9 @@ async function loadMapMarkers(signal) {
 
     try {
         const data = await fetchJSON(`/api/map?${params}`, { signal });
+        // Old markers stayed visible while we waited; clear + re-add
+        // happens in the same tick so the user sees a swap, not a flash
+        // of empty.
         state.markerLayer.clearLayers();
 
         const markers = data.markers.map(m => {
@@ -932,7 +1022,7 @@ async function loadMapMarkers(signal) {
         document.getElementById("btn-load-all").style.display = "none";
         console.error(err);
     } finally {
-        mapEl?.classList.remove("is-loading");
+        mapEl?.classList.remove("is-loading", "is-loading-progressive");
         clearMapScanframe();
     }
 }
@@ -1087,7 +1177,7 @@ async function loadHeatmap(signal) {
     const status = document.getElementById("map-status");
     const mapEl = document.getElementById("map");
     status.innerHTML = '<span class="loading-pulse">COMPUTING HEATMAP</span>';
-    mapEl?.classList.add("is-loading");
+    mapEl?.classList.add("is-loading", "is-loading-progressive");
     ensureMapScanframe("HEATMAP / THERMAL");
 
     const bounds = state.map.getBounds();
@@ -1107,7 +1197,7 @@ async function loadHeatmap(signal) {
         document.getElementById("btn-load-all").style.display = "none";
         console.error(err);
     } finally {
-        mapEl?.classList.remove("is-loading");
+        mapEl?.classList.remove("is-loading", "is-loading-progressive");
         clearMapScanframe();
     }
 }
@@ -1123,11 +1213,26 @@ async function loadTimeline() {
     const titleEl = document.getElementById("timeline-title");
     const backBtn = document.getElementById("timeline-back");
     const viewBtn = document.getElementById("timeline-view-results");
+    const chartContainer = document.querySelector(".chart-container");
 
     titleEl.textContent = year ? `Sightings in ${year} by Month` : "Sightings by Year";
     backBtn.style.display = year ? "inline-block" : "none";
 
-    const data = await fetchJSON(`/api/timeline?${params}`);
+    // Progressive loading: if we already have a chart on screen, keep it
+    // visible and just dim it while the new data loads. The fetched
+    // data is then applied via chart.update() which animates the bars
+    // smoothly between old and new values. First-time loads (no chart
+    // yet) skip the overlay since there's nothing to keep visible.
+    if (state.chart) {
+        showProgressiveLoading(chartContainer, "timeline", { header: "TIMELINE" });
+    }
+
+    let data;
+    try {
+        data = await fetchJSON(`/api/timeline?${params}`);
+    } finally {
+        hideProgressiveLoading(chartContainer);
+    }
 
     // Build datasets per source
     const periods = Object.keys(data.data).sort();
@@ -1185,25 +1290,21 @@ async function loadTimeline() {
         }
     }
 
-    // Destroy old chart
-    if (state.chart) {
-        state.chart.destroy();
-    }
-
-    // Use a closure to lift the data we need into the click handler
+    // Use a closure to lift the data we need into the click handler.
+    // This handler is rebound onto state.chart on every load so that
+    // the latest `data` / `periods` / `sourceList` are captured.
     const onChartClick = (evt, elements) => {
         if (!elements.length) return;
         const el = elements[0];
         const period = periods[el.index];
         const sourceName = sourceList[el.datasetIndex];
 
-        // Visual feedback: fade the chart container while the drill-down
-        // or navigation happens. loadTimeline rebuilds the chart anyway
-        // (which clears this class via the next render), but for the
-        // month-click path (which navigates away) we remove it on a
-        // short delay so the user sees a flash of acknowledgement.
+        // Visual feedback for the navigate-away (monthly→search) path.
+        // The drill-down (yearly→monthly) path no longer needs an
+        // is-loading flash because loadTimeline now overlays its own
+        // progressive terminal AND animates chart.update() — the
+        // old fade was an artifact of the destroy/recreate flow.
         const chartContainer = document.querySelector(".chart-container");
-        chartContainer?.classList.add("is-loading");
 
         if (data.mode === "yearly") {
             // Click year bar -> drill down to monthly view (existing behavior).
@@ -1217,8 +1318,9 @@ async function loadTimeline() {
                 }
             }
             state.timelineYear = period;
-            loadTimeline().finally(() => chartContainer?.classList.remove("is-loading"));
+            loadTimeline();
         } else {
+            chartContainer?.classList.add("is-loading");
             // Navigating away — clear the fade after a short delay
             setTimeout(() => chartContainer?.classList.remove("is-loading"), 300);
             // Monthly view -> jump to filtered search for that month.
@@ -1238,38 +1340,59 @@ async function loadTimeline() {
         }
     };
 
-    const ctx = document.getElementById("timeline-chart").getContext("2d");
-    state.chart = new Chart(ctx, {
-        type: "bar",
-        data: { labels, datasets },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            interaction: { mode: "index", intersect: false },
-            plugins: {
-                legend: { position: "top" },
-                tooltip: {
-                    callbacks: {
-                        footer: (items) => {
-                            const total = items.reduce((s, i) => s + i.parsed.y, 0);
-                            const hint = data.mode === "yearly"
-                                ? "Click to drill into months"
-                                : "Click to view records";
-                            return `Total: ${total.toLocaleString()}\n${hint}`;
-                        }
-                    }
-                }
+    // Build the tooltip footer callback fresh on every load so the
+    // "Click to drill into months" / "Click to view records" hint
+    // matches whichever mode (yearly/monthly) the new data is in.
+    const tooltipFooter = (items) => {
+        const total = items.reduce((s, i) => s + i.parsed.y, 0);
+        const hint = data.mode === "yearly"
+            ? "Click to drill into months"
+            : "Click to view records";
+        return `Total: ${total.toLocaleString()}\n${hint}`;
+    };
+
+    if (state.chart) {
+        // Progressive update: Chart.js animates labels + datasets between
+        // the old and new state. The closures (onChartClick, tooltip
+        // callback) get rebound here so they capture the latest data.
+        state.chart.data.labels = labels;
+        state.chart.data.datasets = datasets;
+        state.chart.options.onClick = onChartClick;
+        state.chart.options.plugins.tooltip.callbacks.footer = tooltipFooter;
+        // "active" mode picks up the configured easing + duration so
+        // bars slide between values rather than snapping.
+        state.chart.update("active");
+    } else {
+        // Cold start — first load on the page.
+        const ctx = document.getElementById("timeline-chart").getContext("2d");
+        state.chart = new Chart(ctx, {
+            type: "bar",
+            data: { labels, datasets },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: "index", intersect: false },
+                animation: {
+                    duration: 600,
+                    easing: "easeOutQuart",
+                },
+                plugins: {
+                    legend: { position: "top" },
+                    tooltip: {
+                        callbacks: { footer: tooltipFooter },
+                    },
+                },
+                scales: {
+                    x: { stacked: true },
+                    y: { stacked: true, beginAtZero: true },
+                },
+                onClick: onChartClick,
+                onHover: (evt, elements) => {
+                    evt.native.target.style.cursor = elements.length ? "pointer" : "";
+                },
             },
-            scales: {
-                x: { stacked: true },
-                y: { stacked: true, beginAtZero: true },
-            },
-            onClick: onChartClick,
-            onHover: (evt, elements) => {
-                evt.native.target.style.cursor = elements.length ? "pointer" : "";
-            },
-        },
-    });
+        });
+    }
 }
 
 // =========================================================================
@@ -1295,20 +1418,33 @@ async function executeSearch() {
     // Disable the submit button so a double-click doesn't fire two requests
     const restoreSearchBtn = disableButtonWhilePending(searchBtn, "Searching…");
 
-    // Skeleton loading state — hackery terminal in the info bar,
-    // layout-stable shimmer cards below so the page doesn't jump when
-    // results land.
+    // Progressive loading: if we already have real result cards on
+    // screen, keep them visible (dimmed) while the new request runs.
+    // The terminal mounts in the info bar AND a centered overlay
+    // appears over the results list. Cold starts (first search of the
+    // session, or a result list that's currently empty) fall back to
+    // the v0.5 skeleton + terminal pattern so the user has *something*
+    // to look at instead of a blank panel.
     mountLoadingTerminal(info, "search", { compact: true, header: "SEARCH" });
-    resultsEl.innerHTML = `
-        <div class="result-card skeleton"></div>
-        <div class="result-card skeleton"></div>
-        <div class="result-card skeleton"></div>
-    `;
+    const hasExistingResults = !!resultsEl.querySelector(".result-card:not(.skeleton)");
+    if (hasExistingResults) {
+        showProgressiveLoading(resultsEl, "search", { header: "SEARCH" });
+    } else {
+        resultsEl.innerHTML = `
+            <div class="result-card skeleton"></div>
+            <div class="result-card skeleton"></div>
+            <div class="result-card skeleton"></div>
+        `;
+    }
     pagerEl.innerHTML = "";
 
     try {
         const data = await fetchJSON(`/api/search?${params}`);
         state.searchTotal = data.total;
+        // Stop the dim now that data has landed — the innerHTML swap
+        // below will replace the dimmed cards with the new ones, and
+        // the new ones get a stagger fade-in via .is-new.
+        hideProgressiveLoading(resultsEl);
 
         // Sort client-side if asked. Backend always returns date_desc.
         const sorted = (state.searchSort === "date_asc")
@@ -1336,9 +1472,12 @@ async function executeSearch() {
 
         const hl = q ? new RegExp(`(${escapeRegExp(q)})`, "gi") : null;
         resultsEl.innerHTML = "";
-        sorted.forEach(r => {
+        sorted.forEach((r, idx) => {
             const card = document.createElement("div");
-            card.className = "result-card";
+            card.className = "result-card is-new";
+            // Stagger fade-in: each card delays slightly more than the
+            // last via the CSS calc(var(--i) * 22ms) animation-delay.
+            card.style.setProperty("--i", String(idx));
             card.onclick = () => openDetail(r.id);
 
             const loc = formatLocation(r.city, r.state, r.country);
@@ -1368,6 +1507,7 @@ async function executeSearch() {
 
         renderPager(data.page, data.pages);
     } catch (err) {
+        hideProgressiveLoading(resultsEl);
         info.textContent = "Couldn't run that search";
         resultsEl.innerHTML = `<div class="empty-state"><div class="empty-state-icon"><svg class="icon icon-xl" width="48" height="48" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div><div class="empty-state-title">Search failed</div><div class="empty-state-detail">Check your filters or try again. <br><span style="opacity:0.6">${escapeHtml(err.message || String(err))}</span></div></div>`;
         console.error(err);
