@@ -116,8 +116,19 @@ jobs:
       name: Production
       url: ${{ steps.deploy-to-webapp.outputs.webapp-url }}
     steps:
-      - name: Checkout (for migration SQL files)
+      # Sparse checkout pulls ONLY the migration SQL we need for the
+      # psql step, into a migrations/ subdirectory so it doesn't
+      # collide with the release.zip contents when they're unzipped
+      # into the current directory. Without this, checkout would
+      # drop README.md + everything else into the working dir and
+      # `unzip release.zip` would prompt interactively and fail.
+      - name: Checkout migration SQL (sparse)
         uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            scripts/add_v07_indexes.sql
+          sparse-checkout-cone-mode: false
+          path: migrations
 
       - name: Download artifact from build job
         uses: actions/download-artifact@v4
@@ -125,7 +136,7 @@ jobs:
           name: python-app
 
       - name: Unzip artifact for deployment
-        run: unzip release.zip
+        run: unzip -o release.zip
 
       # v0.7: apply idempotent index migrations BEFORE the code deploy,
       # so the new /api/sighting/<id> UNION ALL query has indexes ready
@@ -148,8 +159,8 @@ jobs:
             echo "Add DATABASE_URL to repo secrets to enable automatic schema updates"
             exit 0
           fi
-          echo "Running scripts/add_v07_indexes.sql …"
-          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f scripts/add_v07_indexes.sql
+          echo "Running migrations/scripts/add_v07_indexes.sql …"
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/scripts/add_v07_indexes.sql
           echo "Index migration complete."
 
       - name: Deploy to Azure Web App
