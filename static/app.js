@@ -205,16 +205,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (initial) {
         applyHashToFilters(initial.params);
         if (initial.tab && VALID_TABS.has(initial.tab) &&
-                initial.tab !== "map" && initial.tab !== "timeline" &&
-                initial.tab !== "observatory") {
+                initial.tab !== "map" && initial.tab !== "observatory") {
             switchTab(initial.tab);
             if (initial.tab === "search") {
                 doSearch();
             }
         }
-        // If tab is map/timeline/observatory or garbage we stay on
-        // observatory (already set above). The legacy alias in
-        // switchTab() handles any subsequent navigations.
+        // If tab is map/observatory or garbage we stay on observatory
+        // (already set above). Legacy #/map?... aliases through
+        // switchTab(); Timeline is a first-class tab again in v0.7.1.
     }
 
     // Back/forward navigation
@@ -702,13 +701,11 @@ function switchTab(tab) {
         tab = "observatory";
     }
 
-    // v0.7 alias: Map + Timeline are now both the Observatory dashboard.
-    // Legacy deep links like #/map?shape=triangle or #/timeline?year=1997
-    // still resolve to the right tab by remembering the original intent
-    // in state.legacyView and then falling through to the observatory
-    // branch. The time-brush below picks up state.timelineYear on load
-    // so drill-down from the old Timeline tab path still works.
-    if (tab === "map" || tab === "timeline") {
+    // v0.7 alias: legacy Map deep links (#/map?shape=triangle) still
+    // resolve to the Observatory dashboard since Map was merged into it.
+    // v0.7.1: Timeline is its own tab again (users wanted the full
+    // Chart.js drill-down back) so it does NOT alias to Observatory.
+    if (tab === "map") {
         state.legacyView = tab;
         tab = "observatory";
     }

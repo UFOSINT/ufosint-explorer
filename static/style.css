@@ -169,25 +169,13 @@ body.theme-declass .observatory-canvas-wrap {
         radial-gradient(ellipse at 82% 76%, rgba(120, 95, 45, 0.08), transparent 50%),
         var(--bg);
 }
-/* Classification stamp — rotated red border + text, top right. Pure
-   CSS pseudo-element, no images. */
-body.theme-declass::after {
-    content: "TOP SECRET // PLOTTED";
-    position: fixed;
-    top: 14px;
-    right: 22px;
-    z-index: 9998;
-    font-family: "Courier Prime", ui-monospace, monospace;
-    font-weight: 700;
-    font-size: 11px;
-    letter-spacing: 0.14em;
-    color: #B8001F;
-    border: 2.5px solid #B8001F;
-    padding: 3px 10px;
-    transform: rotate(-3deg);
-    pointer-events: none;
-    background: rgba(238, 232, 210, 0.85);
-}
+/* v0.7.1: the rotated "TOP SECRET // PLOTTED" classification stamp
+   was removed — it overlapped the gear icon on narrower viewports
+   and the joke wore thin fast. The DECLASS theme is now defined
+   purely by the palette, Courier Prime body font, and paper-
+   gradient canvas background. If we want the stamp back we can
+   restore this rule and scope it to the Observatory canvas wrap
+   instead of position: fixed on body. */
 
 * {
     margin: 0;
@@ -2385,21 +2373,31 @@ select:focus {
     margin: 0;
 }
 
-/* ---- Map place search (top-left) ---- */
+/* ---- Map place search ----
+   v0.7.1: moved from top-left to bottom-middle of the map canvas.
+   The v0.7 topbar carries the Points/Heatmap/HexBin mode toggle at
+   top: 14px, and the old top-left place search was colliding with
+   it — the mode buttons were hidden behind the search input. Bottom-
+   middle keeps the search reachable without covering the Observatory
+   controls or the HUD brackets. The bg uses --bg-panel via a color-mix
+   fallback so both SIGNAL (dark) and DECLASS (cream) look right. */
 .map-place-search {
     position: absolute;
-    top: var(--s-3);
-    left: 60px;          /* leave room for the Leaflet zoom controls */
+    bottom: 36px;        /* sits above the Leaflet attribution strip */
+    left: 50%;
+    transform: translateX(-50%);
     z-index: 1000;
     display: flex;
     align-items: center;
     gap: var(--s-1);
-    background: rgba(19, 25, 37, 0.95);
+    background: var(--bg-panel);
     border: 1px solid var(--border-strong);
     border-radius: var(--r-md);
     padding: var(--s-1) var(--s-2);
     box-shadow: var(--shadow-md);
-    backdrop-filter: blur(4px);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    max-width: min(520px, calc(100% - 32px));
 }
 .map-place-search input[type="text"] {
     width: 240px;
@@ -2420,10 +2418,11 @@ select:focus {
 }
 
 @media (max-width: 720px) {
+    /* On narrow viewports the bottom-middle placement still works; we
+       just widen the max-width so the input doesn't squeeze out the
+       Go / Near me buttons. */
     .map-place-search {
-        left: var(--s-2);
-        right: var(--s-2);
-        top: 60px;       /* below the Leaflet zoom + the cluster/heat toggle */
+        max-width: calc(100% - 16px);
         flex-wrap: wrap;
     }
     .map-place-search input[type="text"] {
@@ -3094,13 +3093,23 @@ select:focus {
 .hud-brackets .hud-br-bl { bottom: 0; left: 0;  border-right: none; border-top: none; }
 .hud-brackets .hud-br-br { bottom: 0; right: 0; border-left: none;  border-top: none; }
 
-/* Coords toggle — moved out of the old .map-mode-toggle pod so it sits
-   next to the place search as a small secondary control. */
+/* Coords toggle — small secondary control that lives next to the
+   place search at the bottom-middle of the map (v0.7.1). Sits just
+   above the place search on the right so All/Original/Geocoded is
+   within thumb reach without colliding with the mode toggle. */
 .coords-toggle {
     position: absolute;
-    top: 60px;
-    right: 16px;
+    bottom: 80px;
+    left: 50%;
+    transform: translateX(120px);  /* to the right of the place search pod */
     z-index: 500;
+}
+@media (max-width: 720px) {
+    .coords-toggle {
+        bottom: 120px;
+        left: 50%;
+        transform: translateX(-50%);
+    }
 }
 .coords-toggle select {
     background: var(--bg-panel);

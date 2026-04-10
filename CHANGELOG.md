@@ -17,6 +17,59 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 Nothing yet.
 
+## [0.7.1] — 2026-04-10 — UFOSINT rename, place search reflow, Timeline restored
+
+Small polish patch on top of v0.7.0 based on a round of immediate feedback.
+
+### Changed
+
+- **Header H1 is now "UFOSINT Explorer"** (was "UFO Explorer") — matches
+  the domain, the repo name, and the HTML `<title>`.
+- **Place search moved from top-left to bottom-middle of the map
+  canvas.** The top-left placement from v0.6 was colliding with the
+  Observatory topbar's Points/Heatmap/Hex Bins mode toggle, so the
+  mode buttons were hidden behind the search input. The search pod now
+  sits 36 px above the Leaflet attribution strip, centered via
+  `left: 50%; transform: translateX(-50%)`, with a `max-width` clamp
+  so narrow viewports don't stretch it edge-to-edge.
+- **`.coords-toggle`** (All / Original / Geocoded coord-source
+  dropdown) follows the place search to bottom-middle — parked just
+  to the right of the search pod on desktop, stacked above it on
+  mobile so neither control covers the mode toggle.
+- **Timeline is a first-class tab again.** v0.7.0 folded both Map and
+  Timeline into the Observatory dashboard, but users still want the
+  full Chart.js drill-down view for year → month exploration — the
+  Observatory time brush is a compact filter, not a replacement for
+  the full chart. The `switchTab()` alias branch now maps only
+  `map` → `observatory`; Timeline resolves to its own
+  `#panel-timeline` with the existing `loadTimeline()` render path.
+- **DECLASS "TOP SECRET // PLOTTED" classification stamp removed.**
+  The rotated `position: fixed` pseudo-element overlapped the gear
+  icon on narrow viewports and the novelty wore thin fast. The
+  DECLASS theme is now defined purely by its palette (burgundy accent,
+  cream background, Courier Prime body font) plus the paper-gradient
+  canvas wrap. If we ever want it back we can scope a new stamp to
+  the Observatory canvas instead of the global body.
+
+### Tests
+
+- New tests in `tests/test_v07.py`:
+  - `test_h1_is_ufosint_explorer` — locks the rename
+  - `test_timeline_tab_is_restored_and_visible` — no `hidden`, no
+    `legacy-tab` on the Timeline button
+  - `test_map_tab_stays_hidden_as_legacy_alias` — Map stays in DOM
+    for `#/map?...` deep-link compatibility but remains invisible
+  - `test_switch_tab_no_longer_aliases_timeline` — the old
+    `tab === "map" || tab === "timeline"` alias is gone
+  - `test_map_place_search_is_at_bottom_middle` — CSS must use
+    `bottom:`, `left: 50%`, and `translateX(-50%)`, and must NOT
+    carry the old `top: var(--s-3)` positioning
+- Updated `test_declass_has_classification_stamp` →
+  `test_declass_stamp_overlay_removed` — now pins the stamp's
+  absence instead of its presence.
+
+Suite is now **133 tests** (was 128), still runs in under 0.5 s.
+
 ## [0.7.0] — 2026-04-10 — Observatory redesign, H3 hex bins, 504 fix
 
 This is the biggest UX change since v0.1 — a second UX team reviewed the

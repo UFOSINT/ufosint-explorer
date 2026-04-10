@@ -55,21 +55,23 @@
     <!-- Header -->
     <header id="header">
         <div class="header-left">
-            <h1>UFO Explorer</h1>
+            <h1>UFOSINT Explorer</h1>
             <div class="stats-badge-wrap">
                 <button id="stats-badge" class="stats-badge" type="button" aria-haspopup="dialog" aria-expanded="false" title="Click for detailed counts"><span class="stats-badge-boot"><span class="term-prompt">&gt;</span> <span class="stats-boot-msg">BOOT SEQUENCE INITIATED</span><span class="term-cursor" aria-hidden="true"></span></span></button>
                 <div id="stats-popover" class="stats-popover" role="dialog" aria-label="Database statistics" hidden></div>
             </div>
         </div>
         <nav class="tabs">
-            <!-- v0.7: Observatory unifies Map + Timeline into one dashboard.
-                 The legacy Map/Timeline tabs are hidden (not deleted) so
-                 existing deep links like #/map?q=... still resolve in
-                 switchTab() and so v0.6-era tests that look up the
-                 buttons don't break. -->
+            <!-- v0.7: Observatory replaces the old full-screen Map tab,
+                 so Map is hidden as a legacy alias (kept in DOM so
+                 #/map?q=... deep links still resolve via switchTab()).
+                 v0.7.1: Timeline is restored as its own tab — the
+                 Observatory brush at the bottom is a compact filter,
+                 but users still want the full Chart.js drill-down
+                 for year → month exploration. -->
             <button class="tab active" data-tab="observatory">Observatory</button>
             <button class="tab legacy-tab" data-tab="map" hidden>Map</button>
-            <button class="tab legacy-tab" data-tab="timeline" hidden>Timeline</button>
+            <button class="tab" data-tab="timeline">Timeline</button>
             <button class="tab" data-tab="search">Search</button>
             <button class="tab" data-tab="duplicates">Duplicates</button>
             <button class="tab" data-tab="insights">Insights</button>

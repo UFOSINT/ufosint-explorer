@@ -248,8 +248,10 @@ def test_app_js_has_load_observatory():
     assert "function loadHexBins" in content
     assert "function mountObservatoryRail" in content
     assert "class TimeBrush" in content
-    # The switchTab alias maps map/timeline → observatory
-    assert 'tab === "map" || tab === "timeline"' in content
+    # v0.7.1: the switchTab alias maps only "map" → "observatory";
+    # Timeline is its own first-class tab again. Asserted more
+    # specifically in test_switch_tab_no_longer_aliases_timeline.
+    assert 'if (tab === "map") {' in content
 
 
 def test_app_js_has_hex_mode_branch():
@@ -291,11 +293,109 @@ def test_both_theme_css_blocks_present():
     assert declass_match, "body.theme-declass block missing or doesn't define --accent"
 
 
-def test_declass_has_classification_stamp():
-    """DECLASS theme must include the rotated TOP SECRET pseudo-stamp."""
+def test_h1_is_ufosint_explorer():
+    """v0.7.1: the header H1 became 'UFOSINT Explorer' (matches the
+    domain and the repo name). Previously it was just 'UFO Explorer'."""
+    content = _read(INDEX_HTML)
+    assert "<h1>UFOSINT Explorer</h1>" in content, (
+        "Header H1 is no longer 'UFOSINT Explorer' — the rename was reverted"
+    )
+    assert "<h1>UFO Explorer</h1>" not in content
+
+
+def test_timeline_tab_is_restored_and_visible():
+    """v0.7.1: Timeline is a first-class tab again (the Observatory
+    time brush is a compact filter, but users still want the full
+    Chart.js drill-down for year→month exploration). Only the Map
+    tab should remain hidden as a legacy alias."""
+    content = _read(INDEX_HTML)
+    # The Timeline tab button exists and is NOT hidden / NOT legacy.
+    # We look for the exact shape: data-tab="timeline" followed by >Timeline<
+    # with no `hidden` attribute on the same button.
+    import re as _re
+    tl = _re.search(r'<button[^>]*data-tab="timeline"[^>]*>Timeline</button>', content)
+    assert tl, "Timeline tab button missing or Timeline text changed"
+    assert " hidden" not in tl.group(0), (
+        "Timeline tab is still hidden — v0.7.1 restores it as a real tab"
+    )
+    assert "legacy-tab" not in tl.group(0), (
+        "Timeline tab still carries legacy-tab class — should be first-class"
+    )
+
+
+def test_map_tab_stays_hidden_as_legacy_alias():
+    """Map stays hidden since Observatory replaces the full-screen
+    map tab entirely. Timeline got restored but Map did not."""
+    content = _read(INDEX_HTML)
+    import re as _re
+    m = _re.search(r'<button[^>]*data-tab="map"[^>]*>Map</button>', content)
+    assert m, "Map tab button was deleted — we still want it in the DOM for deep link aliasing"
+    assert " hidden" in m.group(0), "Map tab should be hidden in v0.7.1"
+
+
+def test_switch_tab_no_longer_aliases_timeline():
+    """v0.7.1: the switchTab() alias branch should map only "map" →
+    "observatory". Timeline is its own tab again and must not fall
+    through to Observatory."""
+    content = _read(APP_JS)
+    # The old v0.7 alias was `if (tab === "map" || tab === "timeline")`.
+    # v0.7.1 drops the timeline half.
+    assert 'tab === "map" || tab === "timeline"' not in content, (
+        "switchTab still aliases timeline → observatory in v0.7.1"
+    )
+    assert 'if (tab === "map") {' in content, (
+        "switchTab lost the map → observatory alias entirely — legacy "
+        "#/map?... deep links won't work anymore"
+    )
+
+
+def test_map_place_search_is_at_bottom_middle():
+    """v0.7.1: the place search moved from top-left (where it covered
+    the mode toggle) to bottom-middle. The CSS rule must use `bottom`
+    + `left: 50%` + a translate transform instead of top-left."""
     content = _read(STYLE_CSS)
-    assert "body.theme-declass::after" in content
-    assert "TOP SECRET" in content
+    import re as _re
+    rule = _re.search(r"\.map-place-search\s*\{[^}]*\}", content, _re.DOTALL)
+    assert rule, ".map-place-search CSS rule is missing entirely"
+    body = rule.group(0)
+    assert "bottom:" in body, (
+        ".map-place-search no longer uses `bottom:` — it's back at the "
+        "top where it covered the mode toggle"
+    )
+    assert "left: 50%" in body, (
+        ".map-place-search should be horizontally centered via left: 50%"
+    )
+    assert "translateX(-50%)" in body, (
+        ".map-place-search should use translateX(-50%) to center itself"
+    )
+    # Make sure the old top-left positioning is gone
+    assert "top: var(--s-3)" not in body, (
+        "leftover top: var(--s-3) from the v0.7 top-left placement"
+    )
+
+
+def test_declass_stamp_overlay_removed():
+    """v0.7.1: the rotated 'TOP SECRET // PLOTTED' classification stamp
+    was removed from the DECLASS theme. It overlapped the gear icon on
+    narrower viewports and the user asked to drop it. The DECLASS theme
+    is now defined purely by the palette + Courier Prime + paper-
+    gradient canvas. This test keeps the removal pinned so a future
+    refactor doesn't silently bring it back."""
+    content = _read(STYLE_CSS)
+    # The old position: fixed body::after stamp should be gone.
+    # A scoped canvas-only stamp would be fine if we ever want it back,
+    # but the position: fixed global overlay must not return.
+    # Look for the exact old selector+content combo.
+    import re as _re
+    bad = _re.search(
+        r"body\.theme-declass::after\s*\{[^}]*content:\s*['\"]TOP SECRET",
+        content,
+        _re.DOTALL,
+    )
+    assert bad is None, (
+        "DECLASS classification stamp overlay is back — "
+        "it covered the gear icon and the user asked to remove it"
+    )
 
 
 def test_app_js_has_theme_handler():
