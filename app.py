@@ -748,6 +748,7 @@ def api_map():
                        COALESCE(l.state, '') AS state,
                        COALESCE(l.country, '') AS country,
                        COALESCE(sc.name, '') AS collection,
+                       (s.description IS NOT NULL AND LENGTH(s.description) > 0) AS has_desc,
                        ROW_NUMBER() OVER (
                            PARTITION BY
                                CAST((l.latitude  - %s) / %s AS INTEGER),
@@ -761,7 +762,7 @@ def api_map():
                 WHERE {where}
             )
             SELECT id, latitude, longitude, date_event, shape, source_name,
-                   city, state, country, collection
+                   city, state, country, collection, has_desc
             FROM cells
             WHERE rn <= %s
             LIMIT %s
@@ -789,7 +790,8 @@ def api_map():
                    COALESCE(l.city, '') AS city,
                    COALESCE(l.state, '') AS state,
                    COALESCE(l.country, '') AS country,
-                   COALESCE(sc.name, '') AS collection
+                   COALESCE(sc.name, '') AS collection,
+                   (s.description IS NOT NULL AND LENGTH(s.description) > 0) AS has_desc
             FROM sighting s
             JOIN location l ON s.location_id = l.id
             JOIN source_database sd ON s.source_db_id = sd.id
@@ -813,6 +815,7 @@ def api_map():
             "state": r[7],
             "country": r[8],
             "collection": r[9],
+            "has_desc": bool(r[10]),
         })
 
     # Total-in-view count: only run the COUNT(*) when we hit the limit,
@@ -1028,17 +1031,22 @@ def api_hexbin():
 
         # The aggregation: FLOOR((lat - south) / size) gives a zero-based
         # row index inside the viewport; likewise for columns. Grouping
-        # by (row, col) buckets sightings into the grid. We also compute
-        # the cell's centroid lat/lng so the client doesn't have to. The
-        # LIMIT protects the response size — 2000 cells is plenty for
-        # any viewport (a 1600x900 canvas holds ~1500 cells at most).
+        # by (row, col) buckets sightings into the grid. The LIMIT
+        # protects the response size — 2000 cells is plenty for any
+        # viewport (a 1600x900 canvas holds ~1500 cells at most).
+        #
+        # v0.7.6: We deliberately return the GEOMETRIC center of each
+        # bucket (south + (row+0.5)*size, west + (col+0.5)*size) instead
+        # of the data centroid. The data-centroid version made adjacent
+        # buckets render at slightly offset positions, so when the
+        # client drew hex polygons around them they overlapped or
+        # rendered at apparently random sizes. Using the bucket center
+        # guarantees a uniform tessellation.
         sql = f"""
             SELECT
                 FLOOR((l.latitude  - %s) / %s)::int AS row,
                 FLOOR((l.longitude - %s) / %s)::int AS col,
-                COUNT(*)::int                       AS cnt,
-                AVG(l.latitude)::float8             AS lat,
-                AVG(l.longitude)::float8            AS lng
+                COUNT(*)::int                       AS cnt
             FROM sighting s
             JOIN location l ON l.id = s.location_id
             WHERE {where}
@@ -1055,8 +1063,8 @@ def api_hexbin():
                 "row": r[0],
                 "col": r[1],
                 "cnt": r[2],
-                "lat": r[3],
-                "lng": r[4],
+                "lat": south + (r[0] + 0.5) * size,
+                "lng": west + (r[1] + 0.5) * size,
             }
             for r in rows
         ]

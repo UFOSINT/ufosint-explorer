@@ -17,6 +17,48 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 Nothing yet.
 
+## [0.7.6] — 2026-04-10 — Marker popup polish + hex tessellation + brush playback
+
+Three small UX bugs from the v0.7.5 round of feedback. None of them
+needed schema or pipeline work — pure UI fixes.
+
+### Added
+
+- Marker popup now renders a real **View Details** button (was a plain
+  text link), and shows a `[ DESC ]` / `[ NO DESC ]` badge so you can
+  tell at a glance which sightings carry a written narrative versus
+  coordinates-only entries. `/api/map` returns a new `has_desc`
+  boolean computed inline (`s.description IS NOT NULL AND LENGTH > 0`)
+  with no extra index needed — the field rides along with every
+  marker for free.
+- New `.popup-btn`, `.popup-tags`, `.popup-links`, `.popup-desc-row`,
+  and `.popup-desc-badge` styles in `style.css`. The button uses the
+  active theme's `--accent` colour so SIGNAL and DECLASS both look
+  right.
+
+### Fixed
+
+- **Hex bins overlapped and rendered at apparently random sizes.**
+  Two interacting bugs: (a) `/api/hexbin` returned the data centroid
+  (`AVG(lat)`, `AVG(lng)`) of each bucket rather than the geometric
+  cell center, so adjacent buckets drew their hexes at offset
+  positions; (b) `_hexPolygonAround` stretched longitude by
+  `1/cos(lat)` to make the hex equilateral on Mercator, which pushed
+  each hex past its grid cell at higher latitudes (UFOSINT data
+  clusters around 35–50°N where the stretch was most visible).
+  v0.7.6 returns `(south + (row+0.5)*size, west + (col+0.5)*size)`
+  from the backend and uses `r = sizeDeg / 2` with no Mercator
+  correction in the frontend, so every hex is inscribed in its own
+  grid cell. The result tessellates uniformly with small diagonal
+  gaps and no overlap.
+- **Time brush PLAY button appeared dead.** Hitting PLAY before
+  narrowing the window left `winSpan == span`, so the slide loop's
+  `b = a + winSpan` always exceeded `maxT`, the loop reset `a` back
+  to `minT`, and visually nothing happened. PLAY now auto-narrows
+  the window to a 5-year span starting from the dataset minimum
+  before the slide begins, so the playback sweeps forward visibly
+  on the first click.
+
 ## [0.7.5] — 2026-04-10 — Materialized views for landing-page aggregates
 
 The v0.7.4 free tuning (`pg_prewarm` + parameter bumps) cut cold-start

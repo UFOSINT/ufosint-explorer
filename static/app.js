@@ -996,9 +996,8 @@ function initMap() {
 // are only added when the marker has the requisite metadata.
 function buildMarkerPopupHTML(m) {
     const loc = formatLocation(m.city, m.state, m.country);
-    const links = [
-        `<a href="#" class="popup-link" onclick="openDetail(${m.id}); return false;">View details →</a>`,
-    ];
+    // Cross-tab pivot links — secondary actions, rendered as plain links.
+    const links = [];
     if (m.city) {
         const cityArg = JSON.stringify(m.city).replace(/"/g, '&quot;');
         const stateArg = m.state ? JSON.stringify(m.state).replace(/"/g, '&quot;') : "''";
@@ -1009,12 +1008,20 @@ function buildMarkerPopupHTML(m) {
         const ym = m.date.substring(0, 7);  // "YYYY-MM"
         links.push(`<a href="#" class="popup-link" onclick="drillToMonth('${ym}'); return false;">See ${escapeHtml(ym)} on the timeline →</a>`);
     }
+    // v0.7.6: Most sightings ship with no description text. Show a small
+    // badge so users can tell at a glance which markers have a written
+    // narrative attached and which are coordinates-only.
+    const descBadge = m.has_desc
+        ? `<span class="popup-desc-badge has-desc" title="Sighting has a written description">[ DESC ]</span>`
+        : `<span class="popup-desc-badge no-desc" title="No written description on record">[ NO DESC ]</span>`;
     return `
         <div class="popup">
             <div class="popup-date">${escapeHtml(m.date || "Unknown date")}</div>
             <div class="popup-loc">${escapeHtml(loc) || "Unknown location"}</div>
-            <div>${sourceBadge(m.source)} ${m.shape ? `<span class="shape-tag">${escapeHtml(m.shape)}</span>` : ""}</div>
-            ${links.join("")}
+            <div class="popup-tags">${sourceBadge(m.source)} ${m.shape ? `<span class="shape-tag">${escapeHtml(m.shape)}</span>` : ""}</div>
+            <div class="popup-desc-row">${descBadge}</div>
+            <button type="button" class="popup-btn" onclick="openDetail(${m.id}); return false;">View Details →</button>
+            ${links.length ? `<div class="popup-links">${links.join("")}</div>` : ""}
         </div>
     `;
 }
@@ -1422,19 +1429,28 @@ function _sampleRamp(t) {
 function _rgb(c) { return `rgb(${c[0]}, ${c[1]}, ${c[2]})`; }
 
 // Build a flat-top hexagon polygon (list of [lat, lng] vertices)
-// centered on (cLat, cLng) with a cell side length of `sizeDeg`
-// degrees. Longitude is stretched by 1/cos(lat) so the hex renders
-// as roughly equilateral on the Mercator projection, which is what
-// Leaflet uses. Returns 6 vertices — Leaflet closes the loop.
+// inscribed in a `sizeDeg × sizeDeg` degree square centered on
+// (cLat, cLng). Returns 6 vertices — Leaflet closes the loop.
+//
+// v0.7.6: Earlier versions stretched the longitude by 1/cos(lat) to
+// make the hex render as visually equilateral on the Mercator
+// projection, but that pushed each hex past its grid cell at higher
+// latitudes — adjacent cells overlapped, and hex sizes drifted with
+// latitude (UFOSINT data clusters around 35-50°N where the stretch
+// was most visible). Dropping the latFactor and using r = sizeDeg/2
+// guarantees every hex is inscribed in its own grid cell, so they
+// tessellate uniformly with small diagonal gaps and no overlap. The
+// hexes will read as slightly tall rather than equilateral on
+// Mercator at high latitudes — that's an honest visual trade for
+// uniform sizing across the viewport.
 function _hexPolygonAround(cLat, cLng, sizeDeg) {
-    const latFactor = Math.max(0.15, Math.cos(cLat * Math.PI / 180));
-    const r = sizeDeg * 0.58;  // visual radius ≈ half the bucket side, nudged larger
+    const r = sizeDeg / 2;
     const pts = [];
     for (let i = 0; i < 6; i++) {
         const angle = (Math.PI / 3) * i + Math.PI / 6;  // flat-top orientation
         pts.push([
             cLat + r * Math.sin(angle),
-            cLng + (r * Math.cos(angle)) / latFactor,
+            cLng + r * Math.cos(angle),
         ]);
     }
     return pts;
@@ -1816,12 +1832,34 @@ class TimeBrush {
             playBtn.setAttribute("aria-pressed", "true");
         }
         const span = this.maxT - this.minT;
-        const winSpan = this.window[1] - this.window[0];
+        // v0.7.6: If the user hits PLAY without first narrowing the
+        // window, the window IS the full range and the slide loop has
+        // nowhere to slide to (b = a + span always exceeds maxT, the
+        // reset clamps it back to the full range, and visually nothing
+        // happens). Auto-narrow to a 5-year window starting from the
+        // dataset min so the playback sweeps forward visibly.
+        let winSpan = this.window[1] - this.window[0];
+        if (winSpan >= span * 0.98) {
+            const fiveYears = 5 * 365.25 * 86400000;
+            winSpan = Math.min(fiveYears, span * 0.2);
+            this.window = [this.minT, this.minT + winSpan];
+            this._syncWindow();
+            // Fire an immediate (non-debounced) onChange so filters
+            // catch up to the new window before the slide starts.
+            this.onChange(this._isoDate(this.window[0]), this._isoDate(this.window[1]));
+        }
+        // Slide step: ~0.4% of total span per frame ≈ 8 months at the
+        // default 1900-2026 range. Smooth visible motion at 60fps.
+        const stepSize = span * 0.004;
         const step = () => {
             if (!this.playing) return;
-            let a = this.window[0] + span * 0.004;
+            let a = this.window[0] + stepSize;
             let b = a + winSpan;
-            if (b > this.maxT) { a = this.minT; b = a + winSpan; }
+            if (b > this.maxT) {
+                // Loop back to the start once we hit the end.
+                a = this.minT;
+                b = a + winSpan;
+            }
             this.window = [a, b];
             this._syncWindow();
             this.onChange(this._isoDate(a), this._isoDate(b));
