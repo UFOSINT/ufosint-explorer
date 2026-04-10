@@ -3,3 +3,7 @@ flask-caching==2.3.0
 flask-compress==1.17
 gunicorn==23.0.0
 psycopg[binary,pool]==3.3.3
+# redis is the client library Flask-Caching uses when CACHE_TYPE=RedisCache.
+# Unused (and not imported) unless REDIS_URL is set in the environment, so
+# local dev and tests still run fine without a Redis server available.
+redis==5.2.1

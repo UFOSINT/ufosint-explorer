@@ -217,6 +217,7 @@ so the tagged commit gets deployed automatically.
 | `SCM_DO_BUILD_DURING_DEPLOYMENT` | App Service → Configuration | **Yes** (`true`) | Tells App Service to run `pip install -r requirements.txt` on deploy. |
 | `PORT` | Set automatically by App Service | No | gunicorn's bind port. Procfile reads `$PORT`. |
 | `WEBSITES_PORT` | (unused) | No | Only needed for custom container scenarios. |
+| `REDIS_URL` | App Service → Configuration → Application settings | No | When set, Flask-Caching uses RedisCache (shared across gunicorn workers). When unset, each worker keeps its own SimpleCache. Format: `rediss://:<PRIMARY_KEY>@<name>.redis.cache.windows.net:6380/0`. See section 7.3. |
 
 ## 6. Monitoring & debugging the live site
 
@@ -243,7 +244,109 @@ If the site is down, check in this order:
 4. Latest Actions run — a failed deploy may have left the container in
    a half-restarted state
 
-## 7. Future work
+## 7. Performance tuning
+
+Free and cheap knobs to make the site snappier without scaling the App
+Service plan up. Apply these in order — the earlier entries are free
+and give most of the benefit.
+
+### 7.1 Postgres server parameters (free, 10 minutes)
+
+Open **Azure portal → `ufosint-pg` Flexible Server → Server parameters**
+and set the values below. The reference numbers are tuned for the
+current B1ms tier (2 GB RAM); multiply by 4 for B2ms (8 GB).
+
+| Parameter | B1ms value | Why |
+|-----------|-----------|-----|
+| `shared_buffers` | `768MB` | ~30% of RAM resident for PG pages |
+| `effective_cache_size` | `1500MB` | Tells planner the OS page cache is big |
+| `work_mem` | `16MB` | Sort/hash per op — bigger than default 4MB |
+| `maintenance_work_mem` | `128MB` | Faster VACUUM + CREATE INDEX |
+| `random_page_cost` | `1.1` | SSD, not spinning rust (default is 4) |
+| `effective_io_concurrency` | `200` | SSD parallel-read hint |
+| `default_statistics_target` | `200` | Better histograms on skewed cols |
+| `jit` | `off` | JIT startup cost > benefit for our query mix |
+
+`shared_buffers` is a restart parameter (Azure schedules it), the rest
+apply on save. Verify with:
+
+```bash
+psql "$DATABASE_URL" -c "SHOW shared_buffers; SHOW work_mem;"
+```
+
+### 7.2 pg_prewarm (free, one restart)
+
+After changing `shared_buffers` the cache is empty, so the first
+request to every endpoint eats disk I/O. Enable the `pg_prewarm`
+extension (one time) and run the helper script to preload the hot
+tables + indexes:
+
+```bash
+# One-time: enable the extension on the flexible server
+az postgres flexible-server parameter set \
+  --resource-group rg-ufosint-prod \
+  --server-name ufosint-pg \
+  --name azure.extensions --value pg_trgm,pg_prewarm
+
+# Then, on each restart, run:
+psql "$DATABASE_URL" -f scripts/pg_tuning.sql
+```
+
+The app also calls `pg_prewarm` on worker boot (`_pg_prewarm_relations`
+in `app.py`), so a deploy-triggered restart is self-healing. The
+`scripts/pg_tuning.sql` path is just for manual ops work after a
+database-side restart.
+
+### 7.3 Azure Cache for Redis (~$16/mo)
+
+`SimpleCache` is per-gunicorn-worker, so a cached response only helps
+the worker that computed it. A shared Redis cache means the FIRST hit
+on any worker warms the cache for every other worker, and the cache
+survives worker restarts.
+
+```bash
+# Create a Basic C0 instance (250 MB, plenty for our workload)
+az redis create \
+  --name ufosint-cache \
+  --resource-group rg-ufosint-prod \
+  --location centralus \
+  --sku Basic --vm-size c0
+
+# Grab the primary key
+az redis list-keys \
+  --name ufosint-cache \
+  --resource-group rg-ufosint-prod
+
+# Wire it into the App Service (note: rediss:// for TLS on port 6380)
+az webapp config appsettings set \
+  --name ufosint-explorer \
+  --resource-group rg-ufosint-prod \
+  --settings \
+    REDIS_URL="rediss://:<PRIMARY_KEY>@ufosint-cache.redis.cache.windows.net:6380/0"
+```
+
+The app auto-detects `REDIS_URL` at startup and switches Flask-Caching
+to `RedisCache` with a versioned key prefix (`ufosint:<ASSET_VERSION>:`)
+so deploys auto-invalidate their predecessor's cache. Boot logs will
+show `[cache] backend=RedisCache prefix=...`. Unset the env var to
+revert to per-worker SimpleCache.
+
+### 7.4 When to scale up (paid)
+
+If 7.1–7.3 aren't enough:
+
+1. **Postgres B1ms → B2ms** (~$15 → ~$45/mo). 4× the RAM means the
+   whole working set is resident. Biggest single win for query
+   latency. Change the `--tier`/`--sku-name` via `az postgres
+   flexible-server update`.
+2. **App Service B1 → B2** (~$13 → ~$26/mo). Only worth it if
+   `az webapp log tail` shows gunicorn workers saturated. More likely
+   to help concurrency than single-request latency.
+3. **App Service → P0v3/P1v3** (~$55+/mo). Enables deployment slots
+   (real staging + blue/green) and much faster per-core CPU. Revisit
+   when traffic justifies it.
+
+## 8. Future work
 
 - **Custom domain `ufosint.com`**: add via App Service → Custom
   domains, validate with DNS TXT + A records, enable App Service

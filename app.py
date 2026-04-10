@@ -93,14 +93,48 @@ Compress(app)
 from mcp_http import mcp_bp  # noqa: E402
 app.register_blueprint(mcp_bp)
 
-# In-process LRU cache for expensive query responses. Per-worker
-# (not shared across gunicorn workers), keyed on the full query
-# string. 5-minute default TTL.
-cache = Cache(app, config={
-    "CACHE_TYPE": "SimpleCache",
-    "CACHE_DEFAULT_TIMEOUT": 300,
-    "CACHE_THRESHOLD": 500,  # max number of cached items per worker
-})
+# ---------------------------------------------------------------------------
+# Response cache (Flask-Caching)
+#
+# If REDIS_URL is set in the environment we use it as a SHARED backend, so
+# all gunicorn workers hit the same cache — a single warm key benefits every
+# worker, and the cache survives worker restarts. This is the big perceived
+# speedup: repeated hits to /api/stats, /api/filters, /api/hexbin become
+# sub-millisecond regardless of which worker handles the request.
+#
+# Without REDIS_URL we fall back to a per-process SimpleCache (each gunicorn
+# worker keeps its own ~500-entry LRU). That's the "free tier" path and is
+# what local tests use — no redis server needed.
+#
+# Azure Cache for Redis Basic C0 is ~$16/mo and gives a 250 MB shared cache
+# that's easily enough for this workload. Set REDIS_URL to the connection
+# string the Azure portal gives you, e.g.:
+#   rediss://:<PRIMARY_KEY>@<name>.redis.cache.windows.net:6380/0
+# ---------------------------------------------------------------------------
+_REDIS_URL = os.environ.get("REDIS_URL", "").strip()
+if _REDIS_URL:
+    _cache_cfg = {
+        "CACHE_TYPE": "RedisCache",
+        "CACHE_REDIS_URL": _REDIS_URL,
+        "CACHE_DEFAULT_TIMEOUT": 300,
+        # Namespace every key so multiple deploys pointed at the same
+        # Redis instance don't collide, and a new version auto-invalidates
+        # the previous version's cached responses.
+        "CACHE_KEY_PREFIX": f"ufosint:{ASSET_VERSION}:",
+        # Fail closed: if Redis hiccups we want the request to still work,
+        # not 500. flask-caching 2.x silently swallows backend errors and
+        # serves the uncached response, which is exactly what we want.
+    }
+    print(f"[cache] backend=RedisCache prefix=ufosint:{ASSET_VERSION}:")
+else:
+    _cache_cfg = {
+        "CACHE_TYPE": "SimpleCache",
+        "CACHE_DEFAULT_TIMEOUT": 300,
+        "CACHE_THRESHOLD": 500,  # max number of cached items per worker
+    }
+    print("[cache] backend=SimpleCache (set REDIS_URL for a shared cache)")
+
+cache = Cache(app, config=_cache_cfg)
 
 # ---------------------------------------------------------------------------
 # Database connection (PostgreSQL via psycopg + connection pool)
@@ -1630,23 +1664,81 @@ def _init_app():
         print("/health and routes will retry on first request.")
 
 
+# Tables + indexes we want resident in PG's shared_buffers at startup.
+# pg_prewarm loads pages into the buffer cache so the first request
+# against a cold server doesn't eat disk I/O. Cheap (~1-3 seconds for
+# the whole list on B1ms) and it runs in the background thread below,
+# so we can afford to be generous.
+_PREWARM_RELATIONS = [
+    "sighting",
+    "location",
+    "idx_location_coords",
+    "idx_sighting_date",
+    "idx_sighting_location",
+    "idx_sighting_source_date",
+    "idx_sighting_shape",
+    "idx_location_country",
+    "idx_sighting_description_trgm",
+    "idx_sighting_summary_trgm",
+]
+
+
+def _pg_prewarm_relations():
+    """Call pg_prewarm() on each hot relation so shared_buffers is warm.
+
+    Safe to call any time — pg_prewarm just reads pages into the cache and
+    is a no-op if they're already resident. Silently skips the whole step
+    if the extension isn't installed, so local dev / CI without superuser
+    rights doesn't need any special setup.
+    """
+    try:
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            # Check extension presence first so we don't spam logs with
+            # 'function pg_prewarm does not exist' on environments that
+            # haven't enabled it.
+            cur.execute(
+                "SELECT 1 FROM pg_extension WHERE extname = 'pg_prewarm'"
+            )
+            if not cur.fetchone():
+                print("[prewarm] pg_prewarm extension not installed, "
+                      "skipping buffer prewarm (see scripts/pg_tuning.sql)")
+                return
+            for rel in _PREWARM_RELATIONS:
+                try:
+                    cur.execute("SELECT pg_prewarm(%s)", (rel,))
+                    blocks = cur.fetchone()[0]
+                    print(f"[prewarm] pg_prewarm {rel}: {blocks} blocks")
+                except Exception as e:
+                    # Missing relation (e.g. trgm indexes not built yet)
+                    # is not fatal — keep going.
+                    print(f"[prewarm] pg_prewarm {rel}: skipped ({e})")
+                    conn.rollback() if hasattr(conn, "rollback") else None
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"[prewarm] pg_prewarm step failed: {e}")
+
+
 def _prewarm_caches():
     """Pre-warm PG's buffer cache and the flask response cache.
 
     Runs in a background thread after gunicorn boots so the FIRST visitor
-    to the site doesn't pay the cold-cache cost. Hits the most common
-    landing-page queries via the in-process Flask test client (which
-    reuses the same cache and the same connection pool).
+    to the site doesn't pay the cold-cache cost. Two stages:
+      1) pg_prewarm() on hot tables + indexes → shared_buffers is warm.
+      2) Hit the most common landing-page queries via the in-process
+         Flask test client → the response cache + planner stats warm.
 
-    The map endpoint covers a couple of representative viewports so the
-    grid-sample CTE plan is also primed. ~30 seconds of background work
-    that turns the cold-user experience from "20-50 seconds" into "200ms".
+    ~30 seconds of background work that turns the cold-user experience
+    from "20-50 seconds" into "200ms".
     """
     import threading
 
     def _warm():
         try:
             time.sleep(1)  # let the worker finish starting
+            _pg_prewarm_relations()
             client = app.test_client()
             warm_paths = [
                 "/api/stats",

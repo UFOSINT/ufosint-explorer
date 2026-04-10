@@ -17,6 +17,44 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 Nothing yet.
 
+## [0.7.4] — 2026-04-10 — Performance infrastructure (pg_prewarm + Redis cache)
+
+### Added
+
+- **`scripts/pg_tuning.sql`** — documents the Azure Flexible Server
+  parameter values for the B1ms tier (`shared_buffers=768MB`,
+  `effective_cache_size=1500MB`, `work_mem=16MB`,
+  `random_page_cost=1.1`, `jit=off`, …) and calls `pg_prewarm()` on
+  every hot table + index so the buffer cache is populated after a
+  restart. Safe to run as the app user. Apply with
+  `psql "$DATABASE_URL" -f scripts/pg_tuning.sql` after a DB-side
+  restart.
+- **Startup `pg_prewarm` hook** in `app.py` — `_pg_prewarm_relations()`
+  runs in the prewarm background thread and loads `sighting`,
+  `location`, and the hot composite indexes into `shared_buffers`
+  before the HTTP warmup hits the same queries. Silently skips when
+  the extension isn't installed, so local dev and CI are unaffected.
+- **Optional Redis cache backend** for Flask-Caching. When
+  `REDIS_URL` is set, the app configures `CACHE_TYPE=RedisCache` with
+  key prefix `ufosint:<ASSET_VERSION>:` so every gunicorn worker
+  shares one warm cache and new deploys auto-invalidate the previous
+  version's keys. When `REDIS_URL` is unset, the existing per-worker
+  `SimpleCache` path is preserved — zero impact on local dev, CI, or
+  anyone who doesn't want to pay for Redis. `redis==5.2.1` added to
+  `requirements.txt` so the client library is available when the env
+  var is set.
+- **`docs/DEPLOYMENT.md §7 Performance tuning`** — operator playbook
+  with the exact Azure portal values, the `pg_prewarm` one-time
+  setup, the `az redis create` + `az webapp config appsettings set`
+  commands for wiring an Azure Cache for Redis Basic C0 (~$16/mo),
+  and the scale-up decision tree for when free tuning runs out.
+- **`tests/test_perf_infra.py`** — locks the perf contract. Verifies
+  `pg_tuning.sql` exists and prewarms the critical relations, that
+  `app.py` reads `REDIS_URL` and switches cache backends accordingly,
+  that `CACHE_KEY_PREFIX` is versioned, that the SimpleCache fallback
+  is still the default, and that `_pg_prewarm_relations()` tolerates
+  a missing extension.
+
 ## [0.7.3] — 2026-04-10 — Hex bins work out of the box (runtime SQL bucketing)
 
 ### Fixed
