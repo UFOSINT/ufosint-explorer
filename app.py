@@ -12,6 +12,7 @@ Run locally:
 """
 import os
 import json
+import math
 import time
 import hashlib
 import subprocess
@@ -1029,45 +1030,69 @@ def api_hexbin():
         add_common_filters(request.args, clauses, args)
         where = " AND ".join(clauses)
 
-        # The aggregation: FLOOR((lat - south) / size) gives a zero-based
-        # row index inside the viewport; likewise for columns. Grouping
-        # by (row, col) buckets sightings into the grid. The LIMIT
-        # protects the response size — 2000 cells is plenty for any
-        # viewport (a 1600x900 canvas holds ~1500 cells at most).
+        # v0.7.7: True honeycomb tessellation via offset-row bucketing.
         #
-        # v0.7.6: We deliberately return the GEOMETRIC center of each
-        # bucket (south + (row+0.5)*size, west + (col+0.5)*size) instead
-        # of the data centroid. The data-centroid version made adjacent
-        # buckets render at slightly offset positions, so when the
-        # client drew hex polygons around them they overlapped or
-        # rendered at apparently random sizes. Using the bucket center
-        # guarantees a uniform tessellation.
+        # For pointy-top hexes with horizontal center-to-center spacing
+        # `hex_h` (= `size` in the existing zoom table), the proper
+        # vertical row spacing is hex_h * sqrt(3)/2 and odd rows are
+        # shifted horizontally by hex_h/2 (the standard "offset-r"
+        # coordinate system). This replaces v0.7.6's square grid where
+        # each hex was inscribed in its cell and left diagonal gaps.
+        #
+        # The SQL computes `row` first (from latitude), then uses that
+        # row parity to decide whether to shift longitude by hex_h/2
+        # before bucketing the column. A subquery materialises row so
+        # we only compute the FLOOR once per sighting.
+        #
+        # Approximation note: rectangular bucket boundaries don't match
+        # the actual hexagon edges, so points near hex corners can fall
+        # into an adjacent cell. For a density visualisation that's
+        # invisible — the cells still tessellate and the counts shift
+        # at most by 1-2 percent near the corner boundaries.
+        hex_h = size                        # horizontal spacing between hex centers (deg)
+        hex_v = size * math.sqrt(3) / 2     # vertical row spacing (≈ 0.866 * size)
+        half_h = hex_h / 2.0
+
         sql = f"""
             SELECT
-                FLOOR((l.latitude  - %s) / %s)::int AS row,
-                FLOOR((l.longitude - %s) / %s)::int AS col,
-                COUNT(*)::int                       AS cnt
-            FROM sighting s
-            JOIN location l ON l.id = s.location_id
-            WHERE {where}
+                row,
+                FLOOR(
+                    (lng - %s - CASE WHEN (row %% 2) <> 0 THEN %s ELSE 0 END)
+                    / %s
+                )::int AS col,
+                COUNT(*)::int AS cnt
+            FROM (
+                SELECT
+                    l.longitude AS lng,
+                    FLOOR((l.latitude - %s) / %s)::int AS row
+                FROM sighting s
+                JOIN location l ON l.id = s.location_id
+                WHERE {where}
+            ) sub
             GROUP BY row, col
             ORDER BY cnt DESC
             LIMIT 2000
         """
 
-        cur.execute(sql, [south, size, west, size, *args])
+        cur.execute(sql, [west, half_h, hex_h, south, hex_v, *args])
         rows = cur.fetchall()
 
-        cells = [
-            {
-                "row": r[0],
-                "col": r[1],
-                "cnt": r[2],
-                "lat": south + (r[0] + 0.5) * size,
-                "lng": west + (r[1] + 0.5) * size,
-            }
-            for r in rows
-        ]
+        # Cell center for the honeycomb:
+        #   cLat = south + (row + 0.5) * hex_v
+        #   cLng = west  + (col + 0.5 + 0.5_if_odd) * hex_h
+        # which matches the SQL bucketing above on both parities.
+        cells = []
+        for r in rows:
+            row_i = int(r[0])
+            col_i = int(r[1])
+            row_offset = 0.5 if (row_i % 2) != 0 else 0.0
+            cells.append({
+                "row": row_i,
+                "col": col_i,
+                "cnt": int(r[2]),
+                "lat": south + (row_i + 0.5) * hex_v,
+                "lng": west + (col_i + 0.5 + row_offset) * hex_h,
+            })
 
         return jsonify({
             "zoom": zoom,

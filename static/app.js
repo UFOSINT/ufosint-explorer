@@ -1428,29 +1428,34 @@ function _sampleRamp(t) {
 }
 function _rgb(c) { return `rgb(${c[0]}, ${c[1]}, ${c[2]})`; }
 
-// Build a flat-top hexagon polygon (list of [lat, lng] vertices)
-// inscribed in a `sizeDeg × sizeDeg` degree square centered on
-// (cLat, cLng). Returns 6 vertices — Leaflet closes the loop.
+// Build a pointy-top hexagon polygon (list of [lat, lng] vertices)
+// centered on (cLat, cLng) for a honeycomb tessellation. `sizeDeg`
+// is the horizontal center-to-center spacing between hexes in the
+// same row (matches `hex_h` in the backend bucketing); the circum-
+// radius (center-to-vertex) is sizeDeg / sqrt(3). Returns 6
+// vertices — Leaflet closes the loop.
 //
-// v0.7.6: Earlier versions stretched the longitude by 1/cos(lat) to
-// make the hex render as visually equilateral on the Mercator
-// projection, but that pushed each hex past its grid cell at higher
-// latitudes — adjacent cells overlapped, and hex sizes drifted with
-// latitude (UFOSINT data clusters around 35-50°N where the stretch
-// was most visible). Dropping the latFactor and using r = sizeDeg/2
-// guarantees every hex is inscribed in its own grid cell, so they
-// tessellate uniformly with small diagonal gaps and no overlap. The
-// hexes will read as slightly tall rather than equilateral on
-// Mercator at high latitudes — that's an honest visual trade for
-// uniform sizing across the viewport.
+// v0.7.7: Earlier passes drew hexes inscribed in a square grid
+// (r = sizeDeg/2) which looked crisp but left diagonal gaps — a
+// honeycomb needs offset rows with odd rows shifted by sizeDeg/2,
+// and the circumradius must be sizeDeg/sqrt(3) so the flat-to-flat
+// width equals the horizontal spacing. The backend now computes
+// that offset-row bucketing so adjacent cells share edges.
+//
+// No Mercator latitude correction: at high latitudes (e.g. > 60°N)
+// the hexes will read as slightly squashed horizontally because
+// one degree of longitude is narrower than one degree of latitude
+// on screen, but that's an honest visual trade for preserving the
+// tessellation across the whole viewport.
 function _hexPolygonAround(cLat, cLng, sizeDeg) {
-    const r = sizeDeg / 2;
+    const R = sizeDeg / Math.sqrt(3);   // circumradius in degrees
     const pts = [];
     for (let i = 0; i < 6; i++) {
-        const angle = (Math.PI / 3) * i + Math.PI / 6;  // flat-top orientation
+        // Pointy-top: vertices at 30°, 90°, 150°, 210°, 270°, 330°
+        const angle = (Math.PI / 3) * i + Math.PI / 6;
         pts.push([
-            cLat + r * Math.sin(angle),
-            cLng + r * Math.cos(angle),
+            cLat + R * Math.sin(angle),
+            cLng + R * Math.cos(angle),
         ]);
     }
     return pts;

@@ -17,6 +17,30 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 Nothing yet.
 
+## [0.7.7] — 2026-04-10 — True honeycomb hex tessellation
+
+v0.7.6 fixed the overlapping / random-sized hex bins by inscribing
+each hex in its square bucket with `r = sizeDeg / 2`. That got rid of
+the overlap but left small diagonal gaps between adjacent cells — the
+hexes tessellated *inside* a square grid, not as a proper honeycomb.
+v0.7.7 switches to offset-row bucketing on the backend so adjacent
+hexes share edges.
+
+### Fixed
+
+- Hex cells now tile as a true honeycomb with no gaps between
+  adjacent cells. `/api/hexbin` buckets longitude with a half-cell
+  horizontal shift on odd rows (the standard "offset-r" hex grid
+  layout), vertical row spacing is `sizeDeg * sqrt(3)/2`, and the
+  cell center formula bakes the odd-row shift back in. On the client
+  `_hexPolygonAround` now uses the correct circumradius
+  `R = sizeDeg / sqrt(3)` for a pointy-top hex whose flat-to-flat
+  width equals `sizeDeg` — so every hex's right edge sits exactly on
+  its neighbor's left edge. The grid still has no Mercator
+  correction, so at high latitudes hexes read as slightly
+  horizontally compressed, but they tessellate uniformly across the
+  viewport.
+
 ## [0.7.6] — 2026-04-10 — Marker popup polish + hex tessellation + brush playback
 
 Three small UX bugs from the v0.7.5 round of feedback. None of them
