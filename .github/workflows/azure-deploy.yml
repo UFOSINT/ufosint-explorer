@@ -127,6 +127,7 @@ jobs:
         with:
           sparse-checkout: |
             scripts/add_v07_indexes.sql
+            scripts/add_v075_materialized_views.sql
           sparse-checkout-cone-mode: false
           path: migrations
 
@@ -162,6 +163,26 @@ jobs:
           echo "Running migrations/scripts/add_v07_indexes.sql …"
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/scripts/add_v07_indexes.sql
           echo "Index migration complete."
+
+      # v0.7.5: create (if needed) and refresh the materialized views that
+      # back /api/stats, /api/timeline, and /api/sentiment/overview. This
+      # script is idempotent (CREATE ... IF NOT EXISTS) and always issues
+      # a REFRESH at the end so newly-imported rows show up immediately.
+      # REFRESH holds an ACCESS EXCLUSIVE lock for ~5-15 s per view, which
+      # is acceptable at deploy time. Skipped when DATABASE_URL secret
+      # isn't set (fresh repo clone path).
+      - name: Refresh v0.7.5 materialized views
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DATABASE_URL:-}" ]; then
+            echo "::warning::DATABASE_URL secret not set — skipping MV refresh"
+            exit 0
+          fi
+          echo "Running migrations/scripts/add_v075_materialized_views.sql …"
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/scripts/add_v075_materialized_views.sql
+          echo "Materialized view refresh complete."
 
       - name: Deploy to Azure Web App
         id: deploy-to-webapp

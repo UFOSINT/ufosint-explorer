@@ -17,6 +17,79 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 Nothing yet.
 
+## [0.7.5] — 2026-04-10 — Materialized views for landing-page aggregates
+
+The v0.7.4 free tuning (`pg_prewarm` + parameter bumps) cut cold-start
+times 7–20x, but the three heaviest landing-page endpoints still did
+full-table aggregates on every cache miss. v0.7.5 pre-computes the
+no-filter case of those endpoints into materialized views and has the
+Python routes read from the MV first, falling back transparently to the
+live query for any filtered request. Warm-path latency for the
+unfiltered case drops from ~1–2 s per endpoint to ~5 ms.
+
+### Added
+
+- **`scripts/add_v075_materialized_views.sql`** — idempotent migration
+  that creates five materialized views covering the three hottest
+  routes:
+  - `mv_stats_summary` (single-row aggregates for `/api/stats`)
+  - `mv_stats_by_source` (per-source counts)
+  - `mv_stats_by_collection` (per-collection counts)
+  - `mv_timeline_yearly` (period + source_name + cnt for
+    `/api/timeline?mode=yearly`)
+  - `mv_sentiment_overview` (13-column single-row aggregate for
+    `/api/sentiment/overview`, previously the 23-second query from the
+    v0.7.4 boot logs)
+
+  Every MV has a unique index so we can upgrade to
+  `REFRESH MATERIALIZED VIEW CONCURRENTLY` later without a rebuild. The
+  script ends with a non-concurrent `REFRESH` of all five, which takes
+  an ACCESS EXCLUSIVE lock for ~5-15 s per view — acceptable at deploy
+  time.
+- **MV fast-path + live-query fallback** in `app.py` for `/api/stats`,
+  `/api/timeline`, and `/api/sentiment/overview`. Each route checks
+  `_has_common_filters(request.args)` first: if no filters are set, it
+  runs the MV query (tiny index scan), otherwise it drops through to
+  the original live-query path and the existing Flask-Caching layer.
+  Both paths return the same JSON shape, so the frontend is unchanged.
+- **`_has_common_filters()` + `_COMMON_FILTER_KEYS`** — a single source
+  of truth for "is this request MV-eligible?". Covered by
+  `test_common_filter_keys_match_add_common_filters` which keeps the
+  set in lockstep with `add_common_filters()` via regex extraction.
+- **Automatic MV missing fallback** — each fast path is wrapped in a
+  `try`/`except psycopg.errors.UndefinedTable` so a fresh clone that
+  hasn't run the migration, or a local dev DB that drops the MV for a
+  schema change, still serves the route correctly via the live query.
+  The catch logs a `[api_*] mv_* missing, falling back to live query`
+  line so operators can spot drift.
+- **Deploy-time MV refresh step** in `.github/workflows/azure-deploy.yml`
+  — the sparse checkout now also pulls
+  `scripts/add_v075_materialized_views.sql`, and a new step runs it via
+  `psql -v ON_ERROR_STOP=1 -f …` after the v0.7 index migration step.
+  Because the script is `CREATE … IF NOT EXISTS` + `REFRESH`, running
+  it on every deploy is safe and has the welcome side effect of
+  picking up rows imported since the last deploy.
+- **`tests/test_v075_mv.py`** (23 tests) — locks the v0.7.5 contract:
+  - Migration SQL creates all five MVs with unique indexes and is
+    idempotent; the deploy workflow applies it after the index step.
+  - Source-level assertions that `_has_common_filters` exists, that
+    each route has the MV fast path and the live-query fallback.
+  - Functional tests using a `_FakeCursor`/`_FakeConn` pair that
+    monkeypatches `get_db()` to inject scripted responses: MV happy
+    path returns the MV-shape payload without running any live query,
+    `UndefinedTable` triggers the fallback, filtered requests
+    (`shape=disk`, `year=1975`, `country=US`) correctly bypass the MV.
+
+### Changed
+
+- `/api/stats` refactored into `_api_stats_from_mv(conn)` +
+  `_api_stats_from_live(conn)` helpers with the route picking between
+  them. The live helper is the unchanged v0.7.4 code path.
+- `/api/sentiment/overview` gained a module-level
+  `_SENTIMENT_OVERVIEW_COLS` tuple used by both the MV read
+  (`SELECT {...} FROM mv_sentiment_overview`) and the live-query `dict(zip(...))`
+  assembly. Single source of truth for the column list.
+
 ## [0.7.4] — 2026-04-10 — Performance infrastructure (pg_prewarm + Redis cache)
 
 ### Added

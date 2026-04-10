@@ -20,6 +20,7 @@ from flask import Flask, request, jsonify, send_from_directory, Response
 from flask_caching import Cache
 from flask_compress import Compress
 
+import psycopg
 from psycopg_pool import ConnectionPool
 
 app = Flask(__name__, static_folder="static")
@@ -419,6 +420,32 @@ def add_common_filters(params, clauses, args, table_prefix="s"):
     return clauses, args
 
 
+# Keys that add_common_filters() checks. Used by _has_common_filters()
+# below to decide whether a materialized-view fast path is eligible.
+# IMPORTANT: keep this set in sync with add_common_filters() above. If you
+# add a new filter key there, add it here too or the MV path will serve
+# stale/incorrect results for that filter.
+_COMMON_FILTER_KEYS = frozenset({
+    "shape", "source", "collection", "hynek", "vallee",
+    "date_from", "date_to", "country", "state", "coords",
+})
+
+
+def _has_common_filters(params) -> bool:
+    """True if any of the filter keys add_common_filters() respects is set.
+
+    Used as the eligibility check for the v0.7.5 materialized-view fast
+    paths on /api/stats, /api/timeline, and /api/sentiment/overview. If
+    this returns False, the endpoint can safely read from the MV (no
+    filters applied). If True, it must fall back to the live query.
+    """
+    for key in _COMMON_FILTER_KEYS:
+        v = params.get(key)
+        if v not in (None, "", "all"):
+            return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -450,11 +477,57 @@ def health():
         return jsonify({"status": "waiting", "detail": str(e)})
 
 
-@app.route("/api/stats")
-@cache.cached(timeout=600, query_string=True)
-def api_stats():
-    """Dashboard statistics."""
-    conn = get_db()
+def _api_stats_from_mv(conn):
+    """Read /api/stats payload from the v0.7.5 materialized views.
+
+    Returns the same shape as the legacy live query so callers can swap
+    between the two paths transparently. Raises on MV miss; the caller
+    is responsible for catching and falling back.
+    """
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT total_sightings, date_min, date_max,
+               geocoded_locations, geocoded_original, geocoded_geonames,
+               duplicate_candidates
+        FROM mv_stats_summary
+    """)
+    row = cur.fetchone()
+    (total, date_min, date_max,
+     geocoded, geocoded_original, geocoded_geonames, dupes) = row
+
+    cur.execute("""
+        SELECT name, count, collection
+        FROM mv_stats_by_source ORDER BY count DESC
+    """)
+    by_source = [
+        {"name": r[0], "count": r[1], "collection": r[2]}
+        for r in cur.fetchall()
+    ]
+
+    cur.execute("""
+        SELECT name, count FROM mv_stats_by_collection ORDER BY count DESC
+    """)
+    by_collection = [{"name": r[0], "count": r[1]} for r in cur.fetchall()]
+
+    return {
+        "total_sightings": total,
+        "by_source": by_source,
+        "by_collection": by_collection,
+        "date_range": {"min": date_min, "max": date_max},
+        "geocoded_locations": geocoded,
+        "geocoded_original": geocoded_original,
+        "geocoded_geonames": geocoded_geonames,
+        "duplicate_candidates": dupes,
+    }
+
+
+def _api_stats_from_live(conn):
+    """Original pre-v0.7.5 live-query path. Kept as the fallback for when
+    the materialized views haven't been created yet (local dev, fresh
+    clone, between the deploy running the migration and the refresh
+    step completing).
+    """
     cur = conn.cursor()
 
     cur.execute("SELECT COUNT(*) FROM sighting")
@@ -506,9 +579,7 @@ def api_stats():
     cur.execute("SELECT COUNT(*) FROM duplicate_candidate")
     dupes = cur.fetchone()[0]
 
-    conn.close()
-
-    return jsonify({
+    return {
         "total_sightings": total,
         "by_source": by_source,
         "by_collection": by_collection,
@@ -517,7 +588,34 @@ def api_stats():
         "geocoded_original": geocoded_original,
         "geocoded_geonames": geocoded_geonames,
         "duplicate_candidates": dupes,
-    })
+    }
+
+
+@app.route("/api/stats")
+@cache.cached(timeout=600, query_string=True)
+def api_stats():
+    """Dashboard statistics.
+
+    v0.7.5: reads the mv_stats_summary / mv_stats_by_source /
+    mv_stats_by_collection materialized views (~5 ms total). Falls back
+    to the live-query path if any MV is missing (e.g. fresh clone before
+    scripts/add_v075_materialized_views.sql has been applied).
+
+    /api/stats does not accept any filter params, so the MV path is
+    always eligible — there's no `if not _has_common_filters(...)` guard.
+    """
+    conn = get_db()
+    try:
+        try:
+            payload = _api_stats_from_mv(conn)
+        except psycopg.errors.UndefinedTable:
+            # MV migration hasn't run yet. Not fatal.
+            print("[api_stats] mv_stats_* missing, falling back to live query")
+            payload = _api_stats_from_live(conn)
+    finally:
+        conn.close()
+
+    return jsonify(payload)
 
 
 @app.route("/api/filters")
@@ -976,11 +1074,38 @@ def api_hexbin():
 @app.route("/api/timeline")
 @cache.cached(timeout=600, query_string=True)
 def api_timeline():
-    """Sighting counts grouped by year (or by month if year param given)."""
+    """Sighting counts grouped by year (or by month if year param given).
+
+    v0.7.5: when no year is requested and no common filters are set,
+    reads from mv_timeline_yearly (~10 ms instead of ~1300 ms warm).
+    Falls back to the live query for the filtered / monthly-drilldown
+    paths, which retain the @cache.cached(query_string=True) TTL so
+    repeated hits with the same filter remain fast after the first.
+    """
     conn = get_db()
     cur = conn.cursor()
 
     year = request.args.get("year")
+
+    # --- MV fast path: unfiltered yearly timeline -----------------------
+    if not year and not _has_common_filters(request.args):
+        try:
+            cur.execute("""
+                SELECT period, source_name, cnt
+                FROM mv_timeline_yearly
+                ORDER BY period
+            """)
+            data = {}
+            for period, source, count in cur.fetchall():
+                data.setdefault(period, {})[source] = count
+            conn.close()
+            return jsonify({"mode": "yearly", "year": None, "data": data})
+        except psycopg.errors.UndefinedTable:
+            # MV migration hasn't run; reset the cursor state so the live
+            # query below can reuse the same connection cleanly.
+            print("[api_timeline] mv_timeline_yearly missing, falling back to live query")
+            cur = conn.cursor()
+
     clauses = ["s.date_event IS NOT NULL", "LENGTH(s.date_event) >= 4"]
     args = []
 
@@ -1382,12 +1507,39 @@ def api_sighting(sid):
 # Sentiment / Emotion Endpoints
 # ---------------------------------------------------------------------------
 
+_SENTIMENT_OVERVIEW_COLS = (
+    "total_analyzed", "avg_compound", "avg_positive", "avg_negative", "avg_neutral",
+    "joy", "fear", "anger", "sadness", "surprise", "disgust", "trust", "anticipation",
+)
+
+
 @app.route("/api/sentiment/overview")
 @cache.cached(timeout=600, query_string=True)
 def api_sentiment_overview():
-    """Aggregate emotion distribution across filtered sightings."""
+    """Aggregate emotion distribution across filtered sightings.
+
+    v0.7.5: when no common filters are set, reads the single-row
+    mv_sentiment_overview materialized view (~2 ms). This was the
+    23-second query from the v0.7.4 cold-start logs. Filtered requests
+    still hit the live query path through Flask-Caching.
+    """
     conn = get_db()
     cur = conn.cursor()
+
+    # --- MV fast path: unfiltered overview ------------------------------
+    if not _has_common_filters(request.args):
+        try:
+            cur.execute(f"""
+                SELECT {", ".join(_SENTIMENT_OVERVIEW_COLS)}
+                FROM mv_sentiment_overview
+            """)
+            row = cur.fetchone()
+            conn.close()
+            return jsonify(dict(zip(_SENTIMENT_OVERVIEW_COLS, row, strict=False)))
+        except psycopg.errors.UndefinedTable:
+            print("[api_sentiment_overview] mv_sentiment_overview missing, "
+                  "falling back to live query")
+            cur = conn.cursor()
 
     clauses = []
     args = []
