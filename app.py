@@ -1198,12 +1198,16 @@ def _points_bulk_build(etag: str) -> tuple[bytes, bytes, dict]:
         # at 255 values total; slot 0 is "no shape" so we allow up to
         # 254 distinct non-null shapes. The current dataset has well
         # under 200; anything beyond the cap buckets into 0.
+        #
+        # Postgres requires ORDER BY expressions in a SELECT DISTINCT
+        # to appear in the select list, so we include LOWER(shape) as
+        # a sort key column and drop it in the Python comprehension.
         cur.execute(
             """
-            SELECT DISTINCT shape
+            SELECT DISTINCT shape, LOWER(shape) AS lshape
             FROM sighting
             WHERE shape IS NOT NULL AND shape <> ''
-            ORDER BY LOWER(shape)
+            ORDER BY lshape
             """
         )
         distinct_shapes = [r[0] for r in cur.fetchall()][:254]
