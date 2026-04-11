@@ -48,24 +48,48 @@
         }
     }
 
-    // deck.gl loads via a <script defer> tag in index.html. It may not
-    // be ready when app.js starts running, so we poll briefly on a
-    // setTimeout chain. 40 attempts × 50 ms = 2 s max wait.
+    // deck.gl + deck.gl-leaflet load via <script defer> tags in
+    // index.html. The main deck.gl UMD exposes window.deck; the
+    // community deck.gl-leaflet UMD exposes window.DeckGlLeaflet
+    // containing the LeafletLayer constructor. We poll for both
+    // globals to be defined before resolving. 40 × 50 ms = 2 s
+    // max wait.
+    //
+    // v0.8.2-hotfix: the earlier code looked for
+    // window.deck.LeafletLayer, which was correct if @deck.gl/leaflet
+    // existed under that scope — but it doesn't and never has. The
+    // community deck.gl-leaflet package attaches to a different
+    // global, so the old check always timed out, the catch in
+    // bootDeckGL() fired, and every browser silently fell back to
+    // the legacy /api/map polling path. Fixed by checking the
+    // actual global the UMD exposes.
     function waitForDeck(maxAttempts) {
         return new Promise((resolve, reject) => {
             let n = 0;
             const tick = () => {
-                if (
+                const deckReady = (
                     typeof window.deck !== "undefined" &&
-                    typeof window.deck.LeafletLayer !== "undefined" &&
-                    typeof window.deck.ScatterplotLayer !== "undefined"
-                ) {
-                    resolve(window.deck);
+                    typeof window.deck.ScatterplotLayer !== "undefined" &&
+                    typeof window.deck.HexagonLayer !== "undefined" &&
+                    typeof window.deck.HeatmapLayer !== "undefined"
+                );
+                const leafletReady = (
+                    typeof window.DeckGlLeaflet !== "undefined" &&
+                    typeof window.DeckGlLeaflet.LeafletLayer !== "undefined"
+                );
+                if (deckReady && leafletReady) {
+                    resolve({
+                        deck: window.deck,
+                        DeckGlLeaflet: window.DeckGlLeaflet,
+                    });
                     return;
                 }
                 n += 1;
                 if (n >= maxAttempts) {
-                    reject(new Error("deck.gl did not load in time"));
+                    const missing = [];
+                    if (!deckReady) missing.push("deck.gl core (window.deck.ScatterplotLayer/HexagonLayer/HeatmapLayer)");
+                    if (!leafletReady) missing.push("deck.gl-leaflet bridge (window.DeckGlLeaflet.LeafletLayer)");
+                    reject(new Error("deck.gl did not load in time: missing " + missing.join(", ")));
                     return;
                 }
                 setTimeout(tick, 50);
@@ -710,8 +734,13 @@
     }
 
     function mountDeckLayer(map, initialMode) {
+        // v0.8.2-hotfix: LeafletLayer lives on window.DeckGlLeaflet
+        // (from the deck.gl-leaflet community bridge), NOT on the
+        // main window.deck global. MapView still comes from the
+        // core deck.gl package.
         const d = window.deck;
-        leafletLayer = new d.LeafletLayer({
+        const DGL = window.DeckGlLeaflet;
+        leafletLayer = new DGL.LeafletLayer({
             views: [new d.MapView({ repeat: true })],
             layers: [modeToLayer(initialMode || "points")],
         });

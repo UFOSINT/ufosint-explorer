@@ -466,3 +466,59 @@ def test_index_html_loads_deck_gl_bundle():
         "index.html must load the vendored deck.gl UMD bundle in a "
         "<script> tag — otherwise the window.deck global won't exist"
     )
+
+
+def test_index_html_loads_both_deck_bundles():
+    """v0.8.2-hotfix regression guard: make sure BOTH the deck.gl core
+    bundle AND the community deck.gl-leaflet bridge are loaded.
+
+    v0.8.0 originally shipped with a <script> tag pointing at
+    @deck.gl/leaflet@9.0.38 — a package scope that has never existed
+    on npm. unpkg returned 404, waitForDeck() timed out forever, and
+    every browser silently fell back to the legacy /api/map polling
+    path, defeating the entire point of the deck.gl rewrite.
+
+    Lock the correct bundles here so a future dep bump can't silently
+    re-introduce the 404.
+    """
+    html = _read(INDEX_HTML)
+    # deck.gl core — unpkg URL, any @version is fine
+    assert "unpkg.com/deck.gl@" in html, (
+        "missing deck.gl core UMD <script> tag"
+    )
+    # deck.gl-leaflet community bridge — MUST be the community package
+    # name, not @deck.gl/leaflet (which has never existed).
+    assert "deck.gl-leaflet" in html, (
+        "missing deck.gl-leaflet community bridge <script> tag — this "
+        "is what exposes window.DeckGlLeaflet.LeafletLayer. If a future "
+        "refactor switches back to '@deck.gl/leaflet', unpkg will 404 "
+        "and the Observatory will silently fall back to the legacy "
+        "per-pan /api/map polling path."
+    )
+    # Sanity: the URL is NOT the old broken one. Checking the literal
+    # src URL rather than the package name, so this file's own
+    # documentation comments don't trip the assertion.
+    assert "unpkg.com/@deck.gl/leaflet" not in html, (
+        "@deck.gl/leaflet was the v0.8.0 bug — that scope has never "
+        "existed on npm. Must use the community deck.gl-leaflet package."
+    )
+
+
+def test_deck_js_waits_for_correct_globals():
+    """deck.js's waitForDeck() must poll for window.DeckGlLeaflet (the
+    community bridge global), NOT window.deck.LeafletLayer.
+
+    This is the v0.8.2-hotfix regression guard. The v0.8.0 code was
+    waiting for a global that the shipped bundle never sets, so the
+    GPU path was silently broken for every user on every browser
+    for weeks."""
+    js = _read(DECK_JS)
+    assert "DeckGlLeaflet" in js, (
+        "deck.js must reference window.DeckGlLeaflet — that's the "
+        "actual global the deck.gl-leaflet UMD bundle exposes"
+    )
+    # And mountDeckLayer must actually instantiate the class from that
+    # global, not from the incorrect window.deck.LeafletLayer path.
+    assert "DGL.LeafletLayer" in js or "DeckGlLeaflet.LeafletLayer" in js, (
+        "mountDeckLayer must call new DeckGlLeaflet.LeafletLayer(...)"
+    )
