@@ -1055,7 +1055,35 @@ async function bootDeckGL() {
     // respects any #hash filters already in place.
     if (typeof applyClientFilters === "function") applyClientFilters();
 
+    // v0.8.1 — if the TimeBrush was created before the bulk data
+    // finished loading, wire its fast path + swap its histogram to
+    // the client-computed one now.
+    _wireTimeBrushToDeck();
+
     console.info("[v0.8] deck.gl layer mounted — GPU path active");
+}
+
+// v0.8.1 — Plug the TimeBrush into the GPU filter pipeline. Safe to
+// call multiple times: the second call is a no-op if the fast path
+// is already set. Called from bootDeckGL() and from loadObservatory()
+// depending on which side of the race finishes first.
+function _wireTimeBrushToDeck() {
+    if (!state.timeBrush) return;
+    if (!(state.useDeckGL && window.UFODeck && window.UFODeck.isReady())) return;
+    if (state.timeBrush.deckFastPath) return;  // already wired
+
+    state.timeBrush.useDeckFastPath((yearFrom, yearTo, cumulative) => {
+        window.UFODeck.setTimeWindow(yearFrom, yearTo, { cumulative });
+    });
+
+    // Re-run ensureData() to swap the (potentially already-fetched)
+    // server histogram for the client-computed one. If ensureData
+    // has never run, the brush's first paint will use the client
+    // path automatically.
+    if (state.timeBrush.bins) {
+        state.timeBrush.bins = window.UFODeck.getYearHistogram();
+        state.timeBrush._draw?.();
+    }
 }
 
 // Build a marker popup with cross-tab pivots. The popup has up to 3
@@ -1407,6 +1435,11 @@ function loadObservatory() {
         if (canvas) {
             state.timeBrush = new TimeBrush(canvas, onBrushWindowChange);
             state.timeBrush.ensureData();
+            // v0.8.1 — wire the GPU fast path. If the bulk data
+            // hasn't finished loading yet, bootDeckGL() calls this
+            // again from its success branch, so we cover both
+            // race orderings.
+            _wireTimeBrushToDeck();
         }
     }
 
@@ -1423,6 +1456,19 @@ function wireObservatoryModeToggle() {
             if (mode) toggleMapMode(mode);
         });
     });
+
+    // v0.8.1 — Sliding / Cumulative toggle for the PLAY button.
+    // Clicking cycles between the two modes and updates the button
+    // label. The brush picks up the new mode on the next play click.
+    const modeBtn = document.getElementById("brush-mode");
+    if (modeBtn) {
+        modeBtn.addEventListener("click", () => {
+            if (!state.timeBrush) return;
+            const next = state.timeBrush.playMode === "sliding"
+                ? "cumulative" : "sliding";
+            state.timeBrush.setPlayMode(next);
+        });
+    }
 }
 
 // Populate the left rail from /api/filters (already fetched at boot)
@@ -1706,22 +1752,76 @@ class TimeBrush {
         this.playRaf = null;
         this.windowEl = document.getElementById("brush-window");
         this.annEl = document.getElementById("brush-annotations");
+
+        // v0.8.1 — GPU fast path for the PLAY loop. When set by
+        // app.js after bootDeckGL() succeeds, togglePlay()'s per-
+        // frame step calls this function directly instead of going
+        // through the debounced onChange → applyFilters → form-input
+        // pipeline. Smooth 60 fps playback instead of 3 fps.
+        this.deckFastPath = null;
+        this.playMode = "sliding";    // "sliding" | "cumulative"
+        this.playSpeed = 1.0;         // reserved for a future speed toggle
+        this._cumulativeLeft = null;  // memoised leftEdge during cumulative play
+
         this._bindEvents();
     }
 
+    // v0.8.1 — call once from app.js when UFODeck.isReady() flips
+    // true. The argument is (yearFrom, yearTo, cumulative) => void.
+    useDeckFastPath(fn) {
+        this.deckFastPath = fn;
+    }
+
+    // v0.8.1 — toggle cumulative vs sliding playback. Called from
+    // the new #brush-mode button. Does nothing if the brush is
+    // already in the requested mode.
+    setPlayMode(mode) {
+        if (mode !== "sliding" && mode !== "cumulative") return;
+        if (mode === this.playMode) return;
+        this.playMode = mode;
+        this._cumulativeLeft = null;  // reset memoised leftEdge
+        const btn = document.getElementById("brush-mode");
+        if (btn) {
+            btn.dataset.mode = mode;
+            btn.textContent = mode === "cumulative" ? "CUMULATIVE" : "SLIDING";
+            btn.setAttribute("aria-pressed", mode === "cumulative" ? "true" : "false");
+        }
+    }
+
     async ensureData() {
-        // Fire both fetches in parallel.
-        const [histResp, annResp] = await Promise.all([
-            fetch("/api/timeline?bins=monthly&full_range=1").catch(() => null),
-            fetch("/static/data/key_sightings.json").catch(() => null),
-        ]);
-        if (histResp && histResp.ok) {
-            const data = await histResp.json();
-            this.bins = this._collapseTimelineToMonthly(data);
+        // v0.8.1 — if the bulk dataset is already loaded, compute the
+        // histogram client-side instead of hitting /api/timeline.
+        // Saves ~150 ms on Observatory mount and removes one of the
+        // last per-session server queries.
+        const haveDeck =
+            typeof window.UFODeck !== "undefined" &&
+            window.UFODeck.POINTS &&
+            window.UFODeck.POINTS.ready &&
+            typeof window.UFODeck.getYearHistogram === "function";
+
+        if (haveDeck) {
+            // Client path — walk POINTS.year once in JS, cache forever.
+            this.bins = window.UFODeck.getYearHistogram();
+            // Annotations still come from a static JSON file.
+            const annResp = await fetch("/static/data/key_sightings.json").catch(() => null);
+            if (annResp && annResp.ok) {
+                this.annotations = await annResp.json();
+            }
+        } else {
+            // Legacy path — same as v0.8.0.
+            const [histResp, annResp] = await Promise.all([
+                fetch("/api/timeline?bins=monthly&full_range=1").catch(() => null),
+                fetch("/static/data/key_sightings.json").catch(() => null),
+            ]);
+            if (histResp && histResp.ok) {
+                const data = await histResp.json();
+                this.bins = this._collapseTimelineToMonthly(data);
+            }
+            if (annResp && annResp.ok) {
+                this.annotations = await annResp.json();
+            }
         }
-        if (annResp && annResp.ok) {
-            this.annotations = await annResp.json();
-        }
+
         this._resize();
         this._draw();
         this._drawAnnotations();
@@ -1934,7 +2034,14 @@ class TimeBrush {
                 playBtn.textContent = "▶ PLAY";
                 playBtn.setAttribute("aria-pressed", "false");
             }
-            // Commit the final window on stop.
+            // Commit the final window to the URL hash + form inputs
+            // via the debounced onChange path. Flush immediately so
+            // there's no 300 ms delay between STOP and the state
+            // settling.
+            this.onChange(
+                this._isoDate(this.window[0]),
+                this._isoDate(this.window[1]),
+            );
             this.onChange.flush?.();
             return;
         }
@@ -1945,45 +2052,95 @@ class TimeBrush {
             playBtn.setAttribute("aria-pressed", "true");
         }
         const span = this.maxT - this.minT;
+        const isCumulative = (this.playMode === "cumulative");
+
         // v0.7.6: If the user hits PLAY without first narrowing the
-        // window, the window IS the full range and the slide loop has
-        // nowhere to slide to (b = a + span always exceeds maxT, the
-        // reset clamps it back to the full range, and visually nothing
-        // happens). Auto-narrow to a 5-year window starting from the
-        // dataset min so the playback sweeps forward visibly.
+        // window, the window IS the full range and the sliding loop
+        // has nowhere to slide to. Auto-narrow to a 5-year window
+        // starting from the dataset min so the playback sweeps
+        // forward visibly. Cumulative mode does the same but the
+        // leftEdge stays pinned at minT for the rest of the run.
         let winSpan = this.window[1] - this.window[0];
         if (winSpan >= span * 0.98) {
             const fiveYears = 5 * 365.25 * 86400000;
             winSpan = Math.min(fiveYears, span * 0.2);
             this.window = [this.minT, this.minT + winSpan];
             this._syncWindow();
-            // Fire an immediate (non-debounced) onChange so filters
-            // catch up to the new window before the slide starts.
-            this.onChange(this._isoDate(this.window[0]), this._isoDate(this.window[1]));
         }
-        // Slide step: ~0.4% of total span per frame ≈ 8 months at the
-        // default 1900-2026 range. Smooth visible motion at 60fps.
-        const stepSize = span * 0.004;
+        if (isCumulative) {
+            // Cumulative: memoise the left edge and let only the
+            // right edge advance. The visible "window" on the brush
+            // grows from left to right — the user sees the dataset
+            // fill up over time.
+            this._cumulativeLeft = this.minT;
+            this.window = [this.minT, Math.max(this.window[1], this.minT + winSpan)];
+            this._syncWindow();
+        }
+
+        // v0.8.1 — step size scales with playSpeed. Default 0.4% of
+        // span per frame ≈ 8 months at the default 1900-2026 range.
+        const stepSize = span * 0.004 * (this.playSpeed || 1.0);
+        const fastPath = this.deckFastPath;  // snapshot for the hot loop
+        const legacyOnChange = this.onChange;
+
         const step = () => {
             if (!this.playing) return;
-            let a = this.window[0] + stepSize;
-            let b = a + winSpan;
-            if (b > this.maxT) {
-                // Loop back to the start once we hit the end.
-                a = this.minT;
-                b = a + winSpan;
+
+            if (isCumulative) {
+                // Advance only the right edge. Wrap back to the
+                // initial window size when we hit the end.
+                let b = this.window[1] + stepSize;
+                if (b > this.maxT) {
+                    b = this._cumulativeLeft + winSpan;
+                }
+                this.window = [this._cumulativeLeft, b];
+            } else {
+                // Sliding: slide both edges. Loop back when the
+                // right edge passes maxT.
+                let a = this.window[0] + stepSize;
+                let b = a + winSpan;
+                if (b > this.maxT) {
+                    a = this.minT;
+                    b = a + winSpan;
+                }
+                this.window = [a, b];
             }
-            this.window = [a, b];
             this._syncWindow();
-            this.onChange(this._isoDate(a), this._isoDate(b));
+
+            // v0.8.1 — GPU fast path. Call the deck.js setTimeWindow
+            // helper directly, bypassing the debounced onChange +
+            // applyFilters() pipeline. This is what makes 60 fps
+            // playback possible.
+            if (fastPath) {
+                const y0 = new Date(this.window[0]).getUTCFullYear();
+                const y1 = new Date(this.window[1]).getUTCFullYear();
+                fastPath(y0, y1, isCumulative);
+            } else {
+                // Legacy fallback: debounced onChange → applyFilters
+                // → loadMapMarkers (~3 fps, but still animates).
+                legacyOnChange(
+                    this._isoDate(this.window[0]),
+                    this._isoDate(this.window[1]),
+                );
+            }
+
             this.playRaf = requestAnimationFrame(step);
         };
         step();
     }
 
     reset() {
+        // Stop playback if running.
+        if (this.playing) this.togglePlay();
         this.window = [this.minT, this.maxT];
+        this._cumulativeLeft = null;
         this._syncWindow();
+        // v0.8.1 — clear any active time window on the GPU path so
+        // points from every year come back immediately, not after
+        // the 300 ms debounce on onChange.
+        if (window.UFODeck && typeof window.UFODeck.clearTimeWindow === "function") {
+            window.UFODeck.clearTimeWindow();
+        }
         this.onChange(this._isoDate(this.minT), this._isoDate(this.maxT));
     }
 }

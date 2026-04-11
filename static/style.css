@@ -3214,7 +3214,7 @@ select:focus {
     color: var(--text);
     font-variant-numeric: tabular-nums;
 }
-.brush-play-btn, .brush-reset-btn {
+.brush-play-btn, .brush-reset-btn, .brush-mode-btn {
     background: transparent;
     border: 1px solid var(--accent);
     color: var(--accent);
@@ -3226,7 +3226,7 @@ select:focus {
     border-radius: var(--r-sm);
     transition: background var(--t-fast), color var(--t-fast);
 }
-.brush-play-btn:hover, .brush-reset-btn:hover {
+.brush-play-btn:hover, .brush-reset-btn:hover, .brush-mode-btn:hover {
     background: var(--accent);
     color: var(--bg);
 }
@@ -3234,6 +3234,12 @@ select:focus {
     background: var(--warning);
     border-color: var(--warning);
     color: var(--bg);
+}
+/* v0.8.1 — Cumulative state gets a dashed border so users can tell
+   the toggle is "on" at a glance without reading the label. */
+.brush-mode-btn[data-mode="cumulative"] {
+    border-style: dashed;
+    background: rgba(0, 240, 255, 0.08);
 }
 .brush-wrap {
     position: relative;

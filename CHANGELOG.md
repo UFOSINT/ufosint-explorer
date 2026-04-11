@@ -17,6 +17,77 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 Nothing yet.
 
+## [0.8.1] — 2026-04-10 — Client-side temporal animation
+
+v0.8.0 made pan / zoom / filter free by loading every geocoded
+sighting into typed arrays and rendering on the GPU. v0.8.1 does the
+same thing for the bottom-of-Observatory **time brush** — the
+histogram, the drag window, and the PLAY button — so time-lapse
+playback runs at the full browser frame rate instead of the 3 fps
+the v0.7.6 300 ms debounce allowed.
+
+See [`docs/V081_PLAN.md`](docs/V081_PLAN.md) for the full
+architecture rationale and the risk register.
+
+### Added
+
+- **`UFODeck.setTimeWindow(yearFrom, yearTo, { cumulative })`** —
+  new `deck.js` public API that overlays a temporal filter onto
+  the current UI filter state and refreshes the active deck.gl
+  layer. Designed to be called per-frame during playback. Also
+  added `clearTimeWindow()`, `getYearHistogram()`, `getYearRange()`,
+  and `isTimeWindowActive()`.
+- **Client-computed year histogram.** `TimeBrush.ensureData()` now
+  prefers `UFODeck.getYearHistogram()` over `/api/timeline?full_range=1`
+  when the bulk dataset is already loaded. The histogram is computed
+  from `POINTS.year` in a single pass (~3 ms for 396k rows), cached
+  for the lifetime of the session. Saves one network round-trip per
+  Observatory mount.
+- **Cumulative replay mode.** New `#brush-mode` button next to PLAY
+  cycles between `SLIDING` and `CUMULATIVE`. In cumulative mode the
+  window's left edge stays pinned at the dataset minimum while the
+  right edge advances, so you watch the dataset fill up over time.
+  The cumulative state gets a dashed border so the toggle is
+  visible at a glance.
+- **Reusable scratch buffer** (`_visibleScratch`) in the filter
+  pipeline. Instead of allocating a fresh `Uint32Array(N)` per
+  frame (which would mean ~96 MB/sec of GC pressure at 60 fps),
+  the hot loop writes into a persistent `Uint32Array` sized to
+  `POINTS.count` and returns a `subarray(0, j)` view. Allocated
+  once per session.
+
+### Changed
+
+- **Filter pipeline refactored.** `deck.js` moved its internal
+  state into two module-level objects: `_activeFilter` (UI
+  filter — source / shape / bbox / year range) and `_timeState`
+  (timeline-driven year window). Both feed into a shared
+  `_rebuildVisible()` loop that walks `POINTS` once. This lets
+  `setTimeWindow()` overlay on top of an active source/shape
+  filter without clobbering it.
+- **`TimeBrush.togglePlay()`** gained a fast-path branch. When the
+  `deckFastPath` callback is set (installed by `bootDeckGL()` after
+  the bulk dataset finishes loading), the `requestAnimationFrame`
+  step closure calls `UFODeck.setTimeWindow()` directly instead of
+  going through the debounced `onChange → applyFilters → form
+  input round-trip` pipeline. Frame rate goes from ~3 fps to
+  whatever the browser gives us (60 fps on a desktop GPU).
+- **`TimeBrush.reset()`** now stops any active playback and calls
+  `UFODeck.clearTimeWindow()` so the map snaps back to the full
+  range instantly instead of waiting 300 ms for the debounced
+  filter update.
+- **`applyClientFilters` no longer owns the filter loop directly.**
+  It now stashes the filter descriptor in `_activeFilter` and
+  defers to `_rebuildVisible()`. Same external behaviour, but
+  shares code with the time-window fast path.
+
+### Kept for one release cycle
+
+The legacy `/api/timeline?full_range=1` fetch path is still used
+when `UFODeck` isn't available (old browsers, WebGL off). Playback
+on that path is still the v0.7.6 debounced behaviour — slower but
+functional.
+
 ## [0.8.0] — 2026-04-10 — Bulk client-side rendering (deck.gl)
 
 The Observatory map has been querying the DB on every pan since v0.6.

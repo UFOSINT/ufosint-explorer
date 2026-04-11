@@ -168,45 +168,106 @@
     // -----------------------------------------------------------------
     // Client-side filter pipeline
     // -----------------------------------------------------------------
-    // Walks the typed arrays once, returns a Uint32Array of row indices
-    // that pass the filter. Typical cost: ~1 ms for 105k rows in V8.
+    // The filter state lives in two pieces of module state:
     //
-    // The filter object accepts:
-    //   sourceName: string | null         — match exact source name
-    //   shapeName:  string | null         — match exact shape label
-    //   yearFrom:   number | null         — inclusive lower bound
-    //   yearTo:     number | null         — inclusive upper bound
-    //   bbox:       [s, n, w, e] | null   — viewport clip (optional)
+    //   _activeFilter — the UI filter (source / shape / year range /
+    //     bbox). Mutated by applyClientFilters() on every user
+    //     interaction (dropdown change, "Apply Filters" click).
     //
-    // Anything set to null/undefined is ignored. Resolving names to
-    // indices happens here so the hot loop only does integer compares.
-    function applyClientFilters(filter) {
+    //   _timeState   — the timeline-playback window, orthogonal to the
+    //     UI filter. Driven by TimeBrush via setTimeWindow() at 60 fps
+    //     during playback. Off by default; the UI year range (from
+    //     #filter-date-from/to) is used instead when disabled.
+    //
+    // Every change to either piece of state calls _rebuildVisible(),
+    // which walks POINTS in one tight loop against the intersection
+    // of both filter layers. The hot loop writes its output into
+    // _visibleScratch (reused every frame, never reallocated) and
+    // POINTS.visibleIdx becomes a subarray view of the first j slots.
+    // That avoids allocating a fresh ~1.6 MB Uint32Array per frame
+    // during playback.
+    //
+    // Year bookkeeping: _yearStats caches min/max (across non-zero
+    // rows) and the full-range histogram so the TimeBrush can render
+    // without fetching /api/timeline. Both are computed lazily on
+    // first access and cached for the lifetime of the bulk buffer.
+
+    let _activeFilter = {};
+    const _timeState = {
+        enabled: false,      // false → use year range from _activeFilter
+        yearFrom: 0,
+        yearTo: 65535,
+        cumulative: false,   // cumulative pins yearFrom to dataset min
+    };
+    const _yearStats = { min: null, max: null, histogram: null };
+    let _visibleScratch = null;
+
+    // Year range resolved from the actual data (non-zero rows only).
+    // Lazily computed and cached; the bulk buffer never changes shape
+    // so one walk is enough.
+    function _ensureYearStats() {
+        if (_yearStats.min != null) return;
+        if (!POINTS.ready) return;
+        let mn = 65535, mx = 0;
+        const yr = POINTS.year;
+        const N = POINTS.count;
+        for (let i = 0; i < N; i++) {
+            const y = yr[i];
+            if (y === 0) continue;
+            if (y < mn) mn = y;
+            if (y > mx) mx = y;
+        }
+        _yearStats.min = mn;
+        _yearStats.max = mx;
+    }
+
+    // Reusable backing buffer for the filtered index. Sized to
+    // POINTS.count on first use; never reallocated because the bulk
+    // buffer size is fixed for the session.
+    function _ensureScratch() {
+        if (!_visibleScratch || _visibleScratch.length !== POINTS.count) {
+            _visibleScratch = new Uint32Array(POINTS.count);
+        }
+        return _visibleScratch;
+    }
+
+    // Walk POINTS once, intersect _activeFilter with _timeState,
+    // update POINTS.visibleIdx. Used by both applyClientFilters()
+    // (UI changes) and setTimeWindow() (playback frames).
+    function _rebuildVisible() {
         if (!POINTS.ready) return null;
-        const f = filter || {};
+        const f = _activeFilter || {};
         const N = POINTS.count;
 
-        // Resolve source name -> index (1..N, 0 = unknown).
-        let srcIdxTarget = -1;  // -1 = no filter
+        // Resolve source name -> index once per rebuild.
+        let srcIdxTarget = -1;
         if (f.sourceName) {
             srcIdxTarget = POINTS.sources.indexOf(f.sourceName);
             if (srcIdxTarget === -1) {
-                // Unknown source → no results
-                POINTS.visibleIdx = new Uint32Array(0);
+                POINTS.visibleIdx = _ensureScratch().subarray(0, 0);
                 return POINTS.visibleIdx;
             }
         }
-
         let shapeIdxTarget = -1;
         if (f.shapeName) {
             shapeIdxTarget = POINTS.shapes.indexOf(f.shapeName);
             if (shapeIdxTarget === -1) {
-                POINTS.visibleIdx = new Uint32Array(0);
+                POINTS.visibleIdx = _ensureScratch().subarray(0, 0);
                 return POINTS.visibleIdx;
             }
         }
 
-        const yearFrom = (f.yearFrom != null) ? f.yearFrom | 0 : 0;
-        const yearTo   = (f.yearTo   != null) ? f.yearTo   | 0 : 65535;
+        // Year range: time window wins when active, otherwise the
+        // UI year filter (yearFrom/yearTo from the date inputs) is
+        // used. Either can be null/undefined to mean "no filter".
+        let yearFrom, yearTo;
+        if (_timeState.enabled) {
+            yearFrom = _timeState.yearFrom | 0;
+            yearTo   = _timeState.yearTo   | 0;
+        } else {
+            yearFrom = (f.yearFrom != null) ? f.yearFrom | 0 : 0;
+            yearTo   = (f.yearTo   != null) ? f.yearTo   | 0 : 65535;
+        }
 
         let south = -90, north = 90, west = -180, east = 180;
         if (f.bbox) {
@@ -214,20 +275,26 @@
             west  = f.bbox[2]; east  = f.bbox[3];
         }
 
-        // Hot loop — keep branches minimal.
         const lat = POINTS.lat;
         const lng = POINTS.lng;
         const src = POINTS.sourceIdx;
         const shp = POINTS.shapeIdx;
         const yr  = POINTS.year;
 
-        const out = new Uint32Array(N);
+        const out = _ensureScratch();
         let j = 0;
         for (let i = 0; i < N; i++) {
             if (srcIdxTarget   !== -1 && src[i] !== srcIdxTarget) continue;
             if (shapeIdxTarget !== -1 && shp[i] !== shapeIdxTarget) continue;
             const y = yr[i];
-            if (y !== 0 && (y < yearFrom || y > yearTo)) continue;
+            // A year of 0 means "unknown" — keep those points only
+            // when there's no active year filter on either side.
+            if (y === 0) {
+                if (_timeState.enabled ||
+                    (f.yearFrom != null) || (f.yearTo != null)) continue;
+            } else if (y < yearFrom || y > yearTo) {
+                continue;
+            }
             const la = lat[i];
             const ln = lng[i];
             if (la < south || la > north || ln < west || ln > east) continue;
@@ -235,6 +302,87 @@
         }
         POINTS.visibleIdx = out.subarray(0, j);
         return POINTS.visibleIdx;
+    }
+
+    // UI filter entry point. Stashes the filter descriptor and
+    // rebuilds visibleIdx. Called by app.js applyClientFilters()
+    // when the user touches a filter control.
+    function applyClientFilters(filter) {
+        if (!POINTS.ready) return null;
+        _activeFilter = filter || {};
+        return _rebuildVisible();
+    }
+
+    // Timeline-driven filter entry point. Overwrites the time
+    // window and rebuilds. Call at 60 fps from TimeBrush.step().
+    //
+    //   yearFrom, yearTo  — inclusive integer years
+    //   opts.cumulative   — true = pin yearFrom to dataset min
+    //                       (right edge advances, left edge stays put)
+    //
+    // Does NOT touch _activeFilter, so source/shape/bbox filters
+    // from the UI remain in effect during playback.
+    function setTimeWindow(yearFrom, yearTo, opts) {
+        if (!POINTS.ready) return null;
+        const cumulative = !!(opts && opts.cumulative);
+        _ensureYearStats();
+        _timeState.enabled = true;
+        _timeState.cumulative = cumulative;
+        if (cumulative) {
+            _timeState.yearFrom = _yearStats.min != null ? _yearStats.min : 0;
+        } else {
+            _timeState.yearFrom = yearFrom | 0;
+        }
+        _timeState.yearTo = yearTo | 0;
+        _rebuildVisible();
+        refreshActiveLayer();
+        return POINTS.visibleIdx;
+    }
+
+    // Stop timeline-driven filtering and revert to the UI year
+    // range. Called from TimeBrush.reset() and TimeBrush.togglePlay
+    // when the user stops playback.
+    function clearTimeWindow() {
+        _timeState.enabled = false;
+        _timeState.cumulative = false;
+        _rebuildVisible();
+        refreshActiveLayer();
+        return POINTS.visibleIdx;
+    }
+
+    // Compute a year histogram from POINTS.year. Returns an array
+    // of { year, count } objects, one per year in [min, max]. Cached
+    // on first call (~3 ms for 396k rows) and reused forever.
+    function getYearHistogram() {
+        if (_yearStats.histogram) return _yearStats.histogram;
+        if (!POINTS.ready) return null;
+        _ensureYearStats();
+        const min = _yearStats.min;
+        const max = _yearStats.max;
+        if (min == null || max == null) return [];
+        const span = max - min + 1;
+        const bins = new Uint32Array(span);
+        const yr = POINTS.year;
+        const N = POINTS.count;
+        for (let i = 0; i < N; i++) {
+            const y = yr[i];
+            if (y === 0) continue;
+            bins[y - min]++;
+        }
+        const out = new Array(span);
+        for (let i = 0; i < span; i++) {
+            out[i] = { year: min + i, count: bins[i] };
+        }
+        _yearStats.histogram = out;
+        return out;
+    }
+
+    // Integer min/max year across non-zero rows. Caches on first
+    // call via _ensureYearStats().
+    function getYearRange() {
+        if (!POINTS.ready) return { min: null, max: null };
+        _ensureYearStats();
+        return { min: _yearStats.min, max: _yearStats.max };
     }
 
     // -----------------------------------------------------------------
@@ -363,5 +511,12 @@
         refreshActiveLayer,
         isReady: () => POINTS.ready && leafletLayer !== null,
         getActiveMode: () => activeMode,
+
+        // v0.8.1 — temporal animation API
+        setTimeWindow,
+        clearTimeWindow,
+        getYearHistogram,
+        getYearRange,
+        isTimeWindowActive: () => _timeState.enabled,
     };
 })();

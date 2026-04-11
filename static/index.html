@@ -246,6 +246,10 @@
             <div class="observatory-time-brush" aria-label="Time window brush">
                 <div class="brush-header">
                     <button id="brush-play" class="brush-play-btn" type="button" aria-pressed="false">▶ PLAY</button>
+                    <!-- v0.8.1 — Sliding vs Cumulative playback mode.
+                         Sliding: the window slides forward at a fixed width.
+                         Cumulative: left edge is pinned; only the right edge advances. -->
+                    <button id="brush-mode" class="brush-mode-btn" type="button" data-mode="sliding" aria-pressed="false" title="Toggle playback mode: sliding window vs cumulative fill">SLIDING</button>
                     <div class="brush-readout">
                         TIME WINDOW · <strong id="brush-range-label">1947 — 2026</strong>
                         · <span id="brush-window-count">—</span> in range
