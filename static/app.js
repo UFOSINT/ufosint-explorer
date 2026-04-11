@@ -923,11 +923,30 @@ function initMap() {
     // marker-cluster path below, which is the same code that v0.7
     // shipped. The user gets the right experience for their browser
     // with zero regression for anyone on ancient hardware.
+    //
+    // state.deckBoot is a tri-state lifecycle flag read by
+    // scheduleMapReload() and the initial-load branch below:
+    //   "none"    — legacy path will run; GPU never attempted
+    //   "pending" — bootDeckGL() is in flight; legacy fetches are
+    //               suppressed so we don't hammer the DB during the
+    //               ~1.5 s bulk-download window
+    //   "ready"   — GPU layer mounted; state.useDeckGL is true
+    //   "failed"  — GPU boot failed; legacy path takes over
     state.useDeckGL = false;
+    state.deckBoot = "none";
     if (window.UFODeck && window.UFODeck.hasWebGL()) {
-        bootDeckGL().catch((err) => {
+        state.deckBoot = "pending";
+        bootDeckGL().then(() => {
+            state.deckBoot = "ready";
+        }).catch((err) => {
             console.warn("[v0.8] deck.gl boot failed, using legacy path:", err);
             state.useDeckGL = false;
+            state.deckBoot = "failed";
+            // Kick off the legacy path NOW that the boot has failed —
+            // otherwise the user is staring at a blank map.
+            if (state.activeTab === "observatory" || state.activeTab === "map") {
+                loadMapMarkers();
+            }
         });
     } else {
         console.info("[v0.8] WebGL unavailable or deck.js missing, legacy path");
@@ -995,6 +1014,14 @@ function initMap() {
 
     function scheduleMapReload() {
         if (state.useDeckGL) return;  // deck.gl handles this for free
+        // v0.8.0-cleanup: Also bail during the boot window. If deck.gl
+        // is currently booting (state.deckBoot === "pending"), a pan
+        // fired in the first ~1.5 s would otherwise trigger a legacy
+        // /api/map request for a DB that's being hammered by the bulk
+        // fetch. If deck.gl failed to boot (state.deckBoot === "failed"),
+        // we DO need the legacy path — otherwise users get a blank map
+        // forever.
+        if (state.deckBoot === "pending") return;
         if (reloadSuppressed) return;
         clearTimeout(mapReloadTimer);
         mapReloadTimer = setTimeout(() => {
@@ -1015,12 +1042,23 @@ function initMap() {
         scheduleMapReload();
     });
 
-    // Initial load. When the deck.gl boot succeeds it mounts its own
-    // layer and takes over rendering; this first legacy fetch returns
-    // a quick sparse sample so the map isn't blank during the bulk
-    // download. Once the bulk data lands, bootDeckGL() clears the
-    // legacy marker layer.
-    loadMapMarkers();
+    // v0.8.0-cleanup: Only fire the legacy initial-load path when the
+    // deck.gl boot is definitely NOT in flight. Previously this
+    // unconditionally fired loadMapMarkers() at init to "give the user
+    // something to look at while the 4MB bulk data downloads", but
+    // that meant every cold-start with a warm deck.gl boot hit Azure
+    // front-door with an expensive /api/map zoom=4 whole-world query,
+    // which routinely 502'd against a cold DB. The 502 didn't matter
+    // functionally (deck.gl rendered anyway) but it looked like a bug
+    // in DevTools and wasted gunicorn cycles.
+    //
+    // If the GPU boot is in progress (state.deckBoot === "pending"),
+    // wait for the ScatterplotLayer to render instead. If the boot
+    // already failed or was never attempted, fire the legacy path
+    // immediately.
+    if (state.deckBoot !== "pending") {
+        loadMapMarkers();
+    }
 }
 
 // v0.8.0 — Bulk-load the packed geocoded dataset and mount the deck.gl

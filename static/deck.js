@@ -684,6 +684,25 @@
         // tessellate uniformly regardless of latitude. Radius scales
         // with map zoom via the `radius` prop — we pass a fixed value
         // in meters and let deck.gl handle the projection math.
+        //
+        // v0.8.2-hotfix: color scale was flat because deck.gl defaults
+        // to a linear quantize scale that maps [min, max] evenly across
+        // the color ramp. UFOSINT cell counts are dominated by a handful
+        // of huge metropolitan buckets (NYC, LA, London) with 5,000+
+        // sightings each, while most cells have 1-50 sightings. A
+        // linear domain from 1 to 5,000 puts every small cell in the
+        // bottom bucket — they all render cold-plasma and the map
+        // reads as "same color everywhere with one hot spot".
+        //
+        // Fixed by switching to colorScaleType: 'quantile', which
+        // assigns cells to buckets by percentile rank instead of
+        // absolute value. 20% of cells get each of the 5 colors, so
+        // the high end gets hot regardless of skew. upperPercentile:99
+        // also clips the top 1% of cells (the massive outliers) to
+        // the highest color bucket rather than letting them distort
+        // the domain. Result: the full color ramp is visible and the
+        // relative density of cells is legible across 4 orders of
+        // magnitude of count.
         return new d.HexagonLayer({
             id: "ufosint-hex",
             data: POINTS.visibleIdx,
@@ -695,6 +714,8 @@
                 [0, 59, 92], [0, 140, 180], [0, 240, 255],
                 [255, 179, 0], [255, 78, 0],
             ],
+            colorScaleType: "quantile",
+            upperPercentile: 99,
             pickable: true,
             onClick: (info) => {
                 // Cell click: no detail modal — just log the count.
