@@ -644,10 +644,18 @@ function showStats(data) {
     // The server returns null on pre-v0.8.2/v0.8.3 schemas; we hide
     // the corresponding row in both the badge and the popover so
     // the UI never shows "undefined sightings".
+    //
+    // Also hide when the count is 0: in practice that means the
+    // column exists but isn't populated yet (e.g. the operator ran
+    // add_v083_derived_columns.sql but hasn't re-migrated from
+    // ufo_public.db yet). Showing "0 with movement" is misleading —
+    // better to hide the chip entirely until the data lands.
     const highQ = data.high_quality;
     const withMovement = data.with_movement;
-    const highQStr = (typeof highQ === "number") ? highQ.toLocaleString() : null;
-    const withMovStr = (typeof withMovement === "number") ? withMovement.toLocaleString() : null;
+    const highQStr = (typeof highQ === "number" && highQ > 0)
+        ? highQ.toLocaleString() : null;
+    const withMovStr = (typeof withMovement === "number" && withMovement > 0)
+        ? withMovement.toLocaleString() : null;
 
     // Compact badge — up to five chips separated by middle dots. The
     // first three (total, mapped, duplicates) always render; the new
