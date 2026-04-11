@@ -116,12 +116,16 @@ def test_deck_js_histogram_is_cached():
 
 def test_deck_js_year_range_helper():
     """getYearRange() returns { min, max } over non-zero years only,
-    so points with an unknown year (year == 0) don't poison the
-    bounds."""
+    so points with an unknown year don't poison the bounds.
+
+    v0.8.2: year stats are derived from POINTS.dateDays instead of a
+    dedicated `year` field, and the "unknown" sentinel is a zero
+    date_days value. The hot loop skips `d === 0` rows.
+    """
     js = _read(DECK_JS)
     assert "getYearRange" in js
-    # Sanity: the hot loop skips y === 0 rows
-    assert "y === 0" in js
+    # v0.8.2 walks dateDays with `d === 0` as the unknown sentinel
+    assert "d === 0" in js
 
 
 def test_deck_js_cumulative_mode_supported():

@@ -79,27 +79,52 @@
     // -----------------------------------------------------------------
     // Typed-array views over the packed buffer. Populated once by
     // loadBulkPoints(). Every subsequent render reads these directly.
+    //
+    // v0.8.2: expanded from 6 fields (16 bytes) to 15 fields (28 bytes)
+    // to carry the science-team derived fields. Score fields (quality,
+    // hoax, richness) use 255 as a sentinel meaning "unknown" — the
+    // filter loop treats 255 as failing any threshold test, which is
+    // exactly the right semantic.
+    const SCORE_UNKNOWN = 255;
+    const FLAG_HAS_DESC  = 0x01;
+    const FLAG_HAS_MEDIA = 0x02;
+
     const POINTS = {
         ready: false,
         count: 0,
         etag: null,
         // Per-field typed arrays (tight, contiguous, one allocation each).
-        id: null,        // Uint32Array(N)
-        lat: null,       // Float32Array(N)
-        lng: null,       // Float32Array(N)
-        sourceIdx: null, // Uint8Array(N)
-        shapeIdx: null,  // Uint8Array(N)
-        year: null,      // Uint16Array(N)
+        id: null,            // Uint32Array(N)
+        lat: null,           // Float32Array(N)
+        lng: null,           // Float32Array(N)
+        dateDays: null,      // Uint32Array(N) — days since 1900-01-01, 0 = unknown
+        sourceIdx: null,     // Uint8Array(N)
+        shapeIdx: null,      // Uint8Array(N)
+        qualityScore: null,  // Uint8Array(N) — 0-100, 255 = unknown
+        hoaxScore: null,     // Uint8Array(N) — 0-100, 255 = unknown
+        richnessScore: null, // Uint8Array(N) — 0-100, 255 = unknown
+        colorIdx: null,      // Uint8Array(N)
+        emotionIdx: null,    // Uint8Array(N)
+        flags: null,         // Uint8Array(N) — bit0=has_desc, bit1=has_media
+        numWitnesses: null,  // Uint8Array(N)
+        durationLog2: null,  // Uint16Array(N) — log2(sec+1), 0 = unknown
         // Lookup tables from the meta sidecar.
-        sources: null,   // Array<string | null>
-        shapes: null,    // Array<string | null>
+        sources: null,       // Array<string | null>
+        shapes: null,        // Array<string | null>
+        colors: null,        // Array<string | null> (v0.8.2)
+        emotions: null,      // Array<string | null> (v0.8.2)
+        // Coverage + schema metadata for the UI.
+        coverage: null,      // { quality_score: 0, hoax_score: 0, ... }
+        columnsPresent: null,// { quality_score: false, ... }
+        shapeSource: null,   // "standardized" | "raw"
         // Current filtered index (Uint32Array subarray'd to .length).
         visibleIdx: null,
     };
 
     async function loadBulkPoints() {
         // Fire both requests in parallel. The meta sidecar is small
-        // (a few KB of JSON); the binary buffer is ~700 KB gzipped.
+        // (a few KB of JSON); the binary buffer is ~4 MB gzipped in
+        // v0.8.2 (up from 2.85 MB in v0.8.0 with the new fields).
         const t0 = performance.now();
         const [metaResp, binResp] = await Promise.all([
             fetch("/api/points-bulk?meta=1", { credentials: "same-origin" }),
@@ -114,7 +139,7 @@
         const buf = await binResp.arrayBuffer();
         const t1 = performance.now();
         console.info(
-            `[v0.8] Fetched ${meta.count.toLocaleString()} points ` +
+            `[v0.8.2] Fetched ${meta.count.toLocaleString()} points ` +
             `(${(buf.byteLength / 1024).toFixed(0)} KB) in ${(t1 - t0).toFixed(0)} ms`,
         );
 
@@ -126,38 +151,69 @@
                 `expected ${meta.count * bytesPerRow} for ${meta.count} rows`,
             );
         }
+        // v0.8.2 expects exactly 28-byte rows. If the server sends a
+        // different size the schema changed on us and we should bail
+        // loudly rather than silently corrupt every marker.
+        if (bytesPerRow !== 28) {
+            throw new Error(
+                `unexpected row size ${bytesPerRow} — expected 28 (v0.8.2). ` +
+                `Deploy probably has stale server code.`,
+            );
+        }
 
         const N = meta.count;
         const dv = new DataView(buf);
-        POINTS.id        = new Uint32Array(N);
-        POINTS.lat       = new Float32Array(N);
-        POINTS.lng       = new Float32Array(N);
-        POINTS.sourceIdx = new Uint8Array(N);
-        POINTS.shapeIdx  = new Uint8Array(N);
-        POINTS.year      = new Uint16Array(N);
+        POINTS.id            = new Uint32Array(N);
+        POINTS.lat           = new Float32Array(N);
+        POINTS.lng           = new Float32Array(N);
+        POINTS.dateDays      = new Uint32Array(N);
+        POINTS.sourceIdx     = new Uint8Array(N);
+        POINTS.shapeIdx      = new Uint8Array(N);
+        POINTS.qualityScore  = new Uint8Array(N);
+        POINTS.hoaxScore     = new Uint8Array(N);
+        POINTS.richnessScore = new Uint8Array(N);
+        POINTS.colorIdx      = new Uint8Array(N);
+        POINTS.emotionIdx    = new Uint8Array(N);
+        POINTS.flags         = new Uint8Array(N);
+        POINTS.numWitnesses  = new Uint8Array(N);
+        POINTS.durationLog2  = new Uint16Array(N);
 
-        // Deserialise every row. The offsets come from meta.schema.fields
-        // so a future schema change (e.g. adding a country_idx) doesn't
-        // require updating this loop as long as the field names match.
-        // Hard-code the current layout for speed; fallback to dynamic.
+        // Hot deserialisation loop. Hard-coded offsets for speed —
+        // anything dynamic would cost 5-10 ms per 100k rows. The
+        // schema version assertion above guards against silent
+        // layout drift.
         for (let i = 0; i < N; i++) {
-            const o = i * bytesPerRow;
-            POINTS.id[i]        = dv.getUint32(o,      true);
-            POINTS.lat[i]       = dv.getFloat32(o + 4,  true);
-            POINTS.lng[i]       = dv.getFloat32(o + 8,  true);
-            POINTS.sourceIdx[i] = dv.getUint8(o + 12);
-            POINTS.shapeIdx[i]  = dv.getUint8(o + 13);
-            POINTS.year[i]      = dv.getUint16(o + 14, true);
+            const o = i * 28;
+            POINTS.id[i]            = dv.getUint32(o,      true);
+            POINTS.lat[i]           = dv.getFloat32(o + 4,  true);
+            POINTS.lng[i]           = dv.getFloat32(o + 8,  true);
+            POINTS.dateDays[i]      = dv.getUint32(o + 12, true);
+            POINTS.sourceIdx[i]     = dv.getUint8(o + 16);
+            POINTS.shapeIdx[i]      = dv.getUint8(o + 17);
+            POINTS.qualityScore[i]  = dv.getUint8(o + 18);
+            POINTS.hoaxScore[i]     = dv.getUint8(o + 19);
+            POINTS.richnessScore[i] = dv.getUint8(o + 20);
+            POINTS.colorIdx[i]      = dv.getUint8(o + 21);
+            POINTS.emotionIdx[i]    = dv.getUint8(o + 22);
+            POINTS.flags[i]         = dv.getUint8(o + 23);
+            POINTS.numWitnesses[i]  = dv.getUint8(o + 24);
+            // byte 25 is _reserved, skip
+            POINTS.durationLog2[i]  = dv.getUint16(o + 26, true);
         }
         const t2 = performance.now();
         console.info(
-            `[v0.8] Deserialised ${N.toLocaleString()} rows in ${(t2 - t1).toFixed(0)} ms`,
+            `[v0.8.2] Deserialised ${N.toLocaleString()} rows in ${(t2 - t1).toFixed(0)} ms`,
         );
 
         POINTS.count = N;
         POINTS.etag = meta.etag;
-        POINTS.sources = meta.sources;
-        POINTS.shapes = meta.shapes;
+        POINTS.sources  = meta.sources || [null];
+        POINTS.shapes   = meta.shapes || [null];
+        POINTS.colors   = meta.colors || [null];
+        POINTS.emotions = meta.emotions || [null];
+        POINTS.coverage = meta.coverage || {};
+        POINTS.columnsPresent = meta.columns_present || {};
+        POINTS.shapeSource = meta.shape_source || "raw";
         // Start with every point visible.
         POINTS.visibleIdx = new Uint32Array(N);
         for (let i = 0; i < N; i++) POINTS.visibleIdx[i] = i;
@@ -195,30 +251,57 @@
     let _activeFilter = {};
     const _timeState = {
         enabled: false,      // false → use year range from _activeFilter
-        yearFrom: 0,
-        yearTo: 65535,
-        cumulative: false,   // cumulative pins yearFrom to dataset min
+        // Time window is expressed in days-since-1900. Year filtering is
+        // done by converting year to day-range during the rebuild so
+        // both modes share the same hot path.
+        dayFrom: 0,
+        dayTo: 0xFFFFFFFF,
+        cumulative: false,   // cumulative pins dayFrom to dataset min
     };
     const _yearStats = { min: null, max: null, histogram: null };
+    const _dayStats = { min: null, max: null };
     let _visibleScratch = null;
+
+    // Convert year integer → days-since-1900 (Jan 1 of that year).
+    // Matches the server's _epoch_days_1900 helper.
+    function _yearToDays(year) {
+        if (year == null || year <= 0) return 0;
+        return Math.floor((Date.UTC(year, 0, 1) - Date.UTC(1900, 0, 1)) / 86400000);
+    }
 
     // Year range resolved from the actual data (non-zero rows only).
     // Lazily computed and cached; the bulk buffer never changes shape
-    // so one walk is enough.
+    // so one walk is enough. Walks POINTS.dateDays (v0.8.2) and derives
+    // year bounds for the histogram.
     function _ensureYearStats() {
         if (_yearStats.min != null) return;
         if (!POINTS.ready) return;
-        let mn = 65535, mx = 0;
-        const yr = POINTS.year;
+        let dmn = 0xFFFFFFFF, dmx = 0;
+        const dd = POINTS.dateDays;
         const N = POINTS.count;
         for (let i = 0; i < N; i++) {
-            const y = yr[i];
-            if (y === 0) continue;
-            if (y < mn) mn = y;
-            if (y > mx) mx = y;
+            const d = dd[i];
+            if (d === 0) continue;
+            if (d < dmn) dmn = d;
+            if (d > dmx) dmx = d;
         }
-        _yearStats.min = mn;
-        _yearStats.max = mx;
+        if (dmx === 0) {
+            // No rows with dates at all.
+            _yearStats.min = null;
+            _yearStats.max = null;
+            _dayStats.min = null;
+            _dayStats.max = null;
+            return;
+        }
+        _dayStats.min = dmn;
+        _dayStats.max = dmx;
+        // Convert day bounds back to year bounds. Days / 365.25 is
+        // approximate but since we only use this for the histogram,
+        // being off by at most a day on the edges is fine.
+        const minDate = new Date(Date.UTC(1900, 0, 1) + dmn * 86400000);
+        const maxDate = new Date(Date.UTC(1900, 0, 1) + dmx * 86400000);
+        _yearStats.min = minDate.getUTCFullYear();
+        _yearStats.max = maxDate.getUTCFullYear();
     }
 
     // Reusable backing buffer for the filtered index. Sized to
@@ -234,39 +317,77 @@
     // Walk POINTS once, intersect _activeFilter with _timeState,
     // update POINTS.visibleIdx. Used by both applyClientFilters()
     // (UI changes) and setTimeWindow() (playback frames).
+    //
+    // v0.8.2 filter object fields:
+    //   sourceName       — exact match in POINTS.sources
+    //   shapeName        — exact match in POINTS.shapes
+    //   colorName        — exact match in POINTS.colors
+    //   emotionName      — exact match in POINTS.emotions
+    //   qualityMin       — quality_score >= threshold (255-sentinel fails)
+    //   hoaxMax          — hoax_score   <= threshold (255-sentinel fails)
+    //   richnessMin      — richness_score >= threshold (255-sentinel fails)
+    //   hasDescription   — true: flag bit 0 set; false: flag bit 0 clear
+    //   hasMedia         — true: flag bit 1 set; false: flag bit 1 clear
+    //   yearFrom/yearTo  — legacy year range (converted to day range)
+    //   bbox             — [s, n, w, e] viewport clip
     function _rebuildVisible() {
         if (!POINTS.ready) return null;
         const f = _activeFilter || {};
         const N = POINTS.count;
 
-        // Resolve source name -> index once per rebuild.
+        // Resolve string names to typed-array indices once per rebuild.
+        // A target of -1 means "no filter"; a target of -2 means "name
+        // not in the lookup → every row fails → empty result".
+        const unknownName = _ensureScratch().subarray(0, 0);
+
         let srcIdxTarget = -1;
         if (f.sourceName) {
             srcIdxTarget = POINTS.sources.indexOf(f.sourceName);
-            if (srcIdxTarget === -1) {
-                POINTS.visibleIdx = _ensureScratch().subarray(0, 0);
-                return POINTS.visibleIdx;
-            }
+            if (srcIdxTarget === -1) { POINTS.visibleIdx = unknownName; return unknownName; }
         }
         let shapeIdxTarget = -1;
         if (f.shapeName) {
             shapeIdxTarget = POINTS.shapes.indexOf(f.shapeName);
-            if (shapeIdxTarget === -1) {
-                POINTS.visibleIdx = _ensureScratch().subarray(0, 0);
-                return POINTS.visibleIdx;
-            }
+            if (shapeIdxTarget === -1) { POINTS.visibleIdx = unknownName; return unknownName; }
+        }
+        let colorIdxTarget = -1;
+        if (f.colorName) {
+            colorIdxTarget = POINTS.colors.indexOf(f.colorName);
+            if (colorIdxTarget === -1) { POINTS.visibleIdx = unknownName; return unknownName; }
+        }
+        let emotionIdxTarget = -1;
+        if (f.emotionName) {
+            emotionIdxTarget = POINTS.emotions.indexOf(f.emotionName);
+            if (emotionIdxTarget === -1) { POINTS.visibleIdx = unknownName; return unknownName; }
         }
 
-        // Year range: time window wins when active, otherwise the
-        // UI year filter (yearFrom/yearTo from the date inputs) is
-        // used. Either can be null/undefined to mean "no filter".
-        let yearFrom, yearTo;
+        // Scores: thresholds in [0, 100]. -1 = no filter.
+        const qMin = (f.qualityMin != null) ? (f.qualityMin | 0) : -1;
+        const hMax = (f.hoaxMax    != null) ? (f.hoaxMax    | 0) : -1;
+        const rMin = (f.richnessMin != null) ? (f.richnessMin | 0) : -1;
+
+        // Flag bit filters: null = no filter, true = require set,
+        // false = require clear.
+        const fDesc = (f.hasDescription != null) ? !!f.hasDescription : null;
+        const fMedia = (f.hasMedia != null) ? !!f.hasMedia : null;
+
+        // Time window → day range. Timeline playback wins; otherwise
+        // fall back to the UI year range (converted to days).
+        let dayFrom, dayTo;
+        let timeFilterActive = false;
         if (_timeState.enabled) {
-            yearFrom = _timeState.yearFrom | 0;
-            yearTo   = _timeState.yearTo   | 0;
+            dayFrom = _timeState.dayFrom | 0;
+            dayTo   = _timeState.dayTo   | 0;
+            timeFilterActive = true;
+        } else if (f.yearFrom != null || f.yearTo != null) {
+            dayFrom = (f.yearFrom != null) ? _yearToDays(f.yearFrom) : 0;
+            // Include the whole of yearTo: end-of-year = next year's day 0 - 1
+            const yt = (f.yearTo != null) ? f.yearTo : 9999;
+            dayTo = _yearToDays(yt + 1) - 1;
+            timeFilterActive = true;
         } else {
-            yearFrom = (f.yearFrom != null) ? f.yearFrom | 0 : 0;
-            yearTo   = (f.yearTo   != null) ? f.yearTo   | 0 : 65535;
+            dayFrom = 0;
+            dayTo = 0xFFFFFFFF;
         }
 
         let south = -90, north = 90, west = -180, east = 180;
@@ -275,26 +396,61 @@
             west  = f.bbox[2]; east  = f.bbox[3];
         }
 
+        // Snapshot typed-array references for the hot loop (V8 can
+        // optimise the property access across iterations this way).
         const lat = POINTS.lat;
         const lng = POINTS.lng;
         const src = POINTS.sourceIdx;
         const shp = POINTS.shapeIdx;
-        const yr  = POINTS.year;
+        const dd  = POINTS.dateDays;
+        const qs  = POINTS.qualityScore;
+        const hs  = POINTS.hoaxScore;
+        const rs  = POINTS.richnessScore;
+        const ci  = POINTS.colorIdx;
+        const ei  = POINTS.emotionIdx;
+        const fl  = POINTS.flags;
+        const UNK = SCORE_UNKNOWN;
 
         const out = _ensureScratch();
         let j = 0;
         for (let i = 0; i < N; i++) {
-            if (srcIdxTarget   !== -1 && src[i] !== srcIdxTarget) continue;
-            if (shapeIdxTarget !== -1 && shp[i] !== shapeIdxTarget) continue;
-            const y = yr[i];
-            // A year of 0 means "unknown" — keep those points only
-            // when there's no active year filter on either side.
-            if (y === 0) {
-                if (_timeState.enabled ||
-                    (f.yearFrom != null) || (f.yearTo != null)) continue;
-            } else if (y < yearFrom || y > yearTo) {
-                continue;
+            if (srcIdxTarget     !== -1 && src[i] !== srcIdxTarget)     continue;
+            if (shapeIdxTarget   !== -1 && shp[i] !== shapeIdxTarget)   continue;
+            if (colorIdxTarget   !== -1 && ci[i]  !== colorIdxTarget)   continue;
+            if (emotionIdxTarget !== -1 && ei[i]  !== emotionIdxTarget) continue;
+
+            // Score filters. 255-sentinel fails any threshold test,
+            // which is the right semantic: a row with unknown quality
+            // should NOT pass "high quality only".
+            if (qMin !== -1) {
+                const q = qs[i];
+                if (q === UNK || q < qMin) continue;
             }
+            if (hMax !== -1) {
+                const h = hs[i];
+                if (h === UNK || h > hMax) continue;
+            }
+            if (rMin !== -1) {
+                const r = rs[i];
+                if (r === UNK || r < rMin) continue;
+            }
+
+            // Flag bit filters.
+            if (fDesc !== null) {
+                const hasDesc = (fl[i] & FLAG_HAS_DESC) !== 0;
+                if (hasDesc !== fDesc) continue;
+            }
+            if (fMedia !== null) {
+                const hasMedia = (fl[i] & FLAG_HAS_MEDIA) !== 0;
+                if (hasMedia !== fMedia) continue;
+            }
+
+            // Day range. 0 (unknown) fails any active time filter.
+            const d = dd[i];
+            if (timeFilterActive) {
+                if (d === 0 || d < dayFrom || d > dayTo) continue;
+            }
+
             const la = lat[i];
             const ln = lng[i];
             if (la < south || la > north || ln < west || ln > east) continue;
@@ -316,24 +472,47 @@
     // Timeline-driven filter entry point. Overwrites the time
     // window and rebuilds. Call at 60 fps from TimeBrush.step().
     //
-    //   yearFrom, yearTo  — inclusive integer years
-    //   opts.cumulative   — true = pin yearFrom to dataset min
+    //   yearFrom, yearTo  — inclusive integer years (legacy, v0.8.1)
+    //                       OR days-since-1900 (v0.8.2 day precision)
+    //   opts.cumulative   — true = pin lower bound to dataset min
     //                       (right edge advances, left edge stays put)
+    //   opts.dayPrecision — true = interpret yearFrom/yearTo as days
+    //                       since 1900-01-01 instead of years
     //
-    // Does NOT touch _activeFilter, so source/shape/bbox filters
-    // from the UI remain in effect during playback.
+    // Backward compatible: callers that don't pass dayPrecision get
+    // year-level filtering like v0.8.1 did. The TimeBrush detects
+    // day-precision availability via POINTS.coverage.date_days > 0
+    // and passes dayPrecision=true in that case for smooth month-
+    // granular playback instead of chunky year jumps.
+    //
+    // Does NOT touch _activeFilter, so source/shape/bbox/quality
+    // filters from the UI remain in effect during playback.
     function setTimeWindow(yearFrom, yearTo, opts) {
         if (!POINTS.ready) return null;
         const cumulative = !!(opts && opts.cumulative);
+        const dayPrecision = !!(opts && opts.dayPrecision);
         _ensureYearStats();
         _timeState.enabled = true;
         _timeState.cumulative = cumulative;
-        if (cumulative) {
-            _timeState.yearFrom = _yearStats.min != null ? _yearStats.min : 0;
+
+        let dayFrom, dayTo;
+        if (dayPrecision) {
+            // Caller passed day values directly.
+            dayFrom = yearFrom | 0;
+            dayTo   = yearTo   | 0;
         } else {
-            _timeState.yearFrom = yearFrom | 0;
+            // Convert year integers to day range.
+            dayFrom = _yearToDays(yearFrom);
+            // Include the whole of yearTo: end = next year's day 0 - 1
+            dayTo = _yearToDays((yearTo | 0) + 1) - 1;
         }
-        _timeState.yearTo = yearTo | 0;
+
+        if (cumulative) {
+            dayFrom = _dayStats.min != null ? _dayStats.min : 0;
+        }
+        _timeState.dayFrom = dayFrom;
+        _timeState.dayTo = dayTo;
+
         _rebuildVisible();
         refreshActiveLayer();
         return POINTS.visibleIdx;
@@ -350,9 +529,14 @@
         return POINTS.visibleIdx;
     }
 
-    // Compute a year histogram from POINTS.year. Returns an array
+    // Compute a year histogram from POINTS.dateDays. Returns an array
     // of { year, count } objects, one per year in [min, max]. Cached
     // on first call (~3 ms for 396k rows) and reused forever.
+    //
+    // v0.8.2: walks dateDays instead of the legacy `year` field. We
+    // derive the year from day-index by binary-searching a small
+    // precomputed "first day of year N" lookup table, which is faster
+    // than calling `new Date()` per row.
     function getYearHistogram() {
         if (_yearStats.histogram) return _yearStats.histogram;
         if (!POINTS.ready) return null;
@@ -362,13 +546,31 @@
         if (min == null || max == null) return [];
         const span = max - min + 1;
         const bins = new Uint32Array(span);
-        const yr = POINTS.year;
+
+        // Precompute "first day of year" cutoffs for binary search.
+        // At N ~ 400k rows and span ~ 130 years, this is 130 entries
+        // and each row does ~7 integer comparisons to locate its bin —
+        // way faster than `new Date(days).getUTCFullYear()` per row.
+        const yearStarts = new Uint32Array(span + 1);
+        for (let y = 0; y <= span; y++) {
+            yearStarts[y] = _yearToDays(min + y);
+        }
+
+        const dd = POINTS.dateDays;
         const N = POINTS.count;
         for (let i = 0; i < N; i++) {
-            const y = yr[i];
-            if (y === 0) continue;
-            bins[y - min]++;
+            const d = dd[i];
+            if (d === 0) continue;
+            // Binary search: find largest y with yearStarts[y] <= d
+            let lo = 0, hi = span;
+            while (lo < hi) {
+                const mid = (lo + hi + 1) >>> 1;
+                if (yearStarts[mid] <= d) lo = mid;
+                else hi = mid - 1;
+            }
+            if (lo >= 0 && lo < span) bins[lo]++;
         }
+
         const out = new Array(span);
         for (let i = 0; i < span; i++) {
             out[i] = { year: min + i, count: bins[i] };
@@ -384,6 +586,39 @@
         _ensureYearStats();
         return { min: _yearStats.min, max: _yearStats.max };
     }
+
+    // v0.8.2 — min/max days-since-1900 across non-zero rows. Used by
+    // TimeBrush for day-precision playback.
+    function getDayRange() {
+        if (!POINTS.ready) return { min: null, max: null };
+        _ensureYearStats();
+        return { min: _dayStats.min, max: _dayStats.max };
+    }
+
+    // v0.8.2 — coverage map from the meta sidecar, telling the UI
+    // which derived fields actually have data. Falsy values → disable
+    // the corresponding filter control with a tooltip.
+    function getCoverage() {
+        if (!POINTS.ready) return {};
+        return POINTS.coverage || {};
+    }
+
+    // v0.8.2 — whether each derived column EXISTS in the live schema
+    // (as opposed to being populated). Useful for telling apart "the
+    // v0.8.2 migration hasn't run" from "the pipeline hasn't populated
+    // the column yet".
+    function getColumnsPresent() {
+        if (!POINTS.ready) return {};
+        return POINTS.columnsPresent || {};
+    }
+
+    // v0.8.2 — lookup helpers so app.js can populate filter dropdowns
+    // without reaching into POINTS directly.
+    function getShapes()   { return POINTS.shapes   || [null]; }
+    function getColors()   { return POINTS.colors   || [null]; }
+    function getEmotions() { return POINTS.emotions || [null]; }
+    function getSources()  { return POINTS.sources  || [null]; }
+    function getShapeSource() { return POINTS.shapeSource || "raw"; }
 
     // -----------------------------------------------------------------
     // deck.gl layer factories
@@ -518,5 +753,15 @@
         getYearHistogram,
         getYearRange,
         isTimeWindowActive: () => _timeState.enabled,
+
+        // v0.8.2 — derived-fields API
+        getDayRange,
+        getCoverage,
+        getColumnsPresent,
+        getShapes,
+        getColors,
+        getEmotions,
+        getSources,
+        getShapeSource,
     };
 })();

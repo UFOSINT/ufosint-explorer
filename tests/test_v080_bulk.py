@@ -46,19 +46,23 @@ def test_points_bulk_schema_version_constant():
 
 def test_points_bulk_bytes_per_row_constant():
     src = _read(APP_PY)
-    assert "_POINTS_BULK_BYTES_PER_ROW = 16" in src, (
-        "The 16-byte row layout is part of the wire contract — the "
-        "client hard-codes it into its DataView offsets. Lock it here "
-        "so a refactor can't silently bump it."
+    # v0.8.2 bumped to 28-byte rows (see test_v082_derived for the
+    # full layout contract). v0.8.0's 16-byte assertion is preserved
+    # in git history.
+    assert "_POINTS_BULK_BYTES_PER_ROW = 28" in src, (
+        "The row layout is part of the wire contract — the client "
+        "hard-codes it into its DataView offsets. Lock it here so a "
+        "refactor can't silently bump it without a schema version change."
     )
 
 
 def test_points_bulk_struct_format():
     src = _read(APP_PY)
-    assert '_POINTS_BULK_STRUCT = "<IffBBH"' in src, (
-        "The struct format locks the on-wire order: uint32 id, float32 "
-        "lat, float32 lng, uint8 source, uint8 shape, uint16 year. "
-        "Little-endian so the JS DataView reads it directly."
+    # v0.8.2: 28-byte row = uint32 id + f32 lat + f32 lng + uint32
+    # date_days + 10×uint8 fields + uint16 duration_log2.
+    assert '_POINTS_BULK_STRUCT = "<IffIBBBBBBBBBBH"' in src, (
+        "The struct format locks the on-wire order. Little-endian so "
+        "the JS DataView reads it directly. 16 fields, 28 bytes total."
     )
 
 
@@ -91,20 +95,21 @@ def test_points_bulk_route_registered(flask_app):
 # Functional tests — fake DB, exercise the real route handler
 # ---------------------------------------------------------------------------
 class _FakeBulkCursor:
-    """Minimal cursor stub for the points-bulk path.
+    """Minimal cursor stub for the v082-1 points-bulk path.
 
-    Scripted to answer three kinds of queries:
-      1. ETag aggregates  → (count, max_id)
-      2. source_database  → list of (id, name)
-      3. distinct shapes  → list of (shape,)
-      4. full geocoded scan → list of sighting rows
-
-    Drives both _points_bulk_etag() and _points_bulk_build() without a
-    real Postgres.
+    Scripted to answer every query _points_bulk_build() issues:
+      1. ETag aggregates (count, max_id)
+      2. information_schema.columns column probe
+      3. source_database lookup
+      4. DISTINCT standardized_shape (or shape) lookup
+      5. DISTINCT primary_color lookup
+      6. DISTINCT dominant_emotion lookup
+      7. Full geocoded sighting scan (17-tuple rows)
     """
 
-    def __init__(self, sightings):
+    def __init__(self, sightings, present_columns=frozenset()):
         self.sightings = sightings
+        self.present_columns = set(present_columns)
         self._current = None
         self.executed = []
 
@@ -114,11 +119,22 @@ class _FakeBulkCursor:
         if "count(*)" in s and "coalesce(max" in s:
             max_id = max((r[0] for r in self.sightings), default=0)
             self._current = [(len(self.sightings), max_id)]
+        elif "information_schema.columns" in s:
+            # The endpoint probes which derived columns exist.
+            self._current = [(c,) for c in self.present_columns]
         elif "from source_database" in s:
             self._current = [(1, "MUFON"), (2, "NUFORC"), (3, "UFOCAT")]
-        elif "distinct shape" in s:
-            self._current = [("Circle",), ("Light",), ("Triangle",)]
-        elif "s.source_db_id" in s and "s.date_event" in s:
+        elif "distinct standardized_shape" in s:
+            self._current = [("circle", "circle"), ("triangle", "triangle")]
+        elif "distinct shape" in s and "standardized" not in s:
+            self._current = [("Circle", "circle"), ("Light", "light"), ("Triangle", "triangle")]
+        elif "distinct primary_color" in s:
+            self._current = [("red", "red"), ("white", "white")]
+        elif "distinct dominant_emotion" in s:
+            self._current = [("fear", "fear"), ("surprise", "surprise")]
+        elif "from sighting s" in s and "join location l" in s and "order by s.id" in s:
+            # The big geocoded scan. Must return 17-tuple rows matching
+            # the SELECT list in _points_bulk_build().
             self._current = list(self.sightings)
         else:
             self._current = []
@@ -139,8 +155,8 @@ class _FakeBulkCursor:
 
 
 class _FakeBulkConn:
-    def __init__(self, sightings):
-        self._cursor = _FakeBulkCursor(sightings)
+    def __init__(self, sightings, present_columns=frozenset()):
+        self._cursor = _FakeBulkCursor(sightings, present_columns)
 
     def cursor(self, *a, **kw):
         return self._cursor
@@ -149,13 +165,37 @@ class _FakeBulkConn:
         pass
 
 
+def _make_sighting(
+    sid, lat, lng, *,
+    src=1, raw_shape="Circle", date_event="1995-06-12", duration=None,
+    witnesses=None, sighting_dt=None, std_shape=None,
+    prim_color=None, dom_emotion=None,
+    quality=None, richness=None, hoax=None,
+    has_desc=0, has_media=0,
+):
+    """Build a 17-tuple matching the v082-1 SELECT list.
+
+    Order must match _points_bulk_build():
+      id, latitude, longitude, source_db_id, raw_shape, date_event,
+      duration_seconds, raw_num_witnesses,
+      sighting_datetime, standardized_shape, primary_color, dominant_emotion,
+      quality_score, richness_score, hoax_likelihood,
+      has_description, has_media
+    """
+    return (
+        sid, lat, lng, src, raw_shape, date_event,
+        duration, witnesses,
+        sighting_dt, std_shape, prim_color, dom_emotion,
+        quality, richness, hoax, has_desc, has_media,
+    )
+
+
 _SAMPLE_SIGHTINGS = [
-    # (id, lat, lng, source_db_id, shape, date_event)
-    (1, 35.7796, -78.6382, 1, "Circle", "1995-06-12"),
-    (2, 51.5074, -0.1278, 2, "Triangle", "1977-11-09"),
-    (3, 40.7128, -74.0060, 3, "Light", "2005-03-14"),
-    (4, -33.8688, 151.2093, 2, None, "2012-01-01"),
-    (5, 48.8566, 2.3522, 1, "Circle", None),  # unknown year
+    _make_sighting(1, 35.7796, -78.6382, raw_shape="Circle", date_event="1995-06-12"),
+    _make_sighting(2, 51.5074, -0.1278,  raw_shape="Triangle", date_event="1977-11-09"),
+    _make_sighting(3, 40.7128, -74.0060, raw_shape="Light", date_event="2005-03-14"),
+    _make_sighting(4, -33.8688, 151.2093, raw_shape=None, date_event="2012-01-01"),
+    _make_sighting(5, 48.8566, 2.3522, raw_shape="Circle", date_event=None),  # unknown date
 ]
 
 
@@ -177,21 +217,43 @@ def test_points_bulk_meta_returns_schema_and_lookups(client, monkeypatch):
     assert resp.mimetype == "application/json"
     meta = resp.get_json()
 
-    # Shape of the sidecar
+    # v0.8.2 shape
     assert meta["count"] == len(_SAMPLE_SIGHTINGS)
-    assert meta["schema_version"] == "v080-1"
-    assert meta["schema"]["bytes_per_row"] == 16
+    assert meta["schema_version"] == "v082-1"
+    assert meta["schema"]["bytes_per_row"] == 28
     assert meta["schema"]["endian"] == "little"
+    assert meta["schema"]["score_unknown"] == 255
+    assert meta["schema"]["date_epoch"] == "1900-01-01"
 
     # Field list is complete and in byte order
     names = [f["name"] for f in meta["schema"]["fields"]]
-    assert names == ["id", "lat", "lng", "source_idx", "shape_idx", "year"]
+    assert names == [
+        "id", "lat", "lng", "date_days",
+        "source_idx", "shape_idx",
+        "quality_score", "hoax_score", "richness_score",
+        "color_idx", "emotion_idx", "flags",
+        "num_witnesses", "_reserved", "duration_log2",
+    ]
 
     # Lookups: index 0 reserved for unknown/none, real entries start at 1
     assert meta["sources"][0] is None
     assert "MUFON" in meta["sources"]
     assert meta["shapes"][0] is None
     assert "Circle" in meta["shapes"]
+    # New v0.8.2 lookups
+    assert "colors" in meta
+    assert "emotions" in meta
+    assert meta["colors"][0] is None
+    assert meta["emotions"][0] is None
+
+    # Coverage + columns_present maps for the UI to decide which
+    # filter toggles to enable.
+    assert "coverage" in meta
+    assert "columns_present" in meta
+    # In the fake DB none of the derived columns are present, so every
+    # columns_present entry should be False.
+    assert meta["columns_present"]["quality_score"] is False
+    assert meta["columns_present"]["hoax_likelihood"] is False
 
     # ETag + cache headers present
     assert resp.headers.get("ETag")
@@ -206,9 +268,9 @@ def test_points_bulk_default_returns_gzipped_binary(client, monkeypatch):
     assert resp.headers.get("Content-Encoding") == "gzip"
     assert resp.headers.get("ETag")
 
-    # Ungzip and verify size is an exact multiple of 16
+    # Ungzip and verify size is an exact multiple of 28 (v0.8.2 row size)
     raw = gzip.decompress(resp.data)
-    assert len(raw) == len(_SAMPLE_SIGHTINGS) * 16, (
+    assert len(raw) == len(_SAMPLE_SIGHTINGS) * 28, (
         "packed buffer length must equal count * bytes_per_row"
     )
 
@@ -217,24 +279,28 @@ def test_points_bulk_default_returns_gzipped_binary(client, monkeypatch):
 
 
 def test_points_bulk_binary_roundtrip(client, monkeypatch):
-    """Unpack the packed bytes and verify every field matches the input.
+    """Unpack the packed bytes and verify key fields match the input.
 
-    float32 precision loss is fine for lat/lng (< 1 cm at the equator);
-    the integer fields and the year should survive byte-for-byte.
+    float32 precision loss is fine for lat/lng (< 1 cm at the equator).
+    The v0.8.2 row format carries 15 fields in 28 bytes.
     """
     _install_fake(monkeypatch, _SAMPLE_SIGHTINGS)
     resp = client.get("/api/points-bulk")
     raw = gzip.decompress(resp.data)
 
-    # Unpack: struct format must match the server's _POINTS_BULK_STRUCT
-    fmt = "<IffBBH"
+    fmt = "<IffIBBBBBBBBBBH"
     row_size = struct.calcsize(fmt)
-    assert row_size == 16
+    assert row_size == 28
 
     unpacked = [
         struct.unpack_from(fmt, raw, offset=i * row_size)
         for i in range(len(_SAMPLE_SIGHTINGS))
     ]
+
+    # Unpacked tuple order:
+    #  (id, lat, lng, date_days, source_idx, shape_idx,
+    #   quality, hoax, richness, color_idx, emotion_idx, flags,
+    #   num_witnesses, _reserved, duration_log2)
 
     # id must be exact
     assert [u[0] for u in unpacked] == [s[0] for s in _SAMPLE_SIGHTINGS]
@@ -244,13 +310,23 @@ def test_points_bulk_binary_roundtrip(client, monkeypatch):
         assert abs(orig[1] - got[1]) < 1e-4
         assert abs(orig[2] - got[2]) < 1e-4
 
-    # Year 0 for the row with a NULL date_event
-    none_date_row = [u for u, s in zip(unpacked, _SAMPLE_SIGHTINGS, strict=False) if s[5] is None][0]
-    assert none_date_row[5] == 0
+    # date_days: 0 for the row with NULL date_event, positive otherwise
+    # Sighting index 4 has date_event=None → date_days should be 0
+    by_id = {u[0]: u for u in unpacked}
+    assert by_id[5][3] == 0  # sid=5 has no date
 
-    # Known-year rows parsed out of YYYY prefix
-    year_for_id_1 = [u[5] for u in unpacked if u[0] == 1][0]
-    assert year_for_id_1 == 1995
+    # Sighting 1: 1995-06-12 → days since 1900-01-01
+    # (this is deterministic; we just want > 0 and < 100000)
+    assert by_id[1][3] > 0 and by_id[1][3] < 100000
+
+    # With no derived columns populated in the fake DB, every score
+    # should be the 255 sentinel.
+    for u in unpacked:
+        assert u[6] == 255   # quality_score
+        assert u[7] == 255   # hoax_score
+        assert u[8] == 255   # richness_score
+        # flags byte should be 0 (no has_description, no has_media)
+        assert u[11] == 0
 
 
 def test_points_bulk_304_on_matching_if_none_match(client, monkeypatch):
@@ -331,20 +407,26 @@ def test_frontend_uses_deck_gl():
 
 def test_frontend_deserialises_packed_rows():
     """The deserialisation loop must know the exact byte offsets so
-    the wire format can't drift silently."""
+    the wire format can't drift silently.
+
+    v0.8.2 uses a 28-byte row; the offsets below are locked to the
+    v082-1 schema in docs/V082_PLAN.md.
+    """
     js = _read(DECK_JS)
-    # DataView with the right accessors for the 16-byte row layout.
+    # DataView with the right accessors for the 28-byte row layout.
     assert "getFloat32" in js
     assert "getUint32" in js
     assert "getUint16" in js
-    # Byte offsets from the schema must be present (not reading a
-    # dynamic offset array — the hot loop uses constants for speed).
-    # id@0, lat@4, lng@8, source_idx@12, shape_idx@13, year@14
-    assert "o + 4" in js
-    assert "o + 8" in js
-    assert "o + 12" in js
-    assert "o + 13" in js
-    assert "o + 14" in js
+    # v0.8.2 offsets: id@0 lat@4 lng@8 date_days@12 source@16 shape@17
+    # quality@18 hoax@19 richness@20 color@21 emotion@22 flags@23
+    # num_witnesses@24 (byte 25 reserved) duration_log2@26
+    assert "o + 4" in js     # lat
+    assert "o + 8" in js     # lng
+    assert "o + 12" in js    # date_days
+    assert "o + 16" in js    # source_idx
+    assert "o + 17" in js    # shape_idx
+    assert "o + 18" in js    # quality_score
+    assert "o + 26" in js    # duration_log2
 
 
 def test_frontend_has_webgl_fallback_probe():

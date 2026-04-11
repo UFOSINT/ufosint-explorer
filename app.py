@@ -1138,18 +1138,141 @@ def api_hexbin():
 # Bump this whenever the binary layout or meta shape changes. Forces
 # every browser + every in-process lru_cache entry to invalidate even
 # if the row count and max id happen to match.
-_POINTS_BULK_SCHEMA_VERSION = "v080-1"
-_POINTS_BULK_BYTES_PER_ROW = 16
-_POINTS_BULK_STRUCT = "<IffBBH"  # little-endian: uint32 + f32 + f32 + u8 + u8 + u16
+#
+# v0.8.2 — schema version bumped to "v082-1" for the 28-byte row layout
+# that carries the science-team derived fields. See docs/V082_PLAN.md
+# for the full layout + rationale.
+_POINTS_BULK_SCHEMA_VERSION = "v082-1"
+_POINTS_BULK_BYTES_PER_ROW = 28
+# Little-endian row format, 28 bytes:
+#   I  uint32  id                (offset 0)
+#   f  float32 lat               (offset 4)
+#   f  float32 lng               (offset 8)
+#   I  uint32  date_days         (offset 12, days since 1900-01-01)
+#   B  uint8   source_idx        (offset 16)
+#   B  uint8   std_shape_idx     (offset 17)
+#   B  uint8   quality_score     (offset 18, 255 = unknown)
+#   B  uint8   hoax_score        (offset 19, 255 = unknown)
+#   B  uint8   richness_score    (offset 20, 255 = unknown)
+#   B  uint8   color_idx         (offset 21)
+#   B  uint8   emotion_idx       (offset 22)
+#   B  uint8   flags             (offset 23, bit0=has_desc, bit1=has_media)
+#   B  uint8   num_witnesses     (offset 24, clamped 0-255)
+#   B  uint8   _reserved         (offset 25, future growth)
+#   H  uint16  duration_log2     (offset 26, log2(sec+1) rounded, 0=unknown)
+_POINTS_BULK_STRUCT = "<IffIBBBBBBBBBBH"
+
+# Sentinel value for missing / unknown score bytes. Scores are
+# semantically in [0, 100], so 255 is safely out-of-band.
+_POINTS_BULK_SCORE_UNKNOWN = 255
+
+# The derived columns ufo-dedup/analyze.py populates on the sighting
+# table. The v0.8.2 endpoint probes which of these actually exist in
+# the live schema (via information_schema.columns) at startup and
+# caches the result so the hot SELECT clause stays in sync with
+# reality. Any missing column is substituted with `NULL AS col_name`
+# so the row tuple shape stays fixed regardless of schema state.
+_POINTS_BULK_DERIVED_COLS = (
+    "lat",
+    "lng",
+    "sighting_datetime",
+    "standardized_shape",
+    "primary_color",
+    "dominant_emotion",
+    "quality_score",
+    "richness_score",
+    "hoax_likelihood",
+    "has_description",
+    "has_media",
+    "topic_id",
+)
+
+
+def _epoch_days_1900(iso_str) -> int:
+    """Days since 1900-01-01 for an ISO-like date string, 0 if unknown.
+
+    Accepts full timestamps ("2005-06-14T15:30:00Z"), dates
+    ("2005-06-14"), year-only ("2005"), or anything else falsy.
+    Anything that doesn't parse to a reasonable (>1 AD, <2200 AD)
+    date returns 0, which the client treats as "unknown date".
+    """
+    if not iso_str:
+        return 0
+    s = str(iso_str).strip()
+    if not s:
+        return 0
+    try:
+        # Fast path: "YYYY-MM-DD" or "YYYY-MM-DDTHH:MM:..."
+        if len(s) >= 10 and s[4] == "-" and s[7] == "-":
+            y = int(s[0:4])
+            m = int(s[5:7])
+            d = int(s[8:10])
+        elif len(s) == 7 and s[4] == "-":
+            # "YYYY-MM"
+            y = int(s[0:4])
+            m = int(s[5:7])
+            d = 1
+        elif len(s) >= 4 and s[:4].isdigit():
+            # Year only: "1974" or free-text starting with a year
+            y = int(s[:4])
+            m = 1
+            d = 1
+        else:
+            return 0
+        if y < 1 or y > 2199:
+            return 0
+        if m < 1 or m > 12:
+            m = 1
+        if d < 1 or d > 31:
+            d = 1
+        import datetime as _dt
+        try:
+            days = (_dt.date(y, m, d) - _dt.date(1900, 1, 1)).days
+        except ValueError:
+            # Invalid date (e.g. Feb 30) → fall back to Jan 1 of the year
+            days = (_dt.date(y, 1, 1) - _dt.date(1900, 1, 1)).days
+        # Clip negative values (pre-1900) to 0 — those sightings are
+        # rare and the client treats 0 as unknown anyway. The uint32
+        # slot lets the positive range go to 2^32 days ≈ 11M years,
+        # so we only need to worry about the lower bound.
+        return max(0, days)
+    except (ValueError, TypeError):
+        return 0
+
+
+def _points_bulk_column_set(conn) -> frozenset:
+    """Return the set of sighting columns that exist in the target
+    schema, intersected with _POINTS_BULK_DERIVED_COLS.
+
+    Runs one information_schema query (~1 ms). Called from
+    _points_bulk_build() on every build — but builds are @lru_cache'd
+    on the etag, so the cost is negligible.
+    """
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'sighting'
+          AND column_name = ANY(%s)
+        """,
+        (list(_POINTS_BULK_DERIVED_COLS),),
+    )
+    return frozenset(row[0] for row in cur.fetchall())
 
 
 def _points_bulk_etag() -> str:
     """Cheap ETag for the bulk points endpoint.
 
     Derived from the schema version + geocoded row count + max sighting
-    id. Both SQL aggregates are O(1) under the existing indexes
-    (idx_location_coords and the primary key), so this runs in a few
-    milliseconds and is safe to call on every request.
+    id + the set of derived columns present in the schema. Both SQL
+    aggregates are O(1) under the existing indexes (idx_location_coords
+    and the primary key), so this runs in a few milliseconds and is
+    safe to call on every request.
+
+    Including the column set in the ETag means when the v0.8.2
+    migration finally lands (adding new columns), the ETag changes
+    and every browser-side cache invalidates automatically.
     """
     conn = get_db()
     try:
@@ -1166,9 +1289,36 @@ def _points_bulk_etag() -> str:
             """
         )
         cnt, max_id = cur.fetchone()
+        cols = _points_bulk_column_set(conn)
     finally:
         conn.close()
-    return f"{_POINTS_BULK_SCHEMA_VERSION}-{int(cnt)}-{int(max_id)}"
+    cols_tag = "-".join(sorted(cols)) if cols else "base"
+    return f"{_POINTS_BULK_SCHEMA_VERSION}-{int(cnt)}-{int(max_id)}-{cols_tag}"
+
+
+def _duration_log2(sec) -> int:
+    """Encode a duration-in-seconds as log2(sec+1) rounded to a uint16.
+
+    Returns 0 if `sec` is None / 0 / negative, else `round(log2(sec+1))`
+    clamped to the uint16 range. The client decodes via
+    `Math.pow(2, duration_log2) - 1`. Gives ~1% resolution across
+    seconds → days without burning 4 bytes per row.
+    """
+    if not sec:
+        return 0
+    try:
+        v = int(sec)
+    except (ValueError, TypeError):
+        return 0
+    if v <= 0:
+        return 0
+    # math.log2 with +1 so we don't pass 0 to log
+    lg = round(math.log2(v + 1))
+    if lg < 0:
+        return 0
+    if lg > 65535:
+        return 65535
+    return int(lg)
 
 
 @functools.lru_cache(maxsize=2)
@@ -1177,8 +1327,18 @@ def _points_bulk_build(etag: str) -> tuple[bytes, bytes, dict]:
 
     Returns (gzipped_buffer, meta_json_bytes, meta_dict). Cached in
     process memory for the lifetime of the etag — since etags change
-    only when new data lands, the cache holds at most two entries
-    (current + one stale during a deploy).
+    only when new data lands or the schema changes, the cache holds
+    at most two entries (current + one stale during a deploy).
+
+    v0.8.2 changes vs v0.8.0:
+      - Row size 16 → 28 bytes
+      - Adds date_days, quality/hoax/richness scores, color/emotion
+        indices, flags, num_witnesses, duration_log2
+      - SELECT clause is built dynamically against the probed column
+        set, so pre-v0.8.2 schemas (missing derived columns) still
+        produce valid binary with sentinel NULL values
+      - Meta sidecar includes `coverage` and `columns_present` so the
+        client knows which filter UI to enable
     """
     import gzip
     import struct
@@ -1187,6 +1347,9 @@ def _points_bulk_build(etag: str) -> tuple[bytes, bytes, dict]:
     try:
         cur = conn.cursor()
 
+        # Column probe: which v0.8.2 derived columns actually exist?
+        present_cols = _points_bulk_column_set(conn)
+
         # Stable source index, alphabetical by name. Index 0 is reserved
         # for "unknown" so every shipped source gets 1..N.
         cur.execute("SELECT id, name FROM source_database ORDER BY name")
@@ -1194,34 +1357,101 @@ def _points_bulk_build(etag: str) -> tuple[bytes, bytes, dict]:
         source_names = [None] + [r[1] for r in source_rows]
         source_id_to_idx = {r[0]: i + 1 for i, r in enumerate(source_rows)}
 
-        # Stable shape index, case-insensitive alphabetical. uint8 caps us
-        # at 255 values total; slot 0 is "no shape" so we allow up to
-        # 254 distinct non-null shapes. The current dataset has well
-        # under 200; anything beyond the cap buckets into 0.
-        #
-        # Postgres requires ORDER BY expressions in a SELECT DISTINCT
-        # to appear in the select list, so we include LOWER(shape) as
-        # a sort key column and drop it in the Python comprehension.
-        cur.execute(
-            """
-            SELECT DISTINCT shape, LOWER(shape) AS lshape
-            FROM sighting
-            WHERE shape IS NOT NULL AND shape <> ''
-            ORDER BY lshape
-            """
-        )
-        distinct_shapes = [r[0] for r in cur.fetchall()][:254]
+        # v0.8.2 — prefer the canonical standardized_shape when the
+        # column exists and is populated. Otherwise fall back to the
+        # raw `shape` column (same as v0.8.0/0.8.1 behavior). Either
+        # way the returned list goes into a single `shapes` lookup
+        # so the frontend doesn't need to care which source it came
+        # from — it just uses shapes[shape_idx].
+        use_std_shape = "standardized_shape" in present_cols
+        if use_std_shape:
+            cur.execute(
+                """
+                SELECT DISTINCT standardized_shape, LOWER(standardized_shape) AS lshape
+                FROM sighting
+                WHERE standardized_shape IS NOT NULL AND standardized_shape <> ''
+                ORDER BY lshape
+                """
+            )
+            distinct_shapes = [r[0] for r in cur.fetchall()][:254]
+        else:
+            cur.execute(
+                """
+                SELECT DISTINCT shape, LOWER(shape) AS lshape
+                FROM sighting
+                WHERE shape IS NOT NULL AND shape <> ''
+                ORDER BY lshape
+                """
+            )
+            distinct_shapes = [r[0] for r in cur.fetchall()][:254]
         shape_names = [None] + distinct_shapes
         shape_to_idx = {s: i + 1 for i, s in enumerate(distinct_shapes)}
 
-        # Stream every geocoded sighting. `server_side_cursor` would be
-        # nice here but psycopg_pool's default pool cursor is in-memory;
-        # at 105k rows × ~70 bytes per tuple the peak RSS bump is ~8 MB,
-        # which is fine on B1.
+        # v0.8.2 — new lookup tables for primary_color and
+        # dominant_emotion. Only populated if the columns exist.
+        color_names = [None]
+        color_to_idx: dict = {}
+        if "primary_color" in present_cols:
+            cur.execute(
+                """
+                SELECT DISTINCT primary_color, LOWER(primary_color) AS lc
+                FROM sighting
+                WHERE primary_color IS NOT NULL AND primary_color <> ''
+                ORDER BY lc
+                """
+            )
+            distinct_colors = [r[0] for r in cur.fetchall()][:254]
+            color_names = [None] + distinct_colors
+            color_to_idx = {c: i + 1 for i, c in enumerate(distinct_colors)}
+
+        emotion_names = [None]
+        emotion_to_idx: dict = {}
+        if "dominant_emotion" in present_cols:
+            cur.execute(
+                """
+                SELECT DISTINCT dominant_emotion, LOWER(dominant_emotion) AS le
+                FROM sighting
+                WHERE dominant_emotion IS NOT NULL AND dominant_emotion <> ''
+                ORDER BY le
+                """
+            )
+            distinct_emotions = [r[0] for r in cur.fetchall()][:254]
+            emotion_names = [None] + distinct_emotions
+            emotion_to_idx = {e: i + 1 for i, e in enumerate(distinct_emotions)}
+
+        # Build the SELECT list. Columns that don't exist in the
+        # schema yet get `NULL AS col_name` so the tuple position stays
+        # stable regardless of migration state.
+        def _col_expr(col: str, table_prefix: str = "s") -> str:
+            return f"{table_prefix}.{col}" if col in present_cols else f"NULL AS {col}"
+
+        # Note: we always pull s.shape as a fallback for standardized_shape
+        # (used when use_std_shape is False) plus s.date_event as a fallback
+        # for sighting_datetime. The fallbacks are free — existing indexes.
+        select_parts = [
+            "s.id",
+            "l.latitude",
+            "l.longitude",
+            "s.source_db_id",
+            "s.shape AS raw_shape",
+            "s.date_event",
+            "s.duration_seconds",
+            "s.num_witnesses AS raw_num_witnesses",
+            _col_expr("sighting_datetime"),
+            _col_expr("standardized_shape"),
+            _col_expr("primary_color"),
+            _col_expr("dominant_emotion"),
+            _col_expr("quality_score"),
+            _col_expr("richness_score"),
+            _col_expr("hoax_likelihood"),
+            _col_expr("has_description"),
+            _col_expr("has_media"),
+        ]
+        select_sql = ",\n                   ".join(select_parts)
+
         cur.execute(
-            """
-            SELECT s.id, l.latitude, l.longitude,
-                   s.source_db_id, s.shape, s.date_event
+            f"""
+            SELECT {select_sql}
             FROM sighting s
             JOIN location l ON l.id = s.location_id
             WHERE l.latitude IS NOT NULL
@@ -1235,27 +1465,123 @@ def _points_bulk_build(etag: str) -> tuple[bytes, bytes, dict]:
         pack = struct.Struct(_POINTS_BULK_STRUCT).pack
         buf = bytearray()
         count = 0
-        for sid, lat, lng, src_id, shape, date_event in cur:
-            # Parse year out of the ISO-ish date string. Format is
-            # usually "YYYY-MM-DD" but historic rows may have only
-            # "YYYY" or arbitrary free-text. Anything that doesn't
-            # parse → 0.
-            year = 0
-            if date_event:
+        UNK = _POINTS_BULK_SCORE_UNKNOWN
+
+        # Coverage counters — incremented as we walk so the meta
+        # sidecar can tell the client which fields are populated.
+        cov = {
+            "date_days": 0,
+            "std_shape_idx": 0,
+            "quality_score": 0,
+            "hoax_score": 0,
+            "richness_score": 0,
+            "color_idx": 0,
+            "emotion_idx": 0,
+            "has_description": 0,
+            "has_media": 0,
+            "num_witnesses": 0,
+            "duration_log2": 0,
+        }
+
+        for row in cur:
+            (
+                sid, lat, lng, src_id, raw_shape, date_event,
+                duration_sec, raw_num_witnesses,
+                sighting_dt, std_shape, prim_color, dom_emotion,
+                quality, richness, hoax, has_desc, has_media,
+            ) = row
+
+            # Prefer the explicit sighting_datetime when present, fall
+            # back to date_event otherwise. _epoch_days_1900 handles
+            # every sane ISO-like format.
+            date_days = _epoch_days_1900(sighting_dt or date_event)
+            if date_days:
+                cov["date_days"] += 1
+
+            # Shape: prefer the standardized column when we're using
+            # the canonical list. Otherwise the raw shape.
+            if use_std_shape:
+                shape_val = std_shape or ""
+            else:
+                shape_val = raw_shape or ""
+            shape_idx = shape_to_idx.get(shape_val, 0)
+            if use_std_shape and std_shape and shape_idx:
+                cov["std_shape_idx"] += 1
+
+            # Score packing: uint8 in [0, 100], 255 = unknown.
+            if quality is None:
+                q_val = UNK
+            else:
+                q_val = max(0, min(100, int(quality)))
+                cov["quality_score"] += 1
+
+            if richness is None:
+                r_val = UNK
+            else:
+                r_val = max(0, min(100, int(richness)))
+                cov["richness_score"] += 1
+
+            # hoax_likelihood is REAL [0.0, 1.0] → scale to [0, 100]
+            if hoax is None:
+                h_val = UNK
+            else:
+                h_val = max(0, min(100, int(round(float(hoax) * 100))))
+                cov["hoax_score"] += 1
+
+            c_idx = 0
+            if prim_color:
+                c_idx = color_to_idx.get(prim_color, 0)
+                if c_idx:
+                    cov["color_idx"] += 1
+
+            e_idx = 0
+            if dom_emotion:
+                e_idx = emotion_to_idx.get(dom_emotion, 0)
+                if e_idx:
+                    cov["emotion_idx"] += 1
+
+            # Flags byte: bit 0 = has_description, bit 1 = has_media
+            flags = 0
+            if has_desc:
+                flags |= 0x01
+                cov["has_description"] += 1
+            if has_media:
+                flags |= 0x02
+                cov["has_media"] += 1
+
+            # num_witnesses: clamp to uint8 range; unknown → 0
+            if raw_num_witnesses is None:
+                nw = 0
+            else:
                 try:
-                    y = int(date_event[:4])
-                    if 0 <= y <= 65535:
-                        year = y
+                    nw = max(0, min(255, int(raw_num_witnesses)))
+                    if nw > 0:
+                        cov["num_witnesses"] += 1
                 except (ValueError, TypeError):
-                    year = 0
+                    nw = 0
+
+            # duration: log2-encoded uint16
+            dur_log2 = _duration_log2(duration_sec)
+            if dur_log2:
+                cov["duration_log2"] += 1
+
             buf.extend(
                 pack(
                     int(sid),
                     float(lat),
                     float(lng),
+                    date_days,
                     source_id_to_idx.get(src_id, 0),
-                    shape_to_idx.get(shape, 0),
-                    year,
+                    shape_idx,
+                    q_val,
+                    h_val,
+                    r_val,
+                    c_idx,
+                    e_idx,
+                    flags,
+                    nw,
+                    0,  # _reserved
+                    dur_log2,
                 )
             )
             count += 1
@@ -1271,18 +1597,36 @@ def _points_bulk_build(etag: str) -> tuple[bytes, bytes, dict]:
         "schema_version": _POINTS_BULK_SCHEMA_VERSION,
         "sources": source_names,
         "shapes": shape_names,
+        "colors": color_names,
+        "emotions": emotion_names,
+        "shape_source": "standardized" if use_std_shape else "raw",
         "raw_size": len(raw),
         "gzip_size": len(gzipped),
+        "coverage": cov,
+        "columns_present": {
+            c: (c in present_cols) for c in _POINTS_BULK_DERIVED_COLS
+        },
         "schema": {
             "bytes_per_row": _POINTS_BULK_BYTES_PER_ROW,
             "endian": "little",
+            "score_unknown": _POINTS_BULK_SCORE_UNKNOWN,
+            "date_epoch": "1900-01-01",
             "fields": [
-                {"name": "id",         "offset": 0,  "type": "uint32",  "len": 4},
-                {"name": "lat",        "offset": 4,  "type": "float32", "len": 4},
-                {"name": "lng",        "offset": 8,  "type": "float32", "len": 4},
-                {"name": "source_idx", "offset": 12, "type": "uint8",   "len": 1},
-                {"name": "shape_idx",  "offset": 13, "type": "uint8",   "len": 1},
-                {"name": "year",       "offset": 14, "type": "uint16",  "len": 2},
+                {"name": "id",              "offset": 0,  "type": "uint32",  "len": 4},
+                {"name": "lat",             "offset": 4,  "type": "float32", "len": 4},
+                {"name": "lng",             "offset": 8,  "type": "float32", "len": 4},
+                {"name": "date_days",       "offset": 12, "type": "uint32",  "len": 4},
+                {"name": "source_idx",      "offset": 16, "type": "uint8",   "len": 1},
+                {"name": "shape_idx",       "offset": 17, "type": "uint8",   "len": 1},
+                {"name": "quality_score",   "offset": 18, "type": "uint8",   "len": 1},
+                {"name": "hoax_score",      "offset": 19, "type": "uint8",   "len": 1},
+                {"name": "richness_score",  "offset": 20, "type": "uint8",   "len": 1},
+                {"name": "color_idx",       "offset": 21, "type": "uint8",   "len": 1},
+                {"name": "emotion_idx",     "offset": 22, "type": "uint8",   "len": 1},
+                {"name": "flags",           "offset": 23, "type": "uint8",   "len": 1},
+                {"name": "num_witnesses",   "offset": 24, "type": "uint8",   "len": 1},
+                {"name": "_reserved",       "offset": 25, "type": "uint8",   "len": 1},
+                {"name": "duration_log2",   "offset": 26, "type": "uint16",  "len": 2},
             ],
         },
     }

@@ -50,6 +50,18 @@ TABLES = [
         "weather", "terrain",
         "source_ref", "page_volume",
         "notes", "raw_json",
+        # v0.8.2 — derived public fields from ufo-dedup/analyze.py. The
+        # stream_table helper below gracefully fills NULL for any of
+        # these that aren't present in the SQLite source (old DBs),
+        # and the Postgres-side add_v082_derived_columns.sql migration
+        # ensures the target columns exist. So this list is forward-
+        # and backward-compatible across the v0.8.2 cutover.
+        "lat", "lng",
+        "sighting_datetime",
+        "standardized_shape", "primary_color", "dominant_emotion",
+        "quality_score", "richness_score", "hoax_likelihood",
+        "has_description", "has_media",
+        "topic_id",
     ]),
     ("attachment", ["id", "sighting_id", "url", "file_type", "description"]),
     ("sighting_reference", ["sighting_id", "reference_id"]),
@@ -80,6 +92,27 @@ def sqlite_columns(sq_conn, table):
     return [row[1] for row in cur.fetchall()]
 
 
+def pg_columns(pg_conn, table):
+    """Return the actual column names of `table` in the PostgreSQL DB.
+
+    Used to intersect the TABLES column list with what actually exists
+    in the target schema, so e.g. a pre-v0.8.2 schema (without the
+    derived columns like quality_score) can still ingest from a fresh
+    v0.8.2 SQLite dump: the missing columns are simply dropped from
+    the COPY list on that run.
+    """
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = %s
+            """,
+            (table,),
+        )
+        return [row[0] for row in cur.fetchall()]
+
+
 def stream_table(sq_conn, table, columns):
     """Yield rows from SQLite, with missing columns filled with None and
     in the order specified by `columns`."""
@@ -96,7 +129,14 @@ def stream_table(sq_conn, table, columns):
 
 
 def copy_table(sq_conn, pg_conn, table, columns):
-    """COPY a single table from SQLite into PostgreSQL."""
+    """COPY a single table from SQLite into PostgreSQL.
+
+    Intersects `columns` with the actual target-table columns: any
+    entries in the list that don't exist on the PG side are skipped
+    (with a warning) so we don't fail on a pre-v0.8.2 schema that
+    doesn't yet have the derived fields. Any columns that exist in
+    PG but aren't in `columns` are left at their default / NULL.
+    """
     # Quick row count for the progress meter
     cur = sq_conn.cursor()
     try:
@@ -108,16 +148,27 @@ def copy_table(sq_conn, pg_conn, table, columns):
         print(f"  {table}: 0 rows (skipping)")
         return 0
 
+    # Intersect requested columns with actual PG columns.
+    actual_pg = set(pg_columns(pg_conn, table))
+    filtered = [c for c in columns if c in actual_pg]
+    skipped  = [c for c in columns if c not in actual_pg]
+    if skipped:
+        print(
+            f"  {table}: skipping columns not in target schema "
+            f"({', '.join(skipped)}) — run add_v082_derived_columns.sql "
+            f"first if you want them populated"
+        )
+
     print(f"  {table}: {total:,} rows...", end=" ", flush=True)
     t0 = time.perf_counter()
 
-    cols_sql = ", ".join(columns)
+    cols_sql = ", ".join(filtered)
     copy_sql = f"COPY {table} ({cols_sql}) FROM STDIN"
 
     rows_done = 0
     with pg_conn.cursor() as pg_cur:
         with pg_cur.copy(copy_sql) as cp:
-            for chunk in stream_table(sq_conn, table, columns):
+            for chunk in stream_table(sq_conn, table, filtered):
                 for row in chunk:
                     cp.write_row(row)
                 rows_done += len(chunk)

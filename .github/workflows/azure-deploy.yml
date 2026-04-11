@@ -128,6 +128,7 @@ jobs:
           sparse-checkout: |
             scripts/add_v07_indexes.sql
             scripts/add_v075_materialized_views.sql
+            scripts/add_v082_derived_columns.sql
           sparse-checkout-cone-mode: false
           path: migrations
 
@@ -163,6 +164,36 @@ jobs:
           echo "Running migrations/scripts/add_v07_indexes.sql …"
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/scripts/add_v07_indexes.sql
           echo "Index migration complete."
+
+      # v0.8.2: Add the derived-public-fields columns to sighting (lat,
+      # lng, sighting_datetime, standardized_shape, primary_color,
+      # dominant_emotion, quality_score, richness_score, hoax_likelihood,
+      # has_description, has_media, topic_id) plus their indexes. The
+      # migration is idempotent (ADD COLUMN IF NOT EXISTS / CREATE INDEX
+      # CONCURRENTLY IF NOT EXISTS) and metadata-only in PG ≥ 11, so
+      # it runs in milliseconds even on the 614k-row sighting table.
+      #
+      # New columns start NULL and stay NULL until the ufo-dedup
+      # analyze.py pipeline runs on the private SQLite DB and the user
+      # re-streams via scripts/migrate_sqlite_to_pg.py. The
+      # /api/points-bulk endpoint's column probe makes the app
+      # gracefully degrade while the values are still NULL.
+      #
+      # Note: CONCURRENTLY cannot run inside a transaction, so we pass
+      # --single-transaction=off to psql (the default) and rely on
+      # ON_ERROR_STOP=1 to bail out on the first failure.
+      - name: Apply v0.8.2 derived-field migration
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DATABASE_URL:-}" ]; then
+            echo "::warning::DATABASE_URL secret not set — skipping v0.8.2 migration"
+            exit 0
+          fi
+          echo "Running migrations/scripts/add_v082_derived_columns.sql …"
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/scripts/add_v082_derived_columns.sql
+          echo "v0.8.2 derived-field migration complete."
 
       # v0.7.5: create (if needed) and refresh the materialized views that
       # back /api/stats, /api/timeline, and /api/sentiment/overview. This

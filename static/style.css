@@ -3053,6 +3053,42 @@ select:focus {
     letter-spacing: 0.02em;
 }
 
+/* v0.8.2 — Data Quality rail. Each toggle has a primary label and a
+   small sub-label with the threshold / description. Disabled toggles
+   (for derived fields that aren't populated yet) render muted so the
+   user can see the feature exists without being confused why their
+   click does nothing. */
+.rail-toggle-list li {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--s-2);
+    padding: 4px 0;
+}
+.rail-toggle-list li label {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.25;
+    cursor: pointer;
+}
+.rail-toggle-list .rail-toggle-sub {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--text-muted);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    margin-top: 1px;
+}
+.rail-toggle-list li.rail-toggle-disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+.rail-toggle-list li.rail-toggle-disabled label {
+    cursor: not-allowed;
+}
+.rail-toggle-list li.rail-toggle-disabled input[type="checkbox"] {
+    cursor: not-allowed;
+}
+
 /* --- Center canvas --- */
 .observatory-canvas-wrap {
     position: relative;

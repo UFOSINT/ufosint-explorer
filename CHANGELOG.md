@@ -17,6 +17,119 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 Nothing yet.
 
+## [0.8.2] — 2026-04-10 — Derived public fields + quality rail
+
+The science team's `ufo-dedup` pipeline delivered a batch of derived
+analysis fields (`quality_score`, `hoax_likelihood`,
+`standardized_shape`, `richness_score`, `primary_color`,
+`dominant_emotion`, `has_description`, `has_media`,
+`sighting_datetime`, `topic_id`). v0.8.2 plumbs them through the
+Postgres schema, the `/api/points-bulk` binary payload, the deck.js
+filter pipeline, and the Observatory left rail — without breaking
+the app when the columns haven't been populated yet, and without
+exposing any raw report text.
+
+See [`docs/V082_PLAN.md`](docs/V082_PLAN.md) for the full data-flow
+diagram, binary layout, coverage strategy, and legal / data-policy
+note on raw-text retirement.
+
+### Added
+
+- **`scripts/add_v082_derived_columns.sql`** — idempotent
+  `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` for every new sighting
+  column plus `CREATE INDEX CONCURRENTLY IF NOT EXISTS` on the
+  indexable ones (quality_score, hoax_likelihood,
+  standardized_shape, dominant_emotion, primary_color,
+  sighting_datetime, has_description, has_media, topic_id). Runs
+  as part of the deploy workflow between the v0.7 index step and
+  the v0.7.5 MV refresh. All new columns start NULL and stay NULL
+  until the user runs the ufo-dedup pipeline on their private DB
+  and re-streams via `migrate_sqlite_to_pg.py`.
+- **`/api/points-bulk` v082-1 binary schema.** Row size bumps from
+  16 bytes to **28 bytes**. New fields: `date_days` (uint32, days
+  since 1900-01-01), `quality_score` / `hoax_score` / `richness_score`
+  (uint8 0–100, 255 = unknown sentinel), `color_idx`, `emotion_idx`,
+  `flags` (bit 0 = has_description, bit 1 = has_media),
+  `num_witnesses`, `duration_log2` (log-scale seconds). Estimated
+  gzipped payload ~4 MB (up from 2.85 MB in v0.8.0) — still under
+  the 5 MB budget and amortised over an entire session.
+- **Meta sidecar `coverage` + `columns_present` maps.** Per-field
+  populated-row counts and per-column schema-existence flags so
+  the client can disable filter UI controls for unpopulated or
+  missing fields with a tooltip explaining why.
+- **Column probe at endpoint startup.** `_points_bulk_column_set()`
+  runs one `information_schema.columns` query and the results drive
+  the `SELECT` clause via `_col_expr()` — missing columns become
+  `NULL AS col_name`, so the app ships v0.8.2 and works regardless
+  of whether the migration has been applied yet.
+- **`_epoch_days_1900()`** — fast ISO-date-string → days-since-1900
+  converter. Handles `"YYYY-MM-DD"`, `"YYYY-MM"`, `"YYYY"`, and
+  free-text year-prefixed strings. 0 = unknown.
+- **`_duration_log2()`** — `log2(sec + 1)` rounded to uint16 so
+  durations from 1 s to days fit in 2 bytes with ~1% resolution.
+- **`deck.js` deserialiser + filter pipeline extensions.** Nine new
+  typed-array fields (`dateDays`, `qualityScore`, `hoaxScore`,
+  `richnessScore`, `colorIdx`, `emotionIdx`, `flags`,
+  `numWitnesses`, `durationLog2`), plus seven new filter
+  predicates in `_rebuildVisible` (`qualityMin`, `hoaxMax`,
+  `richnessMin`, `colorName`, `emotionName`, `hasDescription`,
+  `hasMedia`). Score filters treat the 255 sentinel as failing
+  any threshold test — the right semantic for "unknown scores
+  shouldn't pass quality gates".
+- **Day-precision time window.** `UFODeck.setTimeWindow()` now
+  accepts a `{ dayPrecision: true }` option and uses day-granular
+  bounds during playback. When `POINTS.coverage.date_days > 0` the
+  TimeBrush automatically switches to day precision so the PLAY
+  button animates month-by-month instead of jumping by whole years.
+- **Data Quality rail** in the Observatory left sidebar with four
+  toggles: "High quality only" (score ≥ 60), "Hide likely hoaxes"
+  (score > 0.5), "Has description", "Has media". Unpopulated
+  toggles render muted/disabled with a tooltip explaining that
+  the derived column exists in the schema but no rows are
+  populated yet. Styled to match the existing rail aesthetic.
+- **Auto-switching shape dropdown.** When
+  `coverage.std_shape_idx > 0` the `/api/points-bulk` meta sidecar
+  reports `shape_source: "standardized"` and the shapes lookup
+  contains the ~25 canonical values from the science team's
+  fuzzy-match pipeline. Otherwise it falls back to the ~200 raw
+  shape values. The frontend filter dropdown picks up either
+  automatically via `UFODeck.getShapes()`.
+- **`scripts/drop_raw_text_columns.sql`** (unapplied) — a manual
+  migration the user can run with `psql` when they're ready to
+  retire the raw `description` / `summary` / `notes` / `raw_json`
+  columns from the public Postgres. Gated by two safety probes:
+  the v0.8.2 derived columns must exist, AND ≥ 90 % of geocoded
+  rows must have `quality_score` populated. Otherwise the
+  transaction rolls back. **Not wired into the deploy workflow.**
+
+### Changed
+
+- **`_points_bulk_etag()`** now includes the set of present derived
+  columns in the etag, so when the v0.8.2 migration finally lands
+  on the live schema the client-side cache invalidates
+  automatically. No stale 16-byte buffers after a schema upgrade.
+- **`migrate_sqlite_to_pg.py`** knows about the new sighting
+  columns and intersects the TABLES column list with the actual
+  Postgres schema via a new `pg_columns()` helper. Running the
+  migrator against a pre-v0.8.2 Postgres prints a warning and
+  skips the missing columns instead of erroring on COPY.
+- **`applyClientFilters()`** (app.js) now reads `state.qualityFilter`
+  and passes `qualityMin` / `hoaxMax` / `hasDescription` /
+  `hasMedia` into the deck.js filter descriptor.
+
+### Deferred
+
+- **Raw text column drop** on the public Postgres. `/api/search`
+  and `/api/sighting/:id` still rely on description/summary; those
+  rewires are v0.8.3+ scope. The SQL script is in-tree and ready
+  to run when you sign off.
+- **`sighting_analysis` JSON side-fields** (behavior_tags,
+  emotion_scores, color_list, hoax_flags). Detail-modal scope,
+  not bulk-map scope.
+- **`topic_id` filter.** Column shipped in the binary as a reserved
+  slot but the UI doesn't expose it — waiting on the v0.9 topic
+  modelling work.
+
 ## [0.8.1] — 2026-04-10 — Client-side temporal animation
 
 v0.8.0 made pan / zoom / filter free by loading every geocoded

@@ -185,6 +185,13 @@
         <div id="panel-observatory" class="panel active">
             <div class="observatory-stage">
                 <aside class="observatory-rail" aria-label="Observatory filters">
+                    <!-- v0.8.2 — Data Quality rail. mountQualityRail()
+                         renders four toggles and greys out any whose
+                         derived column isn't populated yet. -->
+                    <section class="rail-section rail-quality">
+                        <div class="rail-label">Data Quality</div>
+                        <ul id="rail-quality-list" class="rail-list rail-toggle-list"></ul>
+                    </section>
                     <section class="rail-section">
                         <div class="rail-label">Sources</div>
                         <ul id="rail-source-list" class="rail-list"></ul>

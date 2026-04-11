@@ -1377,16 +1377,28 @@ function toggleMapMode(mode) {
 // to rebuild the visible index, and refreshes the active deck.gl layer.
 // Returns true if the GPU path handled the filter, false if the caller
 // should fall through to the legacy per-endpoint reloads.
+//
+// v0.8.2 extends the filter object with the quality rail state:
+// qualityMin / hoaxMax / hasDescription / hasMedia / colorName /
+// emotionName. These ride on top of the v0.8.0 source/shape/year/
+// bbox filters and compose inside UFODeck._rebuildVisible.
 function applyClientFilters() {
     if (!(state.useDeckGL && window.UFODeck && window.UFODeck.isReady())) {
         return false;
     }
+    const q = state.qualityFilter || {};
     const filter = {
         sourceName: document.getElementById("filter-source")?.value || null,
         shapeName:  document.getElementById("filter-shape")?.value  || null,
+        colorName:  document.getElementById("filter-color")?.value  || null,
+        emotionName: document.getElementById("filter-emotion")?.value || null,
         yearFrom:   _parseYearFilter(document.getElementById("filter-date-from")?.value),
         yearTo:     _parseYearFilter(document.getElementById("filter-date-to")?.value),
         bbox: null,  // deck.gl clips by viewport automatically, skip the CPU cull
+        qualityMin:  q.highQuality ? (q.qualityThreshold || 60) : null,
+        hoaxMax:     q.hideHoaxes   ? (q.hoaxThreshold || 50)    : null,
+        hasDescription: q.hasDescription,
+        hasMedia:       q.hasMedia,
     };
     window.UFODeck.applyClientFilters(filter);
     window.UFODeck.refreshActiveLayer();
@@ -1541,6 +1553,113 @@ function mountObservatoryRail() {
             });
         }
     }
+
+    // v0.8.2 — mount the Data Quality rail. Safe to call multiple
+    // times; idempotent by element id.
+    mountQualityRail();
+}
+
+// v0.8.2 — Data Quality rail with "High quality only", "Hide likely
+// hoaxes", "Has description", "Has media" toggles. Each toggle writes
+// into state.qualityFilter and triggers applyFilters() which routes
+// through applyClientFilters() → UFODeck.applyClientFilters().
+//
+// Unpopulated toggles (the derived column exists in the schema but no
+// rows have data yet, or the column doesn't exist at all) render
+// disabled with a tooltip explaining why.
+function mountQualityRail() {
+    const host = document.getElementById("rail-quality-list");
+    if (!host) return;
+    if (host.dataset.mounted === "1") return;
+    host.dataset.mounted = "1";
+
+    state.qualityFilter = state.qualityFilter || {
+        highQuality: false,
+        hideHoaxes: false,
+        hasDescription: null,
+        hasMedia: null,
+    };
+
+    const coverage = (window.UFODeck && window.UFODeck.getCoverage)
+        ? window.UFODeck.getCoverage() : {};
+    const cov = (key) => (coverage[key] || 0);
+
+    // Threshold semantics locked by the brief:
+    //   "High quality only"   → quality_score >= 60
+    //   "Hide likely hoaxes"  → hoax_score <= 50  (the server packs
+    //                           hoax_likelihood × 100 into a uint8, so
+    //                           50/100 == 0.5 hoax_likelihood from the
+    //                           ufo-dedup REAL column)
+    const QUALITY_THRESHOLD = 60;
+    const HOAX_THRESHOLD = 50;
+
+    const toggles = [
+        {
+            key: "highQuality",
+            label: "High quality only",
+            sub: `score ≥ ${QUALITY_THRESHOLD}`,
+            coverageKey: "quality_score",
+        },
+        {
+            key: "hideHoaxes",
+            label: "Hide likely hoaxes",
+            sub: `score > ${HOAX_THRESHOLD / 100}`,
+            coverageKey: "hoax_score",
+        },
+        {
+            key: "hasDescription",
+            label: "Has description",
+            sub: "narrative text",
+            coverageKey: "has_description",
+        },
+        {
+            key: "hasMedia",
+            label: "Has media",
+            sub: "photo / video reference",
+            coverageKey: "has_media",
+        },
+    ];
+
+    host.innerHTML = "";
+    for (const t of toggles) {
+        const populated = cov(t.coverageKey) > 0;
+        const li = document.createElement("li");
+        li.className = populated ? "" : "rail-toggle-disabled";
+        const id = `rail-q-${t.key}`;
+        const disabled = populated ? "" : " disabled";
+        const tooltip = populated
+            ? ""
+            : ` title="No rows have ${t.coverageKey} populated yet. Run the ufo-dedup analysis pipeline and re-migrate to enable this filter."`;
+        li.innerHTML = `
+            <input type="checkbox" id="${id}" data-qkey="${t.key}"${disabled}${tooltip}>
+            <label for="${id}"${tooltip}>
+                ${escapeHtml(t.label)}
+                <span class="rail-toggle-sub">${escapeHtml(t.sub)}</span>
+            </label>
+        `;
+        host.appendChild(li);
+        const input = li.querySelector("input");
+        if (populated) {
+            input.addEventListener("change", (e) => {
+                const key = e.target.dataset.qkey;
+                if (key === "highQuality") {
+                    state.qualityFilter.highQuality = e.target.checked;
+                } else if (key === "hideHoaxes") {
+                    state.qualityFilter.hideHoaxes = e.target.checked;
+                } else if (key === "hasDescription") {
+                    state.qualityFilter.hasDescription = e.target.checked ? true : null;
+                } else if (key === "hasMedia") {
+                    state.qualityFilter.hasMedia = e.target.checked ? true : null;
+                }
+                applyFilters();
+            });
+        }
+    }
+
+    // Expose the thresholds for applyClientFilters() to read when
+    // building the filter descriptor.
+    state.qualityFilter.qualityThreshold = QUALITY_THRESHOLD;
+    state.qualityFilter.hoaxThreshold = HOAX_THRESHOLD;
 }
 
 // =========================================================================
