@@ -46,10 +46,10 @@ def test_points_bulk_schema_version_constant():
 
 def test_points_bulk_bytes_per_row_constant():
     src = _read(APP_PY)
-    # v0.8.2 bumped to 28-byte rows (see test_v082_derived for the
-    # full layout contract). v0.8.0's 16-byte assertion is preserved
-    # in git history.
-    assert "_POINTS_BULK_BYTES_PER_ROW = 28" in src, (
+    # v0.8.5 (v0.8.3b data layer) bumped to 32-byte rows to fit
+    # movement_flags + reserved padding. 28 bytes (v0.8.2) and 16
+    # bytes (v0.8.0) are in git history.
+    assert "_POINTS_BULK_BYTES_PER_ROW = 32" in src, (
         "The row layout is part of the wire contract — the client "
         "hard-codes it into its DataView offsets. Lock it here so a "
         "refactor can't silently bump it without a schema version change."
@@ -58,11 +58,11 @@ def test_points_bulk_bytes_per_row_constant():
 
 def test_points_bulk_struct_format():
     src = _read(APP_PY)
-    # v0.8.2: 28-byte row = uint32 id + f32 lat + f32 lng + uint32
-    # date_days + 10×uint8 fields + uint16 duration_log2.
-    assert '_POINTS_BULK_STRUCT = "<IffIBBBBBBBBBBH"' in src, (
+    # v0.8.5: 32-byte row = v0.8.2 28-byte layout + uint16
+    # movement_flags + uint16 reserved2.
+    assert '_POINTS_BULK_STRUCT = "<IffIBBBBBBBBBBHHH"' in src, (
         "The struct format locks the on-wire order. Little-endian so "
-        "the JS DataView reads it directly. 16 fields, 28 bytes total."
+        "the JS DataView reads it directly. 18 fields, 32 bytes total."
     )
 
 
@@ -178,21 +178,25 @@ def _make_sighting(
     prim_color=None, dom_emotion=None,
     quality=None, richness=None, hoax=None,
     has_desc=0, has_media=0,
+    has_movement=0, movement_cats_json=None,
 ):
-    """Build a 17-tuple matching the v082-1 SELECT list.
+    """Build a 19-tuple matching the v083-1 SELECT list.
 
-    Order must match _points_bulk_build():
+    Order must match _points_bulk_build() (v0.8.5 adds the two v0.8.3b
+    movement fields at the end):
       id, latitude, longitude, source_db_id, raw_shape, date_event,
       duration_seconds, raw_num_witnesses,
       sighting_datetime, standardized_shape, primary_color, dominant_emotion,
       quality_score, richness_score, hoax_likelihood,
-      has_description, has_media
+      has_description, has_media,
+      has_movement_mentioned, movement_categories  ← NEW in v0.8.5
     """
     return (
         sid, lat, lng, src, raw_shape, date_event,
         duration, witnesses,
         sighting_dt, std_shape, prim_color, dom_emotion,
         quality, richness, hoax, has_desc, has_media,
+        has_movement, movement_cats_json,
     )
 
 
@@ -228,10 +232,10 @@ def test_points_bulk_meta_returns_schema_and_lookups(client, monkeypatch):
     assert resp.mimetype == "application/json"
     meta = resp.get_json()
 
-    # v0.8.2 shape
+    # v0.8.5 shape (v0.8.3b data layer)
     assert meta["count"] == len(_SAMPLE_SIGHTINGS)
-    assert meta["schema_version"] == "v082-1"
-    assert meta["schema"]["bytes_per_row"] == 28
+    assert meta["schema_version"] == "v083-1"
+    assert meta["schema"]["bytes_per_row"] == 32
     assert meta["schema"]["endian"] == "little"
     assert meta["schema"]["score_unknown"] == 255
     assert meta["schema"]["date_epoch"] == "1900-01-01"
@@ -244,7 +248,15 @@ def test_points_bulk_meta_returns_schema_and_lookups(client, monkeypatch):
         "quality_score", "hoax_score", "richness_score",
         "color_idx", "emotion_idx", "flags",
         "num_witnesses", "_reserved", "duration_log2",
+        # v0.8.5 additions
+        "movement_flags", "_reserved2",
     ]
+
+    # v0.8.5 flag bits map: bit 0 = has_desc, bit 1 = has_media,
+    # bit 2 = has_movement
+    assert meta["schema"]["flag_bits"]["has_description"] == 0
+    assert meta["schema"]["flag_bits"]["has_media"] == 1
+    assert meta["schema"]["flag_bits"]["has_movement"] == 2
 
     # Lookups: index 0 reserved for unknown/none, real entries start at 1
     assert meta["sources"][0] is None
@@ -257,6 +269,12 @@ def test_points_bulk_meta_returns_schema_and_lookups(client, monkeypatch):
     assert meta["colors"][0] is None
     assert meta["emotions"][0] is None
 
+    # v0.8.5 — movements lookup is a flat list in bit order
+    assert "movements" in meta
+    assert len(meta["movements"]) == 10
+    assert meta["movements"][0] == "hovering"
+    assert meta["movements"][9] == "landed"
+
     # Coverage + columns_present maps for the UI to decide which
     # filter toggles to enable.
     assert "coverage" in meta
@@ -265,6 +283,8 @@ def test_points_bulk_meta_returns_schema_and_lookups(client, monkeypatch):
     # columns_present entry should be False.
     assert meta["columns_present"]["quality_score"] is False
     assert meta["columns_present"]["hoax_likelihood"] is False
+    assert meta["columns_present"]["has_movement_mentioned"] is False
+    assert meta["columns_present"]["movement_categories"] is False
 
     # ETag + cache headers present
     assert resp.headers.get("ETag")
@@ -279,9 +299,9 @@ def test_points_bulk_default_returns_gzipped_binary(client, monkeypatch):
     assert resp.headers.get("Content-Encoding") == "gzip"
     assert resp.headers.get("ETag")
 
-    # Ungzip and verify size is an exact multiple of 28 (v0.8.2 row size)
+    # Ungzip and verify size is an exact multiple of 32 (v0.8.5 row size)
     raw = gzip.decompress(resp.data)
-    assert len(raw) == len(_SAMPLE_SIGHTINGS) * 28, (
+    assert len(raw) == len(_SAMPLE_SIGHTINGS) * 32, (
         "packed buffer length must equal count * bytes_per_row"
     )
 
@@ -293,15 +313,17 @@ def test_points_bulk_binary_roundtrip(client, monkeypatch):
     """Unpack the packed bytes and verify key fields match the input.
 
     float32 precision loss is fine for lat/lng (< 1 cm at the equator).
-    The v0.8.2 row format carries 15 fields in 28 bytes.
+    The v0.8.5 row format carries 17 unpacked fields in 32 bytes
+    (the `HHH` tail is 3 uint16s: duration_log2, movement_flags,
+    _reserved2).
     """
     _install_fake(monkeypatch, _SAMPLE_SIGHTINGS)
     resp = client.get("/api/points-bulk")
     raw = gzip.decompress(resp.data)
 
-    fmt = "<IffIBBBBBBBBBBH"
+    fmt = "<IffIBBBBBBBBBBHHH"
     row_size = struct.calcsize(fmt)
-    assert row_size == 28
+    assert row_size == 32
 
     unpacked = [
         struct.unpack_from(fmt, raw, offset=i * row_size)
@@ -311,7 +333,8 @@ def test_points_bulk_binary_roundtrip(client, monkeypatch):
     # Unpacked tuple order:
     #  (id, lat, lng, date_days, source_idx, shape_idx,
     #   quality, hoax, richness, color_idx, emotion_idx, flags,
-    #   num_witnesses, _reserved, duration_log2)
+    #   num_witnesses, _reserved, duration_log2,
+    #   movement_flags, _reserved2)
 
     # id must be exact
     assert [u[0] for u in unpacked] == [s[0] for s in _SAMPLE_SIGHTINGS]
@@ -336,8 +359,13 @@ def test_points_bulk_binary_roundtrip(client, monkeypatch):
         assert u[6] == 255   # quality_score
         assert u[7] == 255   # hoax_score
         assert u[8] == 255   # richness_score
-        # flags byte should be 0 (no has_description, no has_media)
+        # flags byte should be 0 (no has_description, no has_media,
+        # no has_movement). All three bits off.
         assert u[11] == 0
+        # v0.8.5 — movement_flags should be 0 when the column is
+        # NULL (pre-reload state). _reserved2 always 0.
+        assert u[15] == 0   # movement_flags
+        assert u[16] == 0   # _reserved2
 
 
 def test_points_bulk_304_on_matching_if_none_match(client, monkeypatch):

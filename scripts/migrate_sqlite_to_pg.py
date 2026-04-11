@@ -62,6 +62,12 @@ TABLES = [
         "quality_score", "richness_score", "hoax_likelihood",
         "has_description", "has_media",
         "topic_id",
+        # v0.8.3 — movement analysis. Requires
+        # add_v083_derived_columns.sql on the PG side. The column-probe
+        # in copy_table() drops these from the COPY list automatically
+        # on pre-v0.8.3 schemas, so an old PG schema still receives the
+        # v0.8.2 fields without error.
+        "has_movement_mentioned", "movement_categories",
     ]),
     ("attachment", ["id", "sighting_id", "url", "file_type", "description"]),
     ("sighting_reference", ["sighting_id", "reference_id"]),

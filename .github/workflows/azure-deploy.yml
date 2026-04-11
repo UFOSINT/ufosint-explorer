@@ -129,6 +129,7 @@ jobs:
             scripts/add_v07_indexes.sql
             scripts/add_v075_materialized_views.sql
             scripts/add_v082_derived_columns.sql
+            scripts/add_v083_derived_columns.sql
           sparse-checkout-cone-mode: false
           path: migrations
 
@@ -194,6 +195,30 @@ jobs:
           echo "Running migrations/scripts/add_v082_derived_columns.sql …"
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/scripts/add_v082_derived_columns.sql
           echo "v0.8.2 derived-field migration complete."
+
+      # v0.8.3b / v0.8.5 — Adds the movement classification fields
+      # the ufo-dedup analyze.py pipeline produces:
+      #   has_movement_mentioned SMALLINT 0/1
+      #   movement_categories    TEXT (JSON array)
+      # Plus an index on has_movement_mentioned for the Quality rail
+      # filter path. Same idempotent ADD COLUMN IF NOT EXISTS +
+      # CREATE INDEX CONCURRENTLY IF NOT EXISTS pattern as v0.8.2.
+      # Metadata-only ALTER, milliseconds. The columns land as NULL
+      # on existing rows; the actual values are populated by the
+      # manual data reload from data/output/ufo_public.db that the
+      # operator runs after this deploy — see docs/V085_MOVEMENT_PLAN.md.
+      - name: Apply v0.8.3b movement-fields migration
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DATABASE_URL:-}" ]; then
+            echo "::warning::DATABASE_URL secret not set — skipping v0.8.3b migration"
+            exit 0
+          fi
+          echo "Running migrations/scripts/add_v083_derived_columns.sql …"
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/scripts/add_v083_derived_columns.sql
+          echo "v0.8.3b movement-fields migration complete."
 
       # v0.7.5: create (if needed) and refresh the materialized views that
       # back /api/stats, /api/timeline, and /api/sentiment/overview. This

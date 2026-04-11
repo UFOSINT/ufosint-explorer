@@ -1533,6 +1533,8 @@ function applyClientFilters() {
         hoaxMax:     q.hideHoaxes   ? (q.hoaxThreshold || 50)    : null,
         hasDescription: q.hasDescription,
         hasMedia:       q.hasMedia,
+        // v0.8.5 — v0.8.3b movement classification
+        hasMovement:    q.hasMovement,
     };
     window.UFODeck.applyClientFilters(filter);
     window.UFODeck.refreshActiveLayer();
@@ -1743,6 +1745,7 @@ function mountQualityRail() {
         hideHoaxes: false,
         hasDescription: null,
         hasMedia: null,
+        hasMovement: null,  // v0.8.5 — v0.8.3b movement classification
     };
 
     const coverage = (window.UFODeck && window.UFODeck.getCoverage)
@@ -1783,6 +1786,16 @@ function mountQualityRail() {
             sub: "photo / video reference",
             coverageKey: "has_media",
         },
+        // v0.8.5 — v0.8.3b movement classification. Filters to rows
+        // whose narrative mentioned any of the 10 movement categories
+        // (hovering, linear, erratic, accelerating, rotating,
+        // ascending, descending, vanished, followed, landed).
+        {
+            key: "hasMovement",
+            label: "Has movement described",
+            sub: "hovering / landing / erratic / …",
+            coverageKey: "has_movement",
+        },
     ];
 
     host.innerHTML = "";
@@ -1815,6 +1828,9 @@ function mountQualityRail() {
                     state.qualityFilter.hasDescription = e.target.checked ? true : null;
                 } else if (key === "hasMedia") {
                     state.qualityFilter.hasMedia = e.target.checked ? true : null;
+                } else if (key === "hasMovement") {
+                    // v0.8.5 — bit 2 of the flags byte
+                    state.qualityFilter.hasMovement = e.target.checked ? true : null;
                 }
                 applyFilters();
             });
@@ -3546,9 +3562,16 @@ async function openDetail(id) {
         // / dominant_emotion are null the pipeline didn't find a
         // confident match — hide the row entirely rather than show
         // "None".
+        //
+        // v0.8.5 — adds a "Movement" row that renders one chip per
+        // category the pipeline detected. Categories come from the
+        // r.movement_categories JSON array which api_sighting parses
+        // server-side from the TEXT column.
+        const hasMovementList = Array.isArray(r.movement_categories) && r.movement_categories.length > 0;
         const hasDerived = (
             r.standardized_shape || r.primary_color || r.dominant_emotion ||
-            r.has_description != null || r.has_media != null
+            r.has_description != null || r.has_media != null ||
+            r.has_movement_mentioned != null || hasMovementList
         );
         if (hasDerived) {
             html += `<div class="detail-section"><h3>Derived Metadata</h3>`;
@@ -3569,6 +3592,21 @@ async function openDetail(id) {
                     ? `<span class="popup-desc-badge has-desc">[ MEDIA ]</span>`
                     : `<span class="popup-desc-badge no-desc">[ NO MEDIA ]</span>`;
                 html += `<div class="detail-row"><span class="detail-label">Media:</span> ${tag}</div>`;
+            }
+            // v0.8.5 — Movement row. Chips show every category the
+            // ufo-dedup pipeline detected in the narrative. Empty
+            // array → render nothing (the boolean flag below still
+            // carries meaning). Populated array → one chip per cat.
+            if (hasMovementList) {
+                const chips = r.movement_categories
+                    .map(c => `<span class="movement-chip">${escapeHtml(c)}</span>`)
+                    .join(" ");
+                html += `<div class="detail-row"><span class="detail-label">Movement:</span> ${chips}</div>`;
+            } else if (r.has_movement_mentioned != null) {
+                const tag = r.has_movement_mentioned
+                    ? `<span class="popup-desc-badge has-desc">[ MOVEMENT ]</span>`
+                    : `<span class="popup-desc-badge no-desc">[ STATIC ]</span>`;
+                html += `<div class="detail-row"><span class="detail-label">Movement:</span> ${tag}</div>`;
             }
             html += `</div>`;
         }

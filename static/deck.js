@@ -109,9 +109,16 @@
     // hoax, richness) use 255 as a sentinel meaning "unknown" — the
     // filter loop treats 255 as failing any threshold test, which is
     // exactly the right semantic.
+    //
+    // v0.8.5 (v0.8.3b data layer): expanded to 17 fields in 32 bytes
+    // to carry the science-team movement classification
+    // (has_movement_mentioned + movement_categories bitmask). Row is
+    // still 4-byte aligned so V8's optimised Uint32Array reads on
+    // `id` land on aligned offsets.
     const SCORE_UNKNOWN = 255;
-    const FLAG_HAS_DESC  = 0x01;
-    const FLAG_HAS_MEDIA = 0x02;
+    const FLAG_HAS_DESC     = 0x01;
+    const FLAG_HAS_MEDIA    = 0x02;
+    const FLAG_HAS_MOVEMENT = 0x04;  // v0.8.5
 
     const POINTS = {
         ready: false,
@@ -129,14 +136,18 @@
         richnessScore: null, // Uint8Array(N) — 0-100, 255 = unknown
         colorIdx: null,      // Uint8Array(N)
         emotionIdx: null,    // Uint8Array(N)
-        flags: null,         // Uint8Array(N) — bit0=has_desc, bit1=has_media
+        flags: null,         // Uint8Array(N) — bit0=desc, bit1=media, bit2=movement
         numWitnesses: null,  // Uint8Array(N)
         durationLog2: null,  // Uint16Array(N) — log2(sec+1), 0 = unknown
+        // v0.8.5 — movement_flags is a 10-bit bitmask packed into a
+        // uint16. See POINTS.movements for the bit→name lookup.
+        movementFlags: null, // Uint16Array(N)
         // Lookup tables from the meta sidecar.
         sources: null,       // Array<string | null>
         shapes: null,        // Array<string | null>
         colors: null,        // Array<string | null> (v0.8.2)
         emotions: null,      // Array<string | null> (v0.8.2)
+        movements: null,     // Array<string> of 10 category names in bit order (v0.8.5)
         // Coverage + schema metadata for the UI.
         coverage: null,      // { quality_score: 0, hoax_score: 0, ... }
         columnsPresent: null,// { quality_score: false, ... }
@@ -175,12 +186,13 @@
                 `expected ${meta.count * bytesPerRow} for ${meta.count} rows`,
             );
         }
-        // v0.8.2 expects exactly 28-byte rows. If the server sends a
-        // different size the schema changed on us and we should bail
-        // loudly rather than silently corrupt every marker.
-        if (bytesPerRow !== 28) {
+        // v0.8.5 expects exactly 32-byte rows (v0.8.3b data layer).
+        // If the server sends a different size the schema changed on
+        // us and we should bail loudly rather than silently corrupt
+        // every marker.
+        if (bytesPerRow !== 32) {
             throw new Error(
-                `unexpected row size ${bytesPerRow} — expected 28 (v0.8.2). ` +
+                `unexpected row size ${bytesPerRow} — expected 32 (v0.8.5). ` +
                 `Deploy probably has stale server code.`,
             );
         }
@@ -201,13 +213,14 @@
         POINTS.flags         = new Uint8Array(N);
         POINTS.numWitnesses  = new Uint8Array(N);
         POINTS.durationLog2  = new Uint16Array(N);
+        POINTS.movementFlags = new Uint16Array(N);  // v0.8.5
 
         // Hot deserialisation loop. Hard-coded offsets for speed —
         // anything dynamic would cost 5-10 ms per 100k rows. The
         // schema version assertion above guards against silent
         // layout drift.
         for (let i = 0; i < N; i++) {
-            const o = i * 28;
+            const o = i * 32;
             POINTS.id[i]            = dv.getUint32(o,      true);
             POINTS.lat[i]           = dv.getFloat32(o + 4,  true);
             POINTS.lng[i]           = dv.getFloat32(o + 8,  true);
@@ -223,19 +236,23 @@
             POINTS.numWitnesses[i]  = dv.getUint8(o + 24);
             // byte 25 is _reserved, skip
             POINTS.durationLog2[i]  = dv.getUint16(o + 26, true);
+            // v0.8.5 — movement_flags bitmask at offset 28. Bytes
+            // 30-31 are _reserved2 and skipped.
+            POINTS.movementFlags[i] = dv.getUint16(o + 28, true);
         }
         const t2 = performance.now();
         console.info(
-            `[v0.8.2] Deserialised ${N.toLocaleString()} rows in ${(t2 - t1).toFixed(0)} ms`,
+            `[v0.8.5] Deserialised ${N.toLocaleString()} rows in ${(t2 - t1).toFixed(0)} ms`,
         );
 
         POINTS.count = N;
         POINTS.etag = meta.etag;
-        POINTS.sources  = meta.sources || [null];
-        POINTS.shapes   = meta.shapes || [null];
-        POINTS.colors   = meta.colors || [null];
-        POINTS.emotions = meta.emotions || [null];
-        POINTS.coverage = meta.coverage || {};
+        POINTS.sources   = meta.sources || [null];
+        POINTS.shapes    = meta.shapes || [null];
+        POINTS.colors    = meta.colors || [null];
+        POINTS.emotions  = meta.emotions || [null];
+        POINTS.movements = meta.movements || [];  // v0.8.5
+        POINTS.coverage  = meta.coverage || {};
         POINTS.columnsPresent = meta.columns_present || {};
         POINTS.shapeSource = meta.shape_source || "raw";
         // Start with every point visible.
@@ -342,7 +359,7 @@
     // update POINTS.visibleIdx. Used by both applyClientFilters()
     // (UI changes) and setTimeWindow() (playback frames).
     //
-    // v0.8.2 filter object fields:
+    // Filter object fields (v0.8.2 + v0.8.5):
     //   sourceName       — exact match in POINTS.sources
     //   shapeName        — exact match in POINTS.shapes
     //   colorName        — exact match in POINTS.colors
@@ -352,6 +369,7 @@
     //   richnessMin      — richness_score >= threshold (255-sentinel fails)
     //   hasDescription   — true: flag bit 0 set; false: flag bit 0 clear
     //   hasMedia         — true: flag bit 1 set; false: flag bit 1 clear
+    //   hasMovement      — v0.8.5: true: flag bit 2 set; false: clear
     //   yearFrom/yearTo  — legacy year range (converted to day range)
     //   bbox             — [s, n, w, e] viewport clip
     function _rebuildVisible() {
@@ -394,6 +412,8 @@
         // false = require clear.
         const fDesc = (f.hasDescription != null) ? !!f.hasDescription : null;
         const fMedia = (f.hasMedia != null) ? !!f.hasMedia : null;
+        // v0.8.5 — has_movement_mentioned is flag bit 2.
+        const fMove = (f.hasMovement != null) ? !!f.hasMovement : null;
 
         // Time window → day range. Timeline playback wins; otherwise
         // fall back to the UI year range (converted to days).
@@ -467,6 +487,10 @@
             if (fMedia !== null) {
                 const hasMedia = (fl[i] & FLAG_HAS_MEDIA) !== 0;
                 if (hasMedia !== fMedia) continue;
+            }
+            if (fMove !== null) {
+                const hasMove = (fl[i] & FLAG_HAS_MOVEMENT) !== 0;
+                if (hasMove !== fMove) continue;
             }
 
             // Day range. 0 (unknown) fails any active time filter.

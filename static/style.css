@@ -722,6 +722,24 @@ select:focus {
     background: transparent;
 }
 
+/* v0.8.5 — Movement category chips in the detail modal's Derived
+   Metadata section. One chip per category the ufo-dedup pipeline
+   detected in a sighting's narrative. Inherits the accent token
+   so both SIGNAL (cyan) and DECLASS (burgundy) themes look right. */
+.movement-chip {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.05em;
+    text-transform: lowercase;
+    padding: 2px 7px;
+    margin: 0 3px 3px 0;
+    border-radius: var(--r-pill);
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    background: var(--accent-bg);
+}
+
 /* Leaflet cluster overrides for dark theme */
 .marker-cluster-small {
     background-color: rgba(88, 166, 255, 0.3) !important;

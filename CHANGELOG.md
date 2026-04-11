@@ -17,6 +17,128 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 Nothing yet.
 
+## [0.8.5] — 2026-04-11 — Movement classification + rebalanced quality scoring
+
+App-side ship of the science team's v0.8.3b data layer. Two new
+derived columns on `sighting` (`has_movement_mentioned`,
+`movement_categories`) plus a rebalanced `quality_score` formula
+that shifts the "High Quality" filter from ~138k rows to exactly
+**118,320**. The v0.8.3b public SQLite at `data/output/ufo_public.db`
+already has the raw text columns stripped, so migrating from it
+means raw text (`description`, `summary`, `notes`, `raw_json`)
+**never reaches Azure Postgres at all**. `strip_raw_for_public.py`
+is no longer part of the normal flow — it's just a safety backstop
+in case someone migrates from the private `ufo_unified.db` by
+accident.
+
+See [`docs/V085_MOVEMENT_PLAN.md`](docs/V085_MOVEMENT_PLAN.md) for
+the full layout + migration walkthrough.
+
+### Added
+
+- **`/api/points-bulk` v083-1 binary schema.** Row grew from 28 to
+  **32 bytes** (still 4-byte aligned). New field layout:
+  - `flags` byte gains bit 2 = `has_movement_mentioned`
+  - New `movement_flags` uint16 at offset 28: 10-bit bitmask over
+    the categories in `_MOVEMENT_CATS` order (`hovering` / `linear`
+    / `erratic` / `accelerating` / `rotating` / `ascending` /
+    `descending` / `vanished` / `followed` / `landed`)
+  - New `_reserved2` uint16 at offset 30 for future growth
+  - Schema version bumped from `v082-1` → `v083-1` so every browser
+    cache invalidates on next fetch.
+- **`_MOVEMENT_CATS` module constant** in app.py locks the 10
+  categories in the order their bit position is packed on the
+  wire. Changing this order silently remaps every shipped
+  buffer — tests guard the order explicitly.
+- **Meta sidecar `movements` lookup + `flag_bits` map.** The
+  `?meta=1` response now carries the 10 category names in bit
+  order (so the client can decode `movement_flags` bit-by-bit)
+  plus a `flag_bits: { has_description: 0, has_media: 1,
+  has_movement: 2 }` map so the client doesn't have to guess
+  which bit is which.
+- **`/api/sighting/:id`** explicit SELECT now includes
+  `s.has_movement_mentioned` and `s.movement_categories`. The
+  response parses the TEXT JSON column into a real JSON array
+  server-side so callers receive `["hovering", "vanished"]`
+  instead of the JSON-encoded string.
+- **deck.js typed arrays.** `POINTS.movementFlags` is a new
+  `Uint16Array(N)` populated in the deserialisation loop from
+  offset 28 of each 32-byte row. `POINTS.movements` is the lookup
+  table from the meta sidecar.
+- **deck.js filter predicate.** `_rebuildVisible` honors a new
+  `hasMovement` boolean on the filter object. When set, rows are
+  kept iff `(flags & FLAG_HAS_MOVEMENT) !== 0` matches the
+  requested bool.
+- **Quality rail "Has movement described" toggle** in the
+  Observatory left rail. Same disabled-when-unpopulated pattern
+  as the v0.8.2 "Has description" / "Has media" toggles —
+  coverage pulled from the `has_movement` coverage counter the
+  server emits. When populated, clicking filters to the 249,217
+  rows whose narrative mentioned any movement.
+- **Detail modal "Movement" row** in the Derived Metadata section.
+  Renders one `.movement-chip` per category the pipeline detected
+  (e.g. `hovering · vanished · followed`). Falls back to a
+  `[ MOVEMENT ]` / `[ STATIC ]` pill when the categories array
+  is empty but `has_movement_mentioned` is set. Hidden entirely
+  when both are null.
+- **`.movement-chip` CSS rule.** Inherits `var(--accent)` so the
+  chips auto-skin for both SIGNAL (cyan) and DECLASS (burgundy)
+  themes.
+- **`scripts/add_v083_derived_columns.sql`** wired into the deploy
+  workflow's psql step after `add_v082_derived_columns.sql`.
+  Idempotent — `ADD COLUMN IF NOT EXISTS` + `CREATE INDEX
+  CONCURRENTLY IF NOT EXISTS`. Ran auto on next deploy, adds the
+  two columns as NULL. Actual data population happens on the
+  operator's manual reload step.
+
+### Changed
+
+- **`_points_bulk_build()` SELECT clause** now includes
+  `has_movement_mentioned` and `movement_categories` via the
+  existing `_col_expr` column-probe helper. Graceful to
+  pre-v0.8.3 schemas: missing columns become `NULL AS col_name`
+  and the endpoint returns the same 32-byte layout with
+  `movement_flags = 0` on every row.
+- **Row packer** parses `movement_categories` TEXT JSON, ORs each
+  recognised category's bit into `mv_flags`, sets
+  `flags |= 0x04` when `has_movement_mentioned == 1`. Unknown
+  categories (shouldn't happen — science team promises only the
+  10 documented values) are silently skipped for forward
+  compatibility.
+- **deck.js schema-size check** bumped from `bytesPerRow !== 28`
+  to `bytesPerRow !== 32`. Mismatch throws loudly so stale v082-1
+  servers can't silently corrupt every marker on a client running
+  the v083-1 deserialiser.
+- **v0.8.0–v0.8.4 regression tests** updated to the v083-1
+  contract. The `_FakeBulkCursor` sample sightings now carry the
+  two new fields (defaulting to 0 / None), assertions that locked
+  `BYTES_PER_ROW = 28` now lock `= 32`, and the round-trip test
+  checks the trailing uint16s.
+
+### Deployment
+
+v0.8.5 ships the app code in one commit + tag. The deploy workflow
+auto-applies `add_v083_derived_columns.sql`, adding the two columns
+as NULL. At that point the Quality rail's new "Has movement
+described" toggle renders **disabled** (coverage = 0) until the
+operator runs the manual data reload from `data/output/ufo_public.db`.
+See `docs/V085_MOVEMENT_PLAN.md` for the full operator instructions.
+
+### Not shipped
+
+- **Category-level movement filters** (filter by "hovering"
+  specifically, etc.). Scope-deferred to v0.8.6 — the binary
+  layout supports it (the bitmask is on the wire), just no UI
+  control yet. The detail modal shows all categories as chips so
+  users can at least SEE which applied to a specific sighting.
+- **Insights page cards for movement category counts.** Out of
+  scope; a stretch goal.
+- **Retirement of `scripts/strip_raw_for_public.py`.** Script
+  stays in-tree as a safety backstop even though the normal
+  migration flow from `ufo_public.db` makes it unnecessary.
+- **`sighting_analysis` JSON side-fields migration.** Still v0.9
+  scope per `docs/V083_BACKLOG.md` APP-1.
+
 ## [0.8.4] — 2026-04-11 — Signal / Declass theme overhaul
 
 Finishes the theme system v0.7 started. The SIGNAL / DECLASS token

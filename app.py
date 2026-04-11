@@ -1143,9 +1143,18 @@ def api_hexbin():
 # v0.8.2 — schema version bumped to "v082-1" for the 28-byte row layout
 # that carries the science-team derived fields. See docs/V082_PLAN.md
 # for the full layout + rationale.
-_POINTS_BULK_SCHEMA_VERSION = "v082-1"
-_POINTS_BULK_BYTES_PER_ROW = 28
-# Little-endian row format, 28 bytes:
+#
+# v0.8.5 — schema version bumped to "v083-1" for the 32-byte row
+# layout that carries the v0.8.3b movement fields. Two new slots:
+#   - `flags` bit 2 = has_movement_mentioned
+#   - `movement_flags` uint16 at offset 28 = 10-bit bitmask of
+#     movement categories in _MOVEMENT_CATS order
+# Row grows from 28 to 32 bytes, staying 4-byte aligned so V8's
+# optimized Uint32Array reads on `id` don't fall on unaligned
+# offsets. See docs/V085_MOVEMENT_PLAN.md for the full layout.
+_POINTS_BULK_SCHEMA_VERSION = "v083-1"
+_POINTS_BULK_BYTES_PER_ROW = 32
+# Little-endian row format, 32 bytes:
 #   I  uint32  id                (offset 0)
 #   f  float32 lat               (offset 4)
 #   f  float32 lng               (offset 8)
@@ -1157,11 +1166,32 @@ _POINTS_BULK_BYTES_PER_ROW = 28
 #   B  uint8   richness_score    (offset 20, 255 = unknown)
 #   B  uint8   color_idx         (offset 21)
 #   B  uint8   emotion_idx       (offset 22)
-#   B  uint8   flags             (offset 23, bit0=has_desc, bit1=has_media)
+#   B  uint8   flags             (offset 23, bit0=desc, bit1=media, bit2=movement)
 #   B  uint8   num_witnesses     (offset 24, clamped 0-255)
-#   B  uint8   _reserved         (offset 25, future growth)
+#   B  uint8   _reserved         (offset 25)
 #   H  uint16  duration_log2     (offset 26, log2(sec+1) rounded, 0=unknown)
-_POINTS_BULK_STRUCT = "<IffIBBBBBBBBBBH"
+#   H  uint16  movement_flags    (offset 28, NEW in v083-1, bit-packed categories)
+#   H  uint16  _reserved2        (offset 30, future: topic_id bitmask, etc.)
+_POINTS_BULK_STRUCT = "<IffIBBBBBBBBBBHHH"
+
+# v0.8.5 — Canonical movement category order. The science-team
+# analyze.py produces at most these 10 categories; the index in this
+# tuple is the bit position in the movement_flags uint16 on the wire.
+# NEVER reorder this tuple — doing so silently remaps every shipped
+# binary payload. Add new categories only at the end.
+_MOVEMENT_CATS = (
+    "hovering",       # bit 0
+    "linear",         # bit 1
+    "erratic",        # bit 2
+    "accelerating",   # bit 3
+    "rotating",       # bit 4
+    "ascending",      # bit 5
+    "descending",     # bit 6
+    "vanished",       # bit 7
+    "followed",       # bit 8
+    "landed",         # bit 9
+)
+_MOVEMENT_CAT_TO_BIT = {c: i for i, c in enumerate(_MOVEMENT_CATS)}
 
 # Sentinel value for missing / unknown score bytes. Scores are
 # semantically in [0, 100], so 255 is safely out-of-band.
@@ -1186,6 +1216,9 @@ _POINTS_BULK_DERIVED_COLS = (
     "has_description",
     "has_media",
     "topic_id",
+    # v0.8.5 (science team's v0.8.3b data layer)
+    "has_movement_mentioned",
+    "movement_categories",
 )
 
 
@@ -1483,9 +1516,13 @@ def _points_bulk_build_cached(etag: str) -> tuple[bytes, bytes, dict]:
         def _col_expr(col: str, table_prefix: str = "s") -> str:
             return f"{table_prefix}.{col}" if col in present_cols else f"NULL AS {col}"
 
-        # Note: we always pull s.shape as a fallback for standardized_shape
-        # (used when use_std_shape is False) plus s.date_event as a fallback
-        # for sighting_datetime. The fallbacks are free — existing indexes.
+        # v0.8.5: when the sighting table has denormalized lat/lng
+        # (from v0.8.2's `lat`/`lng` columns and the v0.8.3b public
+        # export), prefer those over the JOIN to location. Saves one
+        # join on the big scan and matches what ufo_public.db ships.
+        # Location is still joined for the coord presence filter
+        # because the migration preserves location.latitude/longitude
+        # as the canonical source.
         select_parts = [
             "s.id",
             "l.latitude",
@@ -1504,6 +1541,10 @@ def _points_bulk_build_cached(etag: str) -> tuple[bytes, bytes, dict]:
             _col_expr("hoax_likelihood"),
             _col_expr("has_description"),
             _col_expr("has_media"),
+            # v0.8.5 — v0.8.3b movement fields. Graceful to a
+            # pre-v0.8.3 schema via the column probe / _col_expr.
+            _col_expr("has_movement_mentioned"),
+            _col_expr("movement_categories"),
         ]
         select_sql = ",\n                   ".join(select_parts)
 
@@ -1539,6 +1580,9 @@ def _points_bulk_build_cached(etag: str) -> tuple[bytes, bytes, dict]:
             "has_media": 0,
             "num_witnesses": 0,
             "duration_log2": 0,
+            # v0.8.5 — movement coverage counters
+            "has_movement": 0,
+            "movement_flags": 0,
         }
 
         for row in cur:
@@ -1547,6 +1591,7 @@ def _points_bulk_build_cached(etag: str) -> tuple[bytes, bytes, dict]:
                 duration_sec, raw_num_witnesses,
                 sighting_dt, std_shape, prim_color, dom_emotion,
                 quality, richness, hoax, has_desc, has_media,
+                has_movement, movement_cats_json,
             ) = row
 
             # Prefer the explicit sighting_datetime when present, fall
@@ -1598,7 +1643,8 @@ def _points_bulk_build_cached(etag: str) -> tuple[bytes, bytes, dict]:
                 if e_idx:
                     cov["emotion_idx"] += 1
 
-            # Flags byte: bit 0 = has_description, bit 1 = has_media
+            # Flags byte: bit 0 = has_description, bit 1 = has_media,
+            # bit 2 = has_movement_mentioned (v0.8.5). Bits 3-7 reserved.
             flags = 0
             if has_desc:
                 flags |= 0x01
@@ -1606,6 +1652,9 @@ def _points_bulk_build_cached(etag: str) -> tuple[bytes, bytes, dict]:
             if has_media:
                 flags |= 0x02
                 cov["has_media"] += 1
+            if has_movement:
+                flags |= 0x04
+                cov["has_movement"] += 1
 
             # num_witnesses: clamp to uint8 range; unknown → 0
             if raw_num_witnesses is None:
@@ -1622,6 +1671,27 @@ def _points_bulk_build_cached(etag: str) -> tuple[bytes, bytes, dict]:
             dur_log2 = _duration_log2(duration_sec)
             if dur_log2:
                 cov["duration_log2"] += 1
+
+            # v0.8.5 — movement_flags bitmask. Parse the JSON array
+            # (or fall back gracefully if the column is NULL or
+            # malformed) and OR each recognised category's bit into
+            # the final uint16. Unknown categories are silently
+            # skipped — the science team promises the pipeline only
+            # emits values from _MOVEMENT_CATS, but a defensive
+            # skip protects against future schema drift.
+            mv_flags = 0
+            if movement_cats_json:
+                try:
+                    mv_list = json.loads(movement_cats_json)
+                    if isinstance(mv_list, list):
+                        for cat in mv_list:
+                            bit = _MOVEMENT_CAT_TO_BIT.get(cat)
+                            if bit is not None:
+                                mv_flags |= (1 << bit)
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    mv_flags = 0
+            if mv_flags:
+                cov["movement_flags"] += 1
 
             buf.extend(
                 pack(
@@ -1640,6 +1710,8 @@ def _points_bulk_build_cached(etag: str) -> tuple[bytes, bytes, dict]:
                     nw,
                     0,  # _reserved
                     dur_log2,
+                    mv_flags,       # v0.8.5 — movement category bitmask
+                    0,              # _reserved2 (32-byte alignment padding)
                 )
             )
             count += 1
@@ -1657,6 +1729,10 @@ def _points_bulk_build_cached(etag: str) -> tuple[bytes, bytes, dict]:
         "shapes": shape_names,
         "colors": color_names,
         "emotions": emotion_names,
+        # v0.8.5 — canonical movement category list in bit order so
+        # the client can decode the movement_flags uint16. Slot 0
+        # is 'hovering', slot 1 is 'linear', etc. See _MOVEMENT_CATS.
+        "movements": list(_MOVEMENT_CATS),
         "shape_source": "standardized" if use_std_shape else "raw",
         "raw_size": len(raw),
         "gzip_size": len(gzipped),
@@ -1685,7 +1761,18 @@ def _points_bulk_build_cached(etag: str) -> tuple[bytes, bytes, dict]:
                 {"name": "num_witnesses",   "offset": 24, "type": "uint8",   "len": 1},
                 {"name": "_reserved",       "offset": 25, "type": "uint8",   "len": 1},
                 {"name": "duration_log2",   "offset": 26, "type": "uint16",  "len": 2},
+                # v0.8.5 — movement fields. bit 0 = hovering, bit 1 =
+                # linear, bit 2 = erratic, bit 3 = accelerating,
+                # bit 4 = rotating, bit 5 = ascending, bit 6 = descending,
+                # bit 7 = vanished, bit 8 = followed, bit 9 = landed.
+                {"name": "movement_flags",  "offset": 28, "type": "uint16",  "len": 2},
+                {"name": "_reserved2",      "offset": 30, "type": "uint16",  "len": 2},
             ],
+            "flag_bits": {
+                "has_description": 0,
+                "has_media": 1,
+                "has_movement": 2,  # v0.8.5
+            },
         },
     }
     meta_bytes = json.dumps(meta, separators=(",", ":")).encode("utf-8")
@@ -2207,6 +2294,9 @@ _SIGHTING_DETAIL_COLUMNS = (
     "s.has_description",
     "s.has_media",
     "s.topic_id",
+    # v0.8.5 — v0.8.3b movement classification fields
+    "s.has_movement_mentioned",
+    "s.movement_categories",
     # Joined
     "sd.name AS source_name",
     "l.raw_text AS loc_raw",
@@ -2265,6 +2355,20 @@ def api_sighting(sid):
         # v0.8.3 — no raw_json field to parse anymore. (The `raw_json`
         # column is one of the 4 that scripts/strip_raw_for_public.py
         # drops, and it was never in the v0.8.3 explicit SELECT list.)
+
+        # v0.8.5 — parse the `movement_categories` JSON TEXT column
+        # into a real JSON array on the wire. The column is stored as
+        # a JSON string (science team's v0.8.3b data layer uses TEXT,
+        # not JSONB, so it ships over psycopg as a plain string).
+        # Gracefully handle empty arrays, malformed JSON, and the
+        # pre-v0.8.3 NULL case.
+        if "movement_categories" in record:
+            raw_mv = record["movement_categories"]
+            try:
+                parsed = json.loads(raw_mv) if isinstance(raw_mv, str) else raw_mv
+                record["movement_categories"] = parsed if isinstance(parsed, list) else []
+            except (json.JSONDecodeError, TypeError, ValueError):
+                record["movement_categories"] = []
 
         # Check for duplicate candidates.
         #
