@@ -2553,55 +2553,148 @@ def _prewarm_caches():
 
     ~30 seconds of background work that turns the cold-user experience
     from "20-50 seconds" into "200ms".
+
+    v0.8.2-cleanup-4: Only ONE worker process runs the heavy prewarm
+    (pg_prewarm + legacy /api/map warming) at a time. The two
+    gunicorn workers coordinate via a /tmp lockfile:
+
+      - Leader: whoever atomically creates /tmp/ufosint_prewarm.lock
+        wins. Runs the full prewarm (pg_prewarm + every path in
+        warm_paths). Removes the lockfile at the end.
+      - Follower: sees the lockfile and skips pg_prewarm (the buffer
+        cache is being warmed by the leader). Waits for the leader
+        to finish points-bulk, then warms its OWN @lru_cache for
+        /api/points-bulk (because @lru_cache is per-process).
+
+    Previously both workers ran the heavy prewarm simultaneously,
+    contending on the Postgres B1ms worker pool and blowing up
+    the points-bulk build time from ~20 s (uncontended) to 116 s
+    (parallel, contended). With this coordination, the leader
+    runs ~20-40 s uncontended, then the follower piggy-backs for
+    ~2-5 s to warm its own Python-side cache.
     """
-    # threading is imported at module top in v0.8.2-cleanup-3 for the
-    # bulk-build coalescing lock; reuse it here.
+
+    PREWARM_LOCK_PATH = "/tmp/ufosint_prewarm.lock"
+    # How long the follower waits before giving up and running its own
+    # (degraded) prewarm. Should be > typical leader prewarm time.
+    FOLLOWER_WAIT_SECS = 180
+
+    def _acquire_leader_lock():
+        """Atomically create the lockfile. Returns True if this worker
+        won the race and is the leader."""
+        try:
+            fd = os.open(
+                PREWARM_LOCK_PATH,
+                os.O_EXCL | os.O_CREAT | os.O_WRONLY,
+                0o644,
+            )
+            os.write(fd, f"{os.getpid()}\n".encode())
+            os.close(fd)
+            return True
+        except FileExistsError:
+            return False
+
+    def _release_leader_lock():
+        try:
+            os.unlink(PREWARM_LOCK_PATH)
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            print(f"[prewarm] couldn't release lockfile: {e}")
+
+    def _wait_for_leader():
+        """Poll until the lockfile disappears or we time out."""
+        deadline = time.monotonic() + FOLLOWER_WAIT_SECS
+        while time.monotonic() < deadline:
+            if not os.path.exists(PREWARM_LOCK_PATH):
+                return True
+            time.sleep(1)
+        return False
+
+    def _run_leader_warm():
+        """Full prewarm: pg_prewarm + every warm path.
+
+        /api/points-bulk is FIRST because it's the critical path for
+        every Observatory visit on the v0.8.0+ GPU rendering flow. A
+        cold build takes ~20 s on B1ms because the SELECT scans
+        396k rows and the Python pack loop is dense. Warming it
+        before /api/stats / /api/map / etc. means the connection
+        pool is free when the scan runs, and the @lru_cache is
+        populated before any browser lands.
+        """
+        _pg_prewarm_relations()
+        client = app.test_client()
+        warm_paths = [
+            "/api/points-bulk?meta=1",
+            "/api/points-bulk",
+            "/api/stats",
+            "/api/timeline",
+            "/api/sentiment/overview",
+            "/api/duplicates?page=0",
+            # Whole-world map view (the landing-page default)
+            "/api/map?south=-90&north=90&west=-180&east=180&zoom=2",
+            # A continental and a city viewport so both sample modes warm
+            "/api/map?south=25&north=50&west=-125&east=-65&zoom=4",
+            "/api/map?south=33.5&north=34.5&west=-118.5&east=-117.5&zoom=10",
+            "/api/heatmap?south=-90&north=90&west=-180&east=180",
+        ]
+        print(f"[prewarm leader] starting ({len(warm_paths)} queries)")
+        for p in warm_paths:
+            t0 = time.perf_counter()
+            try:
+                r = client.get(p)
+                print(f"[prewarm leader] {r.status_code}  {(time.perf_counter()-t0)*1000:6.0f}ms  {p[:60]}")
+            except Exception as e:
+                print(f"[prewarm leader] FAIL {p}: {e}")
+        print("[prewarm leader] done")
+
+    def _run_follower_warm():
+        """Light prewarm for the non-leader worker.
+
+        Skips pg_prewarm entirely (the leader already warmed the
+        shared buffer cache on the Postgres side). Hits only the
+        paths whose results are cached PER-PROCESS in this Python
+        worker's memory — mainly /api/points-bulk, whose 4 MB
+        gzipped buffer lives in this worker's @lru_cache and is
+        not shared with the leader worker. Fast because the DB
+        is already hot from the leader's pass.
+        """
+        client = app.test_client()
+        warm_paths = [
+            "/api/points-bulk?meta=1",
+            "/api/points-bulk",
+            "/api/stats",
+            "/api/timeline",
+            "/api/sentiment/overview",
+        ]
+        print(f"[prewarm follower] starting ({len(warm_paths)} queries)")
+        for p in warm_paths:
+            t0 = time.perf_counter()
+            try:
+                r = client.get(p)
+                print(f"[prewarm follower] {r.status_code}  {(time.perf_counter()-t0)*1000:6.0f}ms  {p[:60]}")
+            except Exception as e:
+                print(f"[prewarm follower] FAIL {p}: {e}")
+        print("[prewarm follower] done")
 
     def _warm():
         try:
             time.sleep(1)  # let the worker finish starting
-            _pg_prewarm_relations()
-            client = app.test_client()
-            # v0.8.2-cleanup-3: /api/points-bulk MUST be first. It's
-            # the critical-path call for every Observatory visit on
-            # the v0.8.0+ GPU path, and a cold build takes ~20 s on
-            # B1ms because the SELECT scans 396k rows and the Python
-            # pack loop is dense. If we warmed /api/map / /api/stats
-            # first, the connection pool would be tied up and the
-            # points-bulk build would contend for connections, pushing
-            # the first-user experience out to 60-120 s. Warming it
-            # FIRST means the @lru_cache is populated before any
-            # browser lands on the site, so the first request serves
-            # the 4 MB gzipped buffer from memory in <3 s.
-            #
-            # The legacy /api/map and /api/heatmap paths are warmed
-            # LAST because with the v0.8.0 GPU path live, almost no
-            # user hits them — they're only a fallback for browsers
-            # without WebGL, and we accept a slower first request on
-            # that path.
-            warm_paths = [
-                "/api/points-bulk?meta=1",
-                "/api/points-bulk",
-                "/api/stats",
-                "/api/timeline",
-                "/api/sentiment/overview",
-                "/api/duplicates?page=0",
-                # Whole-world map view (the landing-page default)
-                "/api/map?south=-90&north=90&west=-180&east=180&zoom=2",
-                # A continental and a city viewport so both sample modes warm
-                "/api/map?south=25&north=50&west=-125&east=-65&zoom=4",
-                "/api/map?south=33.5&north=34.5&west=-118.5&east=-117.5&zoom=10",
-                "/api/heatmap?south=-90&north=90&west=-180&east=180",
-            ]
-            print(f"[prewarm] starting ({len(warm_paths)} queries)")
-            for p in warm_paths:
-                t0 = time.perf_counter()
+            is_leader = _acquire_leader_lock()
+            if is_leader:
+                print(f"[prewarm] this worker ({os.getpid()}) is LEADER")
                 try:
-                    r = client.get(p)
-                    print(f"[prewarm] {r.status_code}  {(time.perf_counter()-t0)*1000:6.0f}ms  {p[:60]}")
-                except Exception as e:
-                    print(f"[prewarm] FAIL {p}: {e}")
-            print("[prewarm] done")
+                    _run_leader_warm()
+                finally:
+                    _release_leader_lock()
+            else:
+                print(f"[prewarm] this worker ({os.getpid()}) is FOLLOWER; waiting for leader")
+                if _wait_for_leader():
+                    print("[prewarm] leader finished; follower starting")
+                    _run_follower_warm()
+                else:
+                    print(f"[prewarm] follower gave up after {FOLLOWER_WAIT_SECS}s; running fallback leader prewarm")
+                    _run_leader_warm()
         except Exception as e:
             print(f"[prewarm] thread crashed: {e}")
 
