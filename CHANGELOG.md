@@ -17,6 +17,154 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 Nothing yet.
 
+## [0.8.7] — 2026-04-11 — Filter bar cleanup + Movement cluster + Quality rail bug fix
+
+Four changes:
+
+1. **Five dead dropdowns deleted from the top filter bar.** Country,
+   State, Hynek, Vallée, and Collection were read by
+   `applyClientFilters()` but `_rebuildVisible` silently ignored
+   them — the bulk buffer has no byte slot for any of them, so
+   filtering required a per-row database lookup that defeated the
+   v0.8.0 client-side filter architecture. Deleted entirely rather
+   than backfilled with buffer columns.
+2. **New Movement category cluster.** 10-pill checkbox row below the
+   filter bar populated from `POINTS.movements` after `bootDeckGL()`
+   completes. Multi-select with OR-mask semantics: a sighting
+   matches if any checked category's bit is set in its
+   `movement_flags` uint16 at offset 28. No byte-layout changes —
+   the uint16 slot was added in v0.8.5 and had been sitting there
+   waiting for a UI.
+3. **Color and Emotion dropdowns surfaced.** Both had zombie code in
+   `applyClientFilters` and `_rebuildVisible` for months but no
+   HTML element. Byte slots at offsets 21 and 22 were already
+   populated (coverage 145,209 and 149,607). Added the dropdowns
+   and wired them into `populateFilterDropdownsFromDeck()` so they
+   use the canonical standardized lists from the bulk meta.
+4. **Quality rail no longer permanently bricks itself.**
+   `mountQualityRail()` read `window.UFODeck.getCoverage()` at
+   mount time, but it was called from `loadObservatory()` which
+   ran *before* `bootDeckGL()` finished loading the bulk buffer.
+   Coverage came back as `{}`, every toggle got `populated = false`,
+   CSS applied `cursor: not-allowed`, and the `dataset.mounted = "1"`
+   guard prevented the rail from ever re-rendering. User report:
+   "the cursor turns into an X when I hover over data quality
+   section and can't press any buttons." Fixed by removing the
+   mount guard + re-mounting from `bootDeckGL()` completion.
+
+### Added
+
+- **Movement category multi-select cluster** in the filter bar.
+  HTML: `.filter-movement-row > .movement-cluster >
+  .movement-chip-label[]`. JS: `_mountMovementCluster(movements)`,
+  `_readMovementCats()`, plus `movementCats` field on the filter
+  descriptor and bit-mask resolution in `_rebuildVisible`.
+- **Color dropdown** (`#filter-color`, populated from
+  `POINTS.colors`).
+- **Emotion dropdown** (`#filter-emotion`, populated from
+  `POINTS.emotions`).
+- **`populateFilterDropdownsFromDeck()`** in `app.js` — called
+  from `bootDeckGL()` and `_wireTimeBrushToDeck()` to populate
+  shape/color/emotion dropdowns + mount the movement cluster
+  using `POINTS` metadata (canonical standardized lists).
+- **`_populateLookupDropdown(id, values, placeholder)`** helper —
+  clears target, adds placeholder, appends non-null values,
+  preserves existing selection across re-populates.
+- **Movement cluster hash restore.** URL hash
+  `?movement=hovering,landed` restores the cluster's checked
+  state. Defers via `state.pendingMovementFilter` if the cluster
+  hasn't mounted yet (POINTS not ready), and
+  `_mountMovementCluster` consumes the pending set when it runs.
+- **`tests/test_v087.py`** — 28 tests locking every aspect of the
+  v0.8.7 contract (dead IDs removed, new IDs present, helpers
+  exist, movement mask logic in `_rebuildVisible`, backend
+  pruning, Quality rail re-mount hook wired).
+
+### Changed
+
+- **`mountQualityRail()`**: removed the `dataset.mounted === "1"`
+  idempotent guard. `host.innerHTML = ""` on every call already
+  makes re-mounts safe. Also gated the coverage lookup on
+  `POINTS.ready` so un-ready state renders as disabled instead of
+  reading `{}`.
+- **`bootDeckGL()`**: now calls `populateFilterDropdownsFromDeck()`
+  and `mountQualityRail()` after `_wireTimeBrushToDeck()` so the
+  filter bar and Quality rail populate with real data once
+  `POINTS.ready` flips.
+- **`_rebuildVisible()` in deck.js**: handles `f.movementCats`
+  by resolving each category name against `POINTS.movements` and
+  OR-ing the corresponding bits into a uint16 mask. Hot loop
+  aliases `POINTS.movementFlags` → `mvf` for V8 optimisation.
+- **`applyClientFilters()`**: passes `movementCats` into the
+  filter descriptor. `_countActiveFilters()` counts the cluster
+  as a single active filter regardless of how many categories
+  are checked.
+- **`FILTER_FIELDS`** trimmed from 10 → 6 entries. Deleted:
+  `filter-collection`, `filter-country`, `filter-state`,
+  `filter-hynek`, `filter-vallee`, `coords-filter`. Added:
+  `filter-color`, `filter-emotion`.
+- **`getFilterParams()`** rewritten to serialize the 6 surviving
+  filter fields plus the movement cluster (as a comma-separated
+  `movement=hovering,landed` param).
+- **`clearFilters()`** now drives off `FILTER_FIELDS` in a loop
+  instead of hardcoding each dead dropdown, and also resets the
+  movement cluster + the Quality rail state.
+- **`populateFilterDropdowns()` in `app.js`** — only populates
+  the source dropdown now. Shape / color / emotion arrive later
+  via `populateFilterDropdownsFromDeck()` using canonical
+  standardized lists from `POINTS`.
+- **`add_common_filters()` in `app.py`** — trimmed to 6 keys
+  (shape, source, color, emotion, date_from, date_to). The
+  `shape` key switched from `s.shape` (raw per-source mixed-case
+  strings) to `s.standardized_shape` (the v0.8.3b classified
+  column), so it agrees with the Observatory dropdown's canonical
+  list. Country / state / hynek / vallee / collection / coords
+  branches deleted — they had no client-side equivalent and the
+  server-side handling was orphaned.
+- **`_COMMON_FILTER_KEYS`** trimmed from 10 → 6 entries.
+- **`init_filters()`** dropped 5 startup queries (hynek, vallee,
+  collection, countries, states, match_methods). Shape query
+  uses `standardized_shape`. Added color + emotion vocabularies
+  as a defensive shim for dev tools hitting `/api/filters`
+  directly.
+
+### Removed
+
+- `#filter-country`, `#filter-state`, `#filter-hynek`,
+  `#filter-vallee`, `#filter-collection` dropdowns from
+  `index.html`.
+- `#btn-more-filters` button + `#filters-advanced` drawer.
+- `#coords-filter` dropdown.
+- `FILTER_CACHE["hynek"]`, `["vallee"]`, `["collections"]`,
+  `["countries"]`, `["states"]`, `["match_methods"]` startup
+  queries (~50 lines of `init_filters()`).
+- `add_common_filters` handling for `collection`, `hynek`,
+  `vallee`, `country`, `state`, `coords` query params.
+  Scripted callers sending these now get them silently ignored
+  (route still returns 200).
+- CSS `#filter-country, #filter-state { max-width: 180px; }`
+  rule — dead selector.
+
+### Fixed
+
+- **Data Quality rail permanently disabled on first load.** Root
+  cause described above. After the v0.8.7 fix the rail re-renders
+  on `POINTS.ready` with real coverage, toggles are clickable, and
+  the cursor stays pointer (not `not-allowed`). User can finally
+  use "High quality only", "Hide likely hoaxes", "Has description",
+  "Has media", and "Has movement described" to filter the map.
+- **Shape dropdown silently failed for mixed-case raw values.**
+  `init_filters()` previously ran `SELECT DISTINCT shape FROM
+  sighting` which returns "Disk", "disc", "cigar", etc. —
+  whatever the raw feeds stored. But `_rebuildVisible` looks
+  values up in `POINTS.shapes`, which is the **standardized**
+  list from the bulk meta sidecar ("Disc", "Cigar", "Triangle",
+  capitalized). Picking "Disk" fails `indexOf("Disk") === -1` in
+  the standardized list. v0.8.7 populates the dropdown from
+  `POINTS.shapes` directly (via
+  `populateFilterDropdownsFromDeck()`) so every option
+  round-trips through `_rebuildVisible` correctly.
+
 ## [0.8.6] — 2026-04-11 — Timeline redesign + Insights buildout + cleanup
 
 Four tracks landing in one release:

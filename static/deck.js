@@ -403,6 +403,32 @@
             if (emotionIdxTarget === -1) { POINTS.visibleIdx = unknownName; return unknownName; }
         }
 
+        // v0.8.7 — movement category multi-select filter. `movementCats`
+        // is an array of category names (e.g. ["hovering", "landed"]);
+        // we resolve each to its bit position in POINTS.movements and
+        // OR into a uint16 mask. A row matches if (movement_flags & mask)
+        // is non-zero, so the semantics are OR across the selected
+        // categories. Empty array / missing field = no filter.
+        //
+        // NOTE: this is orthogonal to the `hasMovement` boolean toggle
+        // in the Quality rail. That one matches rows with ANY movement
+        // bit set; this one matches rows with SPECIFIC bits set. If
+        // both are active, both must pass.
+        let mvMask = 0;
+        if (Array.isArray(f.movementCats) && f.movementCats.length > 0) {
+            const cats = POINTS.movements || [];
+            for (const name of f.movementCats) {
+                const bit = cats.indexOf(name);
+                if (bit >= 0 && bit < 16) mvMask |= (1 << bit);
+            }
+            // User picked only unknown categories → empty result
+            // set (consistent with the -1 early-return pattern above).
+            if (mvMask === 0) {
+                POINTS.visibleIdx = unknownName;
+                return unknownName;
+            }
+        }
+
         // Scores: thresholds in [0, 100]. -1 = no filter.
         const qMin = (f.qualityMin != null) ? (f.qualityMin | 0) : -1;
         const hMax = (f.hoaxMax    != null) ? (f.hoaxMax    | 0) : -1;
@@ -453,6 +479,7 @@
         const ci  = POINTS.colorIdx;
         const ei  = POINTS.emotionIdx;
         const fl  = POINTS.flags;
+        const mvf = POINTS.movementFlags;  // v0.8.7 — movement bitmask
         const UNK = SCORE_UNKNOWN;
 
         const out = _ensureScratch();
@@ -492,6 +519,11 @@
                 const hasMove = (fl[i] & FLAG_HAS_MOVEMENT) !== 0;
                 if (hasMove !== fMove) continue;
             }
+
+            // v0.8.7 — movement category mask (OR across selected bits).
+            // Non-zero mask means at least one category was requested;
+            // row must have at least one bit in common or it's rejected.
+            if (mvMask !== 0 && (mvf[i] & mvMask) === 0) continue;
 
             // Day range. 0 (unknown) fails any active time filter.
             const d = dd[i];

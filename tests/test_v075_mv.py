@@ -434,13 +434,15 @@ def test_api_timeline_skips_mv_when_filter_is_set(client, monkeypatch):
     conn = _FakeConn(responses)
     monkeypatch.setattr(_app, "get_db", lambda: conn)
 
-    resp = client.get("/api/timeline?shape=disk")
+    resp = client.get("/api/timeline?shape=Disc")
     assert resp.status_code == 200
     sqls = [e[0] for e in conn._cursor.executed]
     assert not any("mv_timeline_yearly" in s for s in sqls), (
         "MV must NOT be used when filters are present"
     )
-    assert any("s.shape = %s" in s for s in sqls)
+    # v0.8.7: shape filter now matches against standardized_shape,
+    # not the raw shape column, so the filter clause changed.
+    assert any("s.standardized_shape = %s" in s for s in sqls)
 
 
 def test_api_sentiment_overview_mv_happy_path(client, monkeypatch):
@@ -484,10 +486,13 @@ def test_api_sentiment_overview_skips_mv_when_filter_is_set(client, monkeypatch)
     conn = _FakeConn(responses)
     monkeypatch.setattr(_app, "get_db", lambda: conn)
 
-    resp = client.get("/api/sentiment/overview?country=US")
+    # v0.8.7: country/state/hynek/vallee/collection were removed from
+    # _COMMON_FILTER_KEYS so they no longer bypass the MV. Use a
+    # surviving filter (shape) to prove the MV bypass still works.
+    resp = client.get("/api/sentiment/overview?shape=Disc")
     assert resp.status_code == 200
     sqls = [e[0] for e in conn._cursor.executed]
     assert not any("mv_sentiment_overview" in s for s in sqls), (
-        "country=US filter must bypass the MV"
+        "shape filter must bypass the MV"
     )
-    assert any("l.country = %s" in s for s in sqls)
+    assert any("s.standardized_shape = %s" in s for s in sqls)

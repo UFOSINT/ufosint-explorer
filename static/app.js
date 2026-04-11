@@ -26,17 +26,18 @@ const state = {
 // Filter ID -> human label, used by the active-filter chip strip in the
 // search panel and as the source-of-truth for serializing filters to the
 // URL hash.
+// v0.8.7: trimmed to the 6 filters the Observatory bulk buffer
+// actually supports. Country / State / Hynek / Vallee / Collection /
+// Coords were removed because they have no byte slot in the 32-byte
+// bulk row and applyClientFilters couldn't filter by them client-side.
+// See docs/V087_FILTER_CLEANUP.md for the full audit.
 const FILTER_FIELDS = [
     { id: "filter-date-from", key: "date_from", label: "From" },
     { id: "filter-date-to",   key: "date_to",   label: "To" },
     { id: "filter-shape",     key: "shape",     label: "Shape" },
-    { id: "filter-collection",key: "collection",label: "Collection" },
     { id: "filter-source",    key: "source",    label: "Source" },
-    { id: "filter-country",   key: "country",   label: "Country" },
-    { id: "filter-state",     key: "state",     label: "State" },
-    { id: "filter-hynek",     key: "hynek",     label: "Hynek" },
-    { id: "filter-vallee",    key: "vallee",    label: "Vallee" },
-    { id: "coords-filter",    key: "coords",    label: "Coords" },
+    { id: "filter-color",     key: "color",     label: "Color" },
+    { id: "filter-emotion",   key: "emotion",   label: "Emotion" },
 ];
 
 // Source colors for chart and badges
@@ -467,100 +468,150 @@ function isAbortError(err) {
 }
 
 function getFilterParams() {
+    // v0.8.7: serializes the 6 Observatory filter fields plus the
+    // multi-select movement cluster. Country / State / Hynek / Vallee /
+    // Collection / Coords are gone (no buffer byte slot) and the old
+    // Search panel's `q` param is gone with the panel.
     const p = new URLSearchParams();
-    const df = document.getElementById("filter-date-from").value;
-    const dt = document.getElementById("filter-date-to").value;
-    const shape = document.getElementById("filter-shape").value;
-    const collection = document.getElementById("filter-collection").value;
-    const source = document.getElementById("filter-source").value;
-    const country = document.getElementById("filter-country")?.value;
-    const stateVal = document.getElementById("filter-state")?.value;
-    const hynek = document.getElementById("filter-hynek").value;
-    const vallee = document.getElementById("filter-vallee").value;
-    const coords = document.getElementById("coords-filter").value;
+    const df = document.getElementById("filter-date-from")?.value || "";
+    const dt = document.getElementById("filter-date-to")?.value || "";
+    const shape = document.getElementById("filter-shape")?.value || "";
+    const source = document.getElementById("filter-source")?.value || "";
+    const color = document.getElementById("filter-color")?.value || "";
+    const emotion = document.getElementById("filter-emotion")?.value || "";
 
     if (df) p.set("date_from", df);
     if (dt) p.set("date_to", dt);
     if (shape) p.set("shape", shape);
-    if (collection) p.set("collection", collection);
     if (source) p.set("source", source);
-    if (country) p.set("country", country);
-    if (stateVal) p.set("state", stateVal);
-    if (hynek) p.set("hynek", hynek);
-    if (vallee) p.set("vallee", vallee);
-    if (coords && coords !== "all") p.set("coords", coords);
+    if (color) p.set("color", color);
+    if (emotion) p.set("emotion", emotion);
+
+    // Movement cluster is multi-select; serialize as comma-separated.
+    // _readMovementCats returns [] when nothing is checked, which
+    // means the `movement` param is omitted (no filter).
+    const movs = _readMovementCats();
+    if (movs.length) p.set("movement", movs.join(","));
 
     return p;
 }
 
+// v0.8.7 — collect the checked categories from the movement cluster.
+// Returns an array of category names that match POINTS.movements
+// entries verbatim, or [] when nothing is selected. Safe to call
+// before the cluster is mounted (returns [] if the host element
+// doesn't exist yet).
+function _readMovementCats() {
+    const boxes = document.querySelectorAll(".movement-cluster input[type='checkbox']:checked");
+    if (!boxes.length) return [];
+    const out = [];
+    for (const b of boxes) {
+        if (b.value) out.push(b.value);
+    }
+    return out;
+}
+
+// v0.8.7: populateFilterDropdowns is now responsible only for the
+// source dropdown (which needs source_database IDs from the server)
+// and the __sourceMap lookup table. Shape / Color / Emotion / Movement
+// are populated from POINTS metadata after bootDeckGL completes via
+// populateFilterDropdownsFromDeck() below, so they use the canonical
+// standardized lists the bulk buffer was built with. Country / State /
+// Hynek / Vallee / Collection were deleted in v0.8.7 (no buffer byte
+// slot).
 function populateFilterDropdowns(data) {
-    const shapeSelect = document.getElementById("filter-shape");
-    (data.shapes || []).forEach(s => {
-        const opt = document.createElement("option");
-        opt.value = s;
-        opt.textContent = s;
-        shapeSelect.appendChild(opt);
-    });
-
-    const collectionSelect = document.getElementById("filter-collection");
-    (data.collections || []).forEach(c => {
-        const opt = document.createElement("option");
-        opt.value = c.id;
-        opt.textContent = c.display_name || c.name;
-        collectionSelect.appendChild(opt);
-    });
-
     const sourceSelect = document.getElementById("filter-source");
-    // Lookup table used by the timeline click handler to map a source
-    // name (from the chart legend) back to its numeric id.
-    window.__sourceMap = {};
-    (data.sources || []).forEach(s => {
-        window.__sourceMap[s.name] = s;
-        const opt = document.createElement("option");
-        opt.value = s.id;
-        opt.textContent = s.name;
-        sourceSelect.appendChild(opt);
-    });
-
-    const countrySelect = document.getElementById("filter-country");
-    if (countrySelect) {
-        (data.countries || []).forEach(c => {
+    if (sourceSelect) {
+        // Lookup table used by chart legend callbacks to map a
+        // source name back to its numeric id.
+        window.__sourceMap = {};
+        (data.sources || []).forEach(s => {
+            window.__sourceMap[s.name] = s;
             const opt = document.createElement("option");
-            opt.value = c.value;
-            opt.textContent = `${c.value} (${c.count.toLocaleString()})`;
-            countrySelect.appendChild(opt);
+            opt.value = s.id;
+            opt.textContent = s.name;
+            sourceSelect.appendChild(opt);
         });
     }
+    // Shape / color / emotion / movement arrive later via
+    // populateFilterDropdownsFromDeck(), called from bootDeckGL()
+    // and _wireTimeBrushToDeck() once POINTS.ready flips.
+}
 
-    const stateSelect = document.getElementById("filter-state");
-    if (stateSelect) {
-        (data.states || []).forEach(st => {
-            const opt = document.createElement("option");
-            opt.value = st.value;
-            opt.textContent = `${st.value} (${st.count.toLocaleString()})`;
-            stateSelect.appendChild(opt);
-        });
+// v0.8.7 — populate shape / color / emotion dropdowns and the
+// movement checkbox cluster from POINTS metadata. Called after
+// bootDeckGL() completes so POINTS.shapes / .colors / .emotions /
+// .movements are the canonical standardized lists the bulk buffer
+// was built with (vs. /api/filters returning raw per-source shape
+// strings). Idempotent — each helper clears its target's innerHTML
+// before re-populating, so double-runs are safe.
+function populateFilterDropdownsFromDeck() {
+    if (!window.UFODeck || !window.UFODeck.POINTS || !window.UFODeck.POINTS.ready) {
+        return;
     }
+    const P = window.UFODeck.POINTS;
+    _populateLookupDropdown("filter-shape",   P.shapes,   "All shapes");
+    _populateLookupDropdown("filter-color",   P.colors,   "All colors");
+    _populateLookupDropdown("filter-emotion", P.emotions, "All emotions");
+    _mountMovementCluster(P.movements);
+}
 
-    const hynekSelect = document.getElementById("filter-hynek");
-    (data.hynek || []).forEach(h => {
-        const opt = document.createElement("option");
-        opt.value = h;
-        opt.textContent = h;
-        hynekSelect.appendChild(opt);
-    });
-
-    const valleeSelect = document.getElementById("filter-vallee");
-    (data.vallee || []).forEach(v => {
+// Blank a <select>, write a placeholder option, then append one
+// <option> per non-null entry in `values`. Preserves any existing
+// selection across re-population (applied if still present in the
+// new list).
+function _populateLookupDropdown(id, values, placeholder) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const prev = el.value;
+    el.innerHTML = `<option value="">${escapeHtml(placeholder)}</option>`;
+    for (const v of (values || [])) {
+        if (!v) continue;  // skip index-0 "unknown" placeholder
         const opt = document.createElement("option");
         opt.value = v;
         opt.textContent = v;
-        valleeSelect.appendChild(opt);
-    });
+        el.appendChild(opt);
+    }
+    if (prev) {
+        // Only restore the previous value if it still exists as
+        // an option — avoids the dropdown silently swapping to
+        // blank on a re-populate.
+        const hit = Array.from(el.options).some(o => o.value === prev);
+        if (hit) el.value = prev;
+    }
+}
 
-    // v0.8.6: Duplicates dropdowns removed along with the Duplicates
-    // panel. If the filters endpoint still returns match_methods /
-    // sources we silently ignore them here.
+// Render the 10-pill movement cluster. Each pill is a checkbox
+// labelled with the category name; the checkbox value matches
+// POINTS.movements verbatim so _readMovementCats returns strings
+// that _rebuildVisible's indexOf lookup recognises. Change events
+// trigger applyFilters() for immediate re-tally.
+function _mountMovementCluster(movements) {
+    const host = document.getElementById("filter-movement-cluster");
+    if (!host || !Array.isArray(movements)) return;
+    // Preserve any existing checked state so re-mount doesn't wipe
+    // the user's selection. Merge with any hash-restore intent from
+    // state.pendingMovementFilter (set by applyHashToFilters when
+    // the cluster wasn't mounted yet at deep-link restore time).
+    const prevChecked = new Set(
+        Array.from(host.querySelectorAll("input[type='checkbox']:checked"))
+            .map(b => b.value),
+    );
+    const pending = state.pendingMovementFilter;
+    const initial = pending instanceof Set ? pending : prevChecked;
+    if (pending) state.pendingMovementFilter = null;  // consume
+    host.innerHTML = "";
+    for (const name of movements) {
+        if (!name) continue;  // skip the index-0 sentinel if any
+        const label = document.createElement("label");
+        label.className = "movement-chip-label";
+        const safe = escapeHtml(name);
+        label.innerHTML = `<input type="checkbox" value="${safe}"><span>${safe}</span>`;
+        host.appendChild(label);
+        const input = label.querySelector("input");
+        if (initial.has(name)) input.checked = true;
+        input.addEventListener("change", () => applyFilters());
+    }
 }
 
 /**
@@ -809,15 +860,27 @@ async function applyFilters() {
 }
 
 function clearFilters() {
-    document.getElementById("filter-date-from").value = "";
-    document.getElementById("filter-date-to").value = "";
-    document.getElementById("filter-shape").value = "";
-    document.getElementById("filter-collection").value = "";
-    document.getElementById("filter-source").value = "";
-    document.getElementById("filter-country").value = "";
-    document.getElementById("filter-state").value = "";
-    document.getElementById("filter-hynek").value = "";
-    document.getElementById("filter-vallee").value = "";
+    // v0.8.7 — drive the clear from FILTER_FIELDS so adding a new
+    // filter automatically wires it into the Clear button without
+    // touching this function. Movement cluster is separate because
+    // it's not a single input.
+    FILTER_FIELDS.forEach(({ id }) => {
+        const el = document.getElementById(id);
+        if (el) el.value = "";
+    });
+    // Uncheck every movement category
+    document.querySelectorAll(".movement-cluster input[type='checkbox']")
+        .forEach(b => { b.checked = false; });
+    // Also reset the Quality rail toggles
+    if (state.qualityFilter) {
+        state.qualityFilter.highQuality = false;
+        state.qualityFilter.hideHoaxes = false;
+        state.qualityFilter.hasDescription = null;
+        state.qualityFilter.hasMedia = null;
+        state.qualityFilter.hasMovement = null;
+    }
+    document.querySelectorAll("#rail-quality-list input[type='checkbox']")
+        .forEach(b => { b.checked = false; });
     applyFilters();
 }
 
@@ -829,10 +892,14 @@ function writeHash() {
     const params = new URLSearchParams();
     FILTER_FIELDS.forEach(({ id, key }) => {
         const v = document.getElementById(id);
-        if (v && v.value && !(key === "coords" && v.value === "all")) {
+        if (v && v.value) {
             params.set(key, v.value);
         }
     });
+    // v0.8.7: movement cluster is multi-select; serialize as a
+    // comma-separated `movement` param when any are checked.
+    const movs = _readMovementCats();
+    if (movs.length) params.set("movement", movs.join(","));
     // v0.8.6: no per-tab search state to serialise. The Observatory
     // owns all filter state via FILTER_FIELDS above, and there's no
     // free-text `q` or pagination to persist anymore.
@@ -860,6 +927,24 @@ function applyHashToFilters(params) {
             const v = params.get(key);
             if (v != null) el.value = v;
         });
+        // v0.8.7 — movement cluster deep-link restore. The cluster
+        // might not be mounted yet (it waits for POINTS.ready), so
+        // stash the wanted-set on state for _mountMovementCluster
+        // to apply when it runs. When the cluster IS already
+        // mounted (e.g. tab switch, hash update), apply directly.
+        const movParam = params.get("movement");
+        if (movParam) {
+            const wanted = new Set(movParam.split(",").filter(Boolean));
+            state.pendingMovementFilter = wanted;
+            const boxes = document.querySelectorAll(
+                ".movement-cluster input[type='checkbox']",
+            );
+            if (boxes.length) {
+                boxes.forEach(b => { b.checked = wanted.has(b.value); });
+            }
+        } else {
+            state.pendingMovementFilter = null;
+        }
         // v0.8.6: the legacy `q`, `page`, and `sort` URL params
         // belonged to the removed Search tab. Silently ignored so
         // pre-v0.8.6 deep links don't throw.
@@ -1182,6 +1267,28 @@ async function bootDeckGL() {
     // finished loading, wire its fast path + swap its histogram to
     // the client-computed one now.
     _wireTimeBrushToDeck();
+
+    // v0.8.7 — populate the shape/color/emotion dropdowns and the
+    // movement cluster from POINTS metadata, now that the bulk
+    // buffer is ready. These dropdowns are intentionally empty in
+    // the server-side /api/filters response because POINTS has the
+    // canonical standardized lists (shape_source = "standardized").
+    // Safe to call before the Observatory DOM exists — each helper
+    // no-ops if its target element is missing, and re-runs when
+    // the user first opens Observatory.
+    if (typeof populateFilterDropdownsFromDeck === "function") {
+        populateFilterDropdownsFromDeck();
+    }
+
+    // v0.8.7 — re-run mountQualityRail now that POINTS.ready is true.
+    // The first call from loadObservatory() (if it ran before
+    // bootDeckGL finished) rendered every toggle as disabled because
+    // getCoverage() returned {}. Re-mounting picks up the real
+    // coverage numbers and wires the change handlers. mountQualityRail
+    // is idempotent (blanks innerHTML on every call).
+    if (typeof mountQualityRail === "function") {
+        mountQualityRail();
+    }
 
     console.info("[v0.8] deck.gl layer mounted — GPU path active");
 }
@@ -1526,6 +1633,9 @@ function applyClientFilters() {
         shapeName:  document.getElementById("filter-shape")?.value  || null,
         colorName:  document.getElementById("filter-color")?.value  || null,
         emotionName: document.getElementById("filter-emotion")?.value || null,
+        // v0.8.7 — multi-select movement category cluster. Array of
+        // category names (OR-semantics bit mask in _rebuildVisible).
+        movementCats: _readMovementCats(),
         yearFrom:   _parseYearFilter(document.getElementById("filter-date-from")?.value),
         yearTo:     _parseYearFilter(document.getElementById("filter-date-to")?.value),
         bbox: null,  // deck.gl clips by viewport automatically, skip the CPU cull
@@ -1533,7 +1643,7 @@ function applyClientFilters() {
         hoaxMax:     q.hideHoaxes   ? (q.hoaxThreshold || 50)    : null,
         hasDescription: q.hasDescription,
         hasMedia:       q.hasMedia,
-        // v0.8.5 — v0.8.3b movement classification
+        // v0.8.5 — v0.8.3b movement classification (boolean: any bit)
         hasMovement:    q.hasMovement,
     };
     window.UFODeck.applyClientFilters(filter);
@@ -1577,6 +1687,9 @@ function _countActiveFilters(f) {
     if (f.shapeName) n++;
     if (f.colorName) n++;
     if (f.emotionName) n++;
+    // v0.8.7 — movement cluster counts as one active filter
+    // regardless of how many categories are checked.
+    if (Array.isArray(f.movementCats) && f.movementCats.length) n++;
     if (f.yearFrom != null) n++;
     if (f.yearTo != null) n++;
     if (f.qualityMin != null) n++;
@@ -1783,8 +1896,16 @@ function mountObservatoryRail() {
 function mountQualityRail() {
     const host = document.getElementById("rail-quality-list");
     if (!host) return;
-    if (host.dataset.mounted === "1") return;
-    host.dataset.mounted = "1";
+
+    // v0.8.7: the old `dataset.mounted` idempotent guard has been
+    // removed. The first call from loadObservatory() runs BEFORE
+    // bootDeckGL() completes, which means getCoverage() returns {}
+    // and every toggle gets populated=false → cursor:not-allowed +
+    // permanently disabled event handlers. Removing the guard lets
+    // _wireTimeBrushToDeck() re-run mountQualityRail after the bulk
+    // buffer lands, picking up the real coverage numbers and wiring
+    // the change handlers. `host.innerHTML = ""` below blanks the
+    // list on every call, so re-mounting is safe.
 
     state.qualityFilter = state.qualityFilter || {
         highQuality: false,
@@ -1794,8 +1915,17 @@ function mountQualityRail() {
         hasMovement: null,  // v0.8.5 — v0.8.3b movement classification
     };
 
-    const coverage = (window.UFODeck && window.UFODeck.getCoverage)
-        ? window.UFODeck.getCoverage() : {};
+    // v0.8.7: gate on POINTS.ready too, not just the presence of
+    // the function. On a WebGL-disabled browser UFODeck might exist
+    // but never flip to ready; we want the rail to render as
+    // disabled in that case instead of silently mounting with
+    // coverage={}.
+    const coverage = (
+        window.UFODeck
+        && typeof window.UFODeck.getCoverage === "function"
+        && window.UFODeck.POINTS
+        && window.UFODeck.POINTS.ready
+    ) ? window.UFODeck.getCoverage() : {};
     const cov = (key) => (coverage[key] || 0);
 
     // Threshold semantics locked by the brief:

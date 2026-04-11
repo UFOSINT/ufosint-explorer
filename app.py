@@ -275,79 +275,53 @@ FILTER_CACHE = {}
 
 
 def init_filters():
-    """Load distinct filter values once at startup."""
+    """Load distinct filter values once at startup.
+
+    v0.8.7: pruned to the 4 filter types the Observatory client
+    actually uses. The frontend now populates shape/color/emotion
+    dropdowns from POINTS metadata (so they use the canonical
+    standardized lists the bulk buffer was built with), so
+    technically only `sources` is consumed client-side. We keep
+    shapes/colors/emotions here as a defensive compatibility shim
+    for dev tools hitting /api/filters directly — but they use
+    the standardized_shape column, not the raw `shape` column,
+    so they match what the Observatory actually filters on.
+
+    Dropped in v0.8.7: hynek, vallee, collections, countries,
+    states, match_methods. Each had no byte slot in the 32-byte
+    bulk row and nothing in the v0.8.7 UI drives them.
+    """
     conn = get_db()
     cur = conn.cursor()
 
+    # Standardized shape (NOT raw shape — the raw column has
+    # mixed-case duplicates like "Disk" vs "Disc" that the
+    # v0.8.3b classifier collapses into the standardized list).
     cur.execute("""
-        SELECT DISTINCT shape FROM sighting
-        WHERE shape IS NOT NULL AND shape != ''
-        ORDER BY shape
+        SELECT DISTINCT standardized_shape FROM sighting
+        WHERE standardized_shape IS NOT NULL AND standardized_shape != ''
+        ORDER BY standardized_shape
     """)
     FILTER_CACHE["shapes"] = [r[0] for r in cur.fetchall()]
 
-    cur.execute("""
-        SELECT DISTINCT hynek FROM sighting
-        WHERE hynek IS NOT NULL AND hynek != ''
-        ORDER BY hynek
-    """)
-    FILTER_CACHE["hynek"] = [r[0] for r in cur.fetchall()]
-
-    cur.execute("""
-        SELECT DISTINCT vallee FROM sighting
-        WHERE vallee IS NOT NULL AND vallee != ''
-        ORDER BY vallee
-    """)
-    FILTER_CACHE["vallee"] = [r[0] for r in cur.fetchall()]
-
     cur.execute("SELECT id, name FROM source_database ORDER BY name")
-    FILTER_CACHE["sources"] = [{"id": r[0], "name": r[1]} for r in cur.fetchall()]
-
-    cur.execute("SELECT id, name, display_name FROM source_collection ORDER BY name")
-    FILTER_CACHE["collections"] = [{"id": r[0], "name": r[1], "display_name": r[2]} for r in cur.fetchall()]
-
-    # Cache distinct match methods for duplicates filter
-    cur.execute("""
-        SELECT DISTINCT match_method FROM duplicate_candidate
-        WHERE match_method IS NOT NULL
-        ORDER BY match_method
-    """)
-    FILTER_CACHE["match_methods"] = [r[0] for r in cur.fetchall()]
-
-    # Top countries by sighting count, used by the Country filter dropdown.
-    # We pick the top 60 to keep the dropdown manageable; users who need
-    # more granular geographic filtering can use the place-search box on
-    # the Map tab. The HAVING clause excludes single-row noise.
-    cur.execute("""
-        SELECT l.country, COUNT(*) AS n
-        FROM location l
-        JOIN sighting s ON s.location_id = l.id
-        WHERE l.country IS NOT NULL AND l.country != ''
-        GROUP BY l.country
-        HAVING COUNT(*) >= 5
-        ORDER BY n DESC
-        LIMIT 60
-    """)
-    FILTER_CACHE["countries"] = [
-        {"value": r[0], "count": r[1]} for r in cur.fetchall()
+    FILTER_CACHE["sources"] = [
+        {"id": r[0], "name": r[1]} for r in cur.fetchall()
     ]
 
-    # Top states by sighting count. The data is dominated by US states +
-    # Canadian provinces but also has some UK counties and stray noise;
-    # the HAVING + LIMIT keep the dropdown to the meaningful long tail.
     cur.execute("""
-        SELECT l.state, COUNT(*) AS n
-        FROM location l
-        JOIN sighting s ON s.location_id = l.id
-        WHERE l.state IS NOT NULL AND l.state != ''
-        GROUP BY l.state
-        HAVING COUNT(*) >= 50
-        ORDER BY n DESC
-        LIMIT 100
+        SELECT DISTINCT primary_color FROM sighting
+        WHERE primary_color IS NOT NULL AND primary_color != ''
+        ORDER BY primary_color
     """)
-    FILTER_CACHE["states"] = [
-        {"value": r[0], "count": r[1]} for r in cur.fetchall()
-    ]
+    FILTER_CACHE["colors"] = [r[0] for r in cur.fetchall()]
+
+    cur.execute("""
+        SELECT DISTINCT dominant_emotion FROM sighting
+        WHERE dominant_emotion IS NOT NULL AND dominant_emotion != ''
+        ORDER BY dominant_emotion
+    """)
+    FILTER_CACHE["emotions"] = [r[0] for r in cur.fetchall()]
 
     conn.close()
 
@@ -361,12 +335,25 @@ def add_common_filters(params, clauses, args, table_prefix="s"):
 
     PostgreSQL uses %s placeholders (vs SQLite's ?). All callers append
     args via this helper so the placeholders match the args list ordering.
+
+    v0.8.7: reduced to the 6 filters the Observatory bulk buffer
+    actually exposes (shape, source, color, emotion, date_from,
+    date_to). Country / state / hynek / vallee / collection / coords
+    were deleted because nothing in the UI drives them anymore and the
+    underlying data isn't in the 32-byte bulk row. Scripted callers
+    sending the old query params get them silently ignored — the
+    route still returns 200 with an unfiltered result set.
+
+    Also in v0.8.7: the `shape` param matches against
+    `standardized_shape` (the v0.8.3b classified column), not the
+    raw per-source `shape` column, so it agrees with the Observatory
+    dropdown's canonical list.
     """
     p = table_prefix
 
     shape = params.get("shape")
     if shape:
-        clauses.append(f"{p}.shape = %s")
+        clauses.append(f"{p}.standardized_shape = %s")
         args.append(shape)
 
     source = params.get("source")
@@ -374,20 +361,15 @@ def add_common_filters(params, clauses, args, table_prefix="s"):
         clauses.append(f"{p}.source_db_id = %s")
         args.append(int(source))
 
-    collection = params.get("collection")
-    if collection:
-        clauses.append(f"{p}.source_db_id IN (SELECT id FROM source_database WHERE collection_id = %s)")
-        args.append(int(collection))
+    color = params.get("color")
+    if color:
+        clauses.append(f"{p}.primary_color = %s")
+        args.append(color)
 
-    hynek = params.get("hynek")
-    if hynek:
-        clauses.append(f"{p}.hynek = %s")
-        args.append(hynek)
-
-    vallee = params.get("vallee")
-    if vallee:
-        clauses.append(f"{p}.vallee = %s")
-        args.append(vallee)
+    emotion = params.get("emotion")
+    if emotion:
+        clauses.append(f"{p}.dominant_emotion = %s")
+        args.append(emotion)
 
     date_from = params.get("date_from")
     if date_from:
@@ -399,27 +381,6 @@ def add_common_filters(params, clauses, args, table_prefix="s"):
         clauses.append(f"{p}.date_event <= %s")
         args.append(date_to + "-12-31" if len(date_to) == 4 else date_to)
 
-    # Geographic filters — exact match on the location table.
-    # IMPORTANT: any caller using these (or the coords filter below)
-    # must LEFT JOIN location l in its FROM clause.
-    country = params.get("country")
-    if country:
-        clauses.append("l.country = %s")
-        args.append(country)
-
-    state = params.get("state")
-    if state:
-        clauses.append("l.state = %s")
-        args.append(state)
-
-    # Coordinate source filter (for map/heatmap)
-    coords = params.get("coords")
-    if coords == "original":
-        clauses.append("l.geocode_src IS NULL")
-    elif coords == "geocoded":
-        clauses.append("l.geocode_src IS NOT NULL")
-    # "all" or empty = no filter (show everything)
-
     return clauses, args
 
 
@@ -429,8 +390,8 @@ def add_common_filters(params, clauses, args, table_prefix="s"):
 # add a new filter key there, add it here too or the MV path will serve
 # stale/incorrect results for that filter.
 _COMMON_FILTER_KEYS = frozenset({
-    "shape", "source", "collection", "hynek", "vallee",
-    "date_from", "date_to", "country", "state", "coords",
+    "shape", "source", "color", "emotion",
+    "date_from", "date_to",
 })
 
 

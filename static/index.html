@@ -167,42 +167,42 @@
             <label class="sr-only" for="filter-date-to">To date</label>
             <input type="text" id="filter-date-to" placeholder="YYYY or YYYY-MM-DD" size="14" />
         </fieldset>
+        <!-- v0.8.7: filter bar now only shows filters backed by a
+             dedicated byte slot in the 32-byte bulk row. Shape, Source,
+             Color, Emotion are populated from POINTS metadata after
+             bootDeckGL() completes so they use the canonical
+             standardized lists. Country / State / Hynek / Vallee /
+             Collection were deleted because they had no client-side
+             filter wiring and the data wasn't in the buffer anyway. -->
         <div class="filter-group">
             <label for="filter-shape">Shape</label>
-            <select id="filter-shape"><option value="">All</option></select>
+            <select id="filter-shape"><option value="">All shapes</option></select>
         </div>
         <div class="filter-group">
             <label for="filter-source">Source</label>
-            <select id="filter-source"><option value="">All</option></select>
+            <select id="filter-source"><option value="">All sources</option></select>
         </div>
         <div class="filter-group">
-            <label for="filter-country">Country</label>
-            <select id="filter-country"><option value="">All</option></select>
+            <label for="filter-color">Color</label>
+            <select id="filter-color"><option value="">All colors</option></select>
         </div>
         <div class="filter-group">
-            <label for="filter-state">State / Region</label>
-            <select id="filter-state"><option value="">All</option></select>
-        </div>
-        <button id="btn-more-filters" class="btn btn-secondary btn-small" type="button" aria-expanded="false" aria-controls="filters-advanced">
-            More filters
-            <span class="filter-count-badge" id="more-filter-count" hidden>0</span>
-        </button>
-        <div class="filters-advanced" id="filters-advanced" hidden>
-            <div class="filter-group">
-                <label for="filter-collection">Collection</label>
-                <select id="filter-collection"><option value="">All</option></select>
-            </div>
-            <div class="filter-group">
-                <label for="filter-hynek">Hynek</label>
-                <select id="filter-hynek"><option value="">All</option></select>
-            </div>
-            <div class="filter-group">
-                <label for="filter-vallee">Vallee</label>
-                <select id="filter-vallee"><option value="">All</option></select>
-            </div>
+            <label for="filter-emotion">Emotion</label>
+            <select id="filter-emotion"><option value="">All emotions</option></select>
         </div>
         <button id="btn-apply-filters" class="btn btn-primary">Apply</button>
         <button id="btn-clear-filters" class="btn btn-secondary">Clear</button>
+    </div>
+
+    <!-- v0.8.7 — Movement category cluster. 10 multi-select checkboxes
+         populated from POINTS.movements after bootDeckGL completes.
+         OR semantics: a sighting matches if ANY checked category's bit
+         is set in its movement_flags uint16. -->
+    <div class="filter-movement-row">
+        <span class="movement-label">Movement</span>
+        <div class="movement-cluster" id="filter-movement-cluster">
+            <!-- Populated dynamically from POINTS.movements -->
+        </div>
     </div>
 
     <!-- Main Content Panels -->
@@ -260,14 +260,10 @@
                         <button id="btn-place-search" class="btn btn-primary btn-small" title="Search">Go</button>
                         <button id="btn-locate-me" class="btn btn-secondary btn-small" title="Use my current location"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg> Near me</button>
                     </div>
-                    <div class="coords-toggle">
-                        <label class="sr-only" for="coords-filter">Coordinate source</label>
-                        <select id="coords-filter" title="Coordinate source" aria-label="Coordinate source">
-                            <option value="all">All Coords</option>
-                            <option value="original">Original Only</option>
-                            <option value="geocoded">Geocoded Only</option>
-                        </select>
-                    </div>
+                    <!-- v0.8.7: coords-filter dropdown removed. Its
+                         only sink was the server-side `coords` query
+                         param on /api/map, which was never wired into
+                         the client-side bulk buffer filter pipeline. -->
                     <div id="map-status" class="panel-status" aria-live="polite">READY</div>
                     <button id="btn-load-all" class="btn-load-all" style="display:none" onclick="loadAll()">Load All</button>
                     <div class="hud-brackets" aria-hidden="true">

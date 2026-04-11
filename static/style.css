@@ -427,6 +427,84 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
    wiring while removing them from the visual layout. */
 .hidden { display: none !important; }
 
+/* ---- Movement cluster (v0.8.7) ----
+   Renders below #filters-bar as a second row of 10 pill checkboxes,
+   populated after bootDeckGL completes. Multi-select, OR semantics.
+   A sighting matches if ANY checked category's bit is set in its
+   movement_flags uint16. Empty = no filter. */
+.filter-movement-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 16px;
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+    flex-shrink: 0;
+}
+.movement-label {
+    font-size: 10px;
+    color: var(--text-muted);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    font-weight: 600;
+}
+.movement-cluster {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.movement-cluster:empty::before {
+    /* Placeholder shown before POINTS.ready flips and
+       _mountMovementCluster runs */
+    content: "loading…";
+    font-size: 11px;
+    color: var(--text-muted);
+    opacity: 0.6;
+}
+.movement-chip-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-size: 11px;
+    letter-spacing: 0.03em;
+    color: var(--text);
+    background: var(--bg-card, var(--bg-input));
+    cursor: pointer;
+    user-select: none;
+    transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
+    text-transform: capitalize;
+}
+.movement-chip-label:hover {
+    border-color: var(--accent);
+}
+.movement-chip-label input[type="checkbox"] {
+    width: 12px;
+    height: 12px;
+    margin: 0;
+    cursor: pointer;
+    accent-color: var(--accent);
+}
+.movement-chip-label:has(input:checked) {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--bg);
+    font-weight: 600;
+}
+@media (max-width: 800px) {
+    .filter-movement-row {
+        padding: 6px 12px;
+        gap: 8px;
+    }
+    .movement-chip-label {
+        padding: 3px 8px;
+        font-size: 10px;
+    }
+}
+
 /* ---- Filters Bar ---- */
 #filters-bar {
     display: flex;
@@ -2575,13 +2653,9 @@ select:focus {
    stats popover
    ========================================================================= */
 
-/* The new Country and State filter dropdowns inherit .filter-group styles
-   automatically, but they can get wide because the option text includes
-   the count. Cap them. */
-#filter-country,
-#filter-state {
-    max-width: 180px;
-}
+/* v0.8.7: Country / State / Hynek / Vallee / Collection dropdowns
+   were deleted because they had no byte slot in the bulk buffer.
+   Their .filter-group CSS inheritance is now dead code. */
 
 /* The Date Range fieldset added in Sprint 1 needs a tiny bit of cleanup
    so the legend doesn't read as a heading and the inputs sit flush. */
