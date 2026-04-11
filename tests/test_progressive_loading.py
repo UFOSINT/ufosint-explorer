@@ -131,32 +131,28 @@ def test_show_progressive_loading_called_from_load_paths():
 
 
 def test_hide_progressive_loading_called_in_finally_paths():
-    """hideProgressiveLoading must run on success AND failure. We
-    check for >= 3 callsites (timeline finally, search success,
-    search catch). Missing one leaves the dim hanging forever."""
+    """hideProgressiveLoading must run on success AND failure paths
+    of any loader that still uses the overlay. v0.8.6 removed the
+    Timeline and Search overlays (Timeline became client-side,
+    Search was deleted) so the callsite count dropped — but the
+    helper is still wired into map loaders, so at least one must
+    remain to prove the helper isn't orphaned."""
     content = _read(APP_JS)
     callsites = content.count("hideProgressiveLoading(")
-    assert callsites >= 3, (
-        f"hideProgressiveLoading only called {callsites} times — "
-        f"missing one means a failing fetch leaves the panel dimmed forever"
+    assert callsites >= 1, (
+        "hideProgressiveLoading is orphaned (0 callsites). Every "
+        "showProgressiveLoading in a try-block must have a matching "
+        "hideProgressiveLoading in finally."
     )
 
 
-def test_load_timeline_uses_chart_update_not_destroy():
-    """The whole point of v0.6 is that the chart instance survives
-    between loads and we call chart.update() to animate the
-    transition. If someone reverts to chart.destroy() + new Chart(),
-    the visual win is gone."""
+def test_load_timeline_no_longer_touches_chart_js_destroy():
+    """v0.8.6: loadTimeline renders 3 client-side cards that use
+    chart.update("none") for instant refresh and never call
+    chart.destroy(). The old v0.6 chart.update("active") transition
+    is gone because the new cards animate their own entry via the
+    CSS grid layout instead of Chart.js internal animations."""
     content = _read(APP_JS)
-    # Look for the loadTimeline body — it's a few hundred lines.
-    # The key invariant: chart.update("active") must appear, and
-    # chart.destroy() must NOT (it was the v0.5 pattern).
-    assert 'state.chart.update("active")' in content, (
-        "loadTimeline no longer calls chart.update('active') — the "
-        "progressive transition is broken"
-    )
-    # state.chart.destroy() should be gone from loadTimeline.
-    # (It may still appear elsewhere if we ever add other charts.)
     timeline_section = re.search(
         r"async function loadTimeline\(\).*?^\}",
         content,
@@ -164,28 +160,17 @@ def test_load_timeline_uses_chart_update_not_destroy():
     )
     assert timeline_section, "couldn't isolate loadTimeline body"
     assert "state.chart.destroy()" not in timeline_section.group(0), (
-        "loadTimeline still calls state.chart.destroy() — that's the "
-        "v0.5 destroy/recreate pattern, the v0.6 fix is chart.update()"
+        "loadTimeline must never call destroy — the chart instance "
+        "survives between refreshes so Chart.js can animate changes"
     )
 
 
-def test_execute_search_skeleton_only_on_cold_start():
-    """The skeleton-card markup should only be rendered when the
-    results panel is empty — the conditional check on
-    `hasExistingResults` is the gate."""
-    content = _read(APP_JS)
-    assert "hasExistingResults" in content, (
-        "executeSearch missing hasExistingResults gate — it's still "
-        "blanking the results list on every search"
-    )
-
-
-def test_search_result_cards_carry_is_new_class():
-    """New search result cards need the .is-new class + the --i
-    custom property to trigger the stagger animation."""
-    content = _read(APP_JS)
-    assert 'card.className = "result-card is-new"' in content
-    assert 'card.style.setProperty("--i", String(idx))' in content
+# v0.8.6: test_execute_search_skeleton_only_on_cold_start and
+# test_search_result_cards_carry_is_new_class were deleted. The
+# Search panel's executeSearch() + result-card rendering code is
+# gone. The Observatory's client-side filter pipeline doesn't
+# render a "results list" — the map markers ARE the results — so
+# there's no cold-start skeleton or is-new stagger class to check.
 
 
 def test_load_map_markers_uses_progressive_dim():

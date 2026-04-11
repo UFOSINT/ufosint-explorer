@@ -15,11 +15,8 @@ const state = {
     mapMode: "points",    // "points" (clustered markers) | "heatmap" | "hexbin" — v0.7 renamed "clusters" → "points"
     chart: null,
     timelineYear: null,  // null = yearly view, "2005" = monthly drill-down
-    searchPage: 0,
-    searchTotal: 0,
-    searchSort: "date_desc",   // date_desc | date_asc
-    dupesPage: 0,
-    dupesTotal: 0,
+    // v0.8.6: searchPage/searchTotal/searchSort/dupesPage/dupesTotal
+    // were removed along with the Search + Duplicates panels.
     insightsCharts: {},  // { radar, timeline, source, shape }
     // Set to true while we're loading state from the URL hash on
     // navigation, so the hash-update side effect is suppressed.
@@ -151,40 +148,16 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
     });
 
-    // Search
-    document.getElementById("btn-search").addEventListener("click", doSearch);
-    document.getElementById("search-input").addEventListener("keydown", e => {
-        if (e.key === "Enter") doSearch();
-    });
-    const sortEl = document.getElementById("search-sort");
-    if (sortEl) {
-        sortEl.addEventListener("change", () => {
-            state.searchSort = sortEl.value;
-            executeSearch();
-        });
-    }
+    // v0.8.6: Search panel, Duplicates panel, and Timeline drill-down
+    // "back" button were all removed. Search semantics moved to the
+    // Observatory rail filters; the v0.8.3b export ships zero
+    // duplicate candidates; the new Timeline dashboard doesn't drill
+    // into monthly sub-views so no back button is needed.
 
     // Modal
     document.getElementById("modal-close").addEventListener("click", closeModal);
     document.getElementById("modal-overlay").addEventListener("click", e => {
         if (e.target === e.currentTarget) closeModal();
-    });
-
-    // Timeline back button
-    document.getElementById("timeline-back").addEventListener("click", () => {
-        state.timelineYear = null;
-        loadTimeline();
-    });
-
-    // Duplicates
-    document.getElementById("btn-dupes-apply").addEventListener("click", () => {
-        state.dupesPage = 0;
-        document.getElementById("dupes-results").innerHTML = "";
-        loadDuplicates();
-    });
-    document.getElementById("btn-dupes-more").addEventListener("click", () => {
-        state.dupesPage++;
-        loadDuplicates(true);
     });
 
     // Map mode toggle (Clusters / Heatmap)
@@ -202,8 +175,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     // Map place search (Nominatim) + browser geolocation
     initMapPlaceSearch();
 
-    // Search panel: export buttons + copy-link button
-    initSearchActions();
+    // v0.8.6: initSearchActions() removed with the Search panel.
+    // /api/export.csv and /api/export.json still work via direct URL
+    // but are no longer wired to any UI button.
 
     // BYOK AI chat
     loadAISettings();
@@ -238,13 +212,10 @@ document.addEventListener("DOMContentLoaded", async () => {
         if (initial.tab && VALID_TABS.has(initial.tab) &&
                 initial.tab !== "map" && initial.tab !== "observatory") {
             switchTab(initial.tab);
-            if (initial.tab === "search") {
-                doSearch();
-            }
         }
-        // If tab is map/observatory or garbage we stay on observatory
-        // (already set above). Legacy #/map?... aliases through
-        // switchTab(); Timeline is a first-class tab again in v0.7.1.
+        // v0.8.6: #/search and #/duplicates deep links no longer
+        // resolve; switchTab() falls back to observatory for any tab
+        // not in VALID_TABS. #/map still aliases through switchTab.
     }
 
     // Back/forward navigation
@@ -587,22 +558,9 @@ function populateFilterDropdowns(data) {
         valleeSelect.appendChild(opt);
     });
 
-    // Duplicates filters
-    const dupesMethodSelect = document.getElementById("dupes-method");
-    (data.match_methods || []).forEach(m => {
-        const opt = document.createElement("option");
-        opt.value = m;
-        opt.textContent = m;
-        dupesMethodSelect.appendChild(opt);
-    });
-
-    const dupesSourceSelect = document.getElementById("dupes-source");
-    (data.sources || []).forEach(s => {
-        const opt = document.createElement("option");
-        opt.value = s.id;
-        opt.textContent = s.name;
-        dupesSourceSelect.appendChild(opt);
-    });
+    // v0.8.6: Duplicates dropdowns removed along with the Duplicates
+    // panel. If the filters endpoint still returns match_methods /
+    // sources we silently ignore them here.
 }
 
 /**
@@ -760,8 +718,8 @@ function formatLocation(city, st, country) {
 // stray call or a polluted URL hash (e.g. "#/undefined" from an
 // earlier buggy click handler) can't blank out the whole panel area.
 const VALID_TABS = new Set([
-    "observatory", "map", "timeline", "search",
-    "duplicates", "insights", "methodology", "ai", "connect",
+    "observatory", "map", "timeline",
+    "insights", "methodology", "ai", "connect",
 ]);
 
 function switchTab(tab) {
@@ -799,21 +757,12 @@ function switchTab(tab) {
         // so it reflows after a panel switch.
         loadObservatory();
     } else if (tab === "timeline") {
-        // v0.7.2 fix: when Timeline was de-aliased from Observatory in
-        // v0.7.1, this branch was missing — the panel would activate
-        // but loadTimeline() never ran, so the chart canvas stayed
-        // blank. Now it renders the Chart.js histogram + drill-down
-        // exactly like the v0.6 Timeline tab.
+        // v0.8.6: 3-card client-side dashboard driven by the bulk
+        // buffer. Subsequent filter changes call refreshTimelineCards()
+        // directly from applyClientFilters().
         loadTimeline();
     } else if (tab === "insights") {
         loadInsights();
-    } else if (tab === "duplicates") {
-        // Load on first visit
-        if (document.getElementById("dupes-results").children.length === 0) {
-            loadDuplicates();
-        }
-    } else if (tab === "search") {
-        renderActiveFilterChips();
     } else if (tab === "ai") {
         // Focus the input on tab open
         setTimeout(() => document.getElementById("ai-input")?.focus(), 100);
@@ -852,7 +801,6 @@ async function applyFilters() {
             }
         }
         else if (state.activeTab === "timeline") await loadTimeline();
-        else if (state.activeTab === "search") await doSearch();
         else if (state.activeTab === "insights") await loadInsights();
     } finally {
         restore();
@@ -885,12 +833,9 @@ function writeHash() {
             params.set(key, v.value);
         }
     });
-    if (state.activeTab === "search") {
-        const q = document.getElementById("search-input")?.value?.trim();
-        if (q) params.set("q", q);
-        if (state.searchPage)  params.set("page", state.searchPage);
-        if (state.searchSort && state.searchSort !== "date_desc") params.set("sort", state.searchSort);
-    }
+    // v0.8.6: no per-tab search state to serialise. The Observatory
+    // owns all filter state via FILTER_FIELDS above, and there's no
+    // free-text `q` or pagination to persist anymore.
     const qs = params.toString();
     const newHash = `#/${state.activeTab}${qs ? "?" + qs : ""}`;
     if (newHash !== window.location.hash) {
@@ -915,27 +860,25 @@ function applyHashToFilters(params) {
             const v = params.get(key);
             if (v != null) el.value = v;
         });
-        if (params.get("q") !== null) {
-            const inp = document.getElementById("search-input");
-            if (inp) inp.value = params.get("q");
-        }
-        if (params.get("page") !== null) state.searchPage = parseInt(params.get("page"), 10) || 0;
-        if (params.get("sort") !== null) state.searchSort = params.get("sort");
+        // v0.8.6: the legacy `q`, `page`, and `sort` URL params
+        // belonged to the removed Search tab. Silently ignored so
+        // pre-v0.8.6 deep links don't throw.
     } finally {
         state.hashLoading = false;
     }
 }
 
 /**
- * Programmatically jump to the search tab with a given filter set.
+ * v0.8.6 — navigateToSearch() replacement.
  *
- * `filterUpdates` is an object of `{date_from, date_to, source, shape, ...}`
- * (whatever subset you want to set). Anything not specified is left
- * untouched. `clearFirst=true` resets all filters first.
+ * Instead of jumping to a dedicated Search tab, apply the given
+ * filter updates to the Observatory rail and flip to the Observatory
+ * (which owns the bulk-buffer client-side filter pipeline).
  *
- * Used by:
- *  - Timeline bar clicks (set date range and optionally source)
- *  - Map popup "View all in this city" links (future)
+ * Callers keep working: `navigateToSearch({date_from: "1973-10-15"})`
+ * now sets the Observatory's date filter and switches to the
+ * Observatory tab. The map re-tallies immediately via
+ * applyClientFilters().
  */
 function navigateToSearch(filterUpdates, clearFirst = false) {
     state.hashLoading = true;
@@ -946,26 +889,23 @@ function navigateToSearch(filterUpdates, clearFirst = false) {
                 const el = document.getElementById(id);
                 if (el) el.value = "";
             });
-            const inp = document.getElementById("search-input");
-            if (inp) inp.value = "";
         }
         Object.entries(filterUpdates || {}).forEach(([key, value]) => {
             const field = FILTER_FIELDS.find(f => f.key === key);
             if (field) {
                 const el = document.getElementById(field.id);
                 if (el) el.value = value == null ? "" : String(value);
-            } else if (key === "q") {
-                const inp = document.getElementById("search-input");
-                if (inp) inp.value = value || "";
             }
+            // v0.8.6: the legacy `q` (free-text search) param is
+            // no longer supported — Observatory filters are faceted,
+            // not full-text. Silently ignored so old deep links from
+            // Timeline bar clicks don't throw.
         });
-        state.searchPage = 0;
     } finally {
         state.hashLoading = false;
     }
-    switchTab("search");
-    // doSearch is called below so we update both the panel and the hash.
-    doSearch();
+    switchTab("observatory");
+    applyFilters();
 }
 
 /**
@@ -1322,15 +1262,20 @@ function viewAllInCity(city, state, country) {
 window.viewAllInCity = viewAllInCity;
 
 function drillToMonth(yearMonth) {
-    // yearMonth is "YYYY-MM". Switch to Timeline tab, set the
-    // drill-down state to that year, and trigger a load. The user
-    // can then click the month bar to jump to filtered search.
+    // v0.8.6: the Timeline tab no longer has a monthly drill-down
+    // mode — it's a 3-card dashboard on the bulk buffer. Instead,
+    // set the Observatory date filter to that month and flip to the
+    // Observatory tab so the user sees the geographic distribution
+    // for the month they clicked.
     const [year, month] = yearMonth.split("-");
-    state.timelineYear = year;
-    switchTab("timeline");
-    // The timeline panel reads state.timelineYear in loadTimeline,
-    // which switchTab calls automatically. The monthly view will
-    // appear with the year drill-down already applied.
+    if (!year || !month) return;
+    const lastDay = lastDayOfMonth(year, month);
+    const fromField = document.getElementById("filter-date-from");
+    const toField   = document.getElementById("filter-date-to");
+    if (fromField) fromField.value = `${year}-${month}-01`;
+    if (toField)   toField.value   = `${year}-${month}-${String(lastDay).padStart(2, "0")}`;
+    switchTab("observatory");
+    applyFilters();
 }
 window.drillToMonth = drillToMonth;
 
@@ -1593,7 +1538,53 @@ function applyClientFilters() {
     };
     window.UFODeck.applyClientFilters(filter);
     window.UFODeck.refreshActiveLayer();
+
+    // v0.8.6 — retally the brush histogram against the new visible
+    // set. Uses the filtered variant of getYearHistogram so the user
+    // sees the current filter's shape over time without a server trip.
+    // When the filter is "nothing active" we clear the overlay so
+    // the cached unfiltered histogram draws alone.
+    if (state.timeBrush && typeof window.UFODeck.getYearHistogramForVisible === "function") {
+        const activeFilterCount = _countActiveFilters(filter);
+        if (activeFilterCount > 0) {
+            state.timeBrush.retally(window.UFODeck.getYearHistogramForVisible());
+        } else {
+            state.timeBrush.retally(null);
+        }
+    }
+
+    // v0.8.6 — if the user is on the Timeline or Insights tab, refresh
+    // the cards so they reflect the current filter state. This is
+    // cheap (all client-side) so no debounce needed.
+    if (state.activeTab === "timeline" && typeof refreshTimelineCards === "function") {
+        refreshTimelineCards();
+    }
+    if (state.activeTab === "insights" && typeof refreshInsightsClientCards === "function") {
+        refreshInsightsClientCards();
+    }
+
     return true;
+}
+
+// v0.8.6 — true if any field of the filter descriptor would reduce
+// the visible set. Used to decide whether to overlay the brush
+// histogram with the filtered-vs-ghost pair or draw the unfiltered
+// bins alone.
+function _countActiveFilters(f) {
+    if (!f) return 0;
+    let n = 0;
+    if (f.sourceName) n++;
+    if (f.shapeName) n++;
+    if (f.colorName) n++;
+    if (f.emotionName) n++;
+    if (f.yearFrom != null) n++;
+    if (f.yearTo != null) n++;
+    if (f.qualityMin != null) n++;
+    if (f.hoaxMax != null) n++;
+    if (f.hasDescription !== undefined && f.hasDescription !== null) n++;
+    if (f.hasMedia !== undefined && f.hasMedia !== null) n++;
+    if (f.hasMovement !== undefined && f.hasMovement !== null) n++;
+    return n;
 }
 
 // Pull a year integer out of whatever the user typed into a date-range
@@ -2095,6 +2086,12 @@ class TimeBrush {
     constructor(canvas, onChange) {
         this.canvas = canvas;
         this.ctx = canvas.getContext("2d");
+        // v0.8.6: keep a RAW reference alongside the debounced one so
+        // pointerup / togglePlay can commit without waiting out the
+        // 300ms window. The debounced `onChange` is still used by
+        // programmatic callers (hash parsing, setWindow) where
+        // coalescing rapid calls is the right behaviour.
+        this._onChangeRaw = onChange;
         this.onChange = debounce(onChange, 300);
         this.minT = Date.UTC(BRUSH_MIN_YEAR, 0, 1);
         this.maxT = Date.UTC(BRUSH_MAX_YEAR, 0, 1);
@@ -2102,6 +2099,11 @@ class TimeBrush {
         // until the user drags.
         this.window = [this.minT, this.maxT];
         this.bins = null;
+        // v0.8.6: filtered overlay bins set by retally() after
+        // applyClientFilters. When non-null, _draw() prefers this
+        // over `bins` so the brush histogram always shows the
+        // currently visible set.
+        this.binsFiltered = null;
         this.annotations = null;
         this.playing = false;
         this.playRaf = null;
@@ -2217,9 +2219,19 @@ class TimeBrush {
 
         // Read theme tokens so the histogram inherits SIGNAL or DECLASS colors.
         const accent = getComputedStyle(document.body).getPropertyValue("--accent").trim() || "#00F0FF";
+        const accentDim = getComputedStyle(document.body).getPropertyValue("--fg-dim").trim() || "#8A94AD";
         const line = getComputedStyle(document.body).getPropertyValue("--border").trim() || "#13203A";
 
-        if (!this.bins || this.bins.length === 0) {
+        // v0.8.6: always draw the unfiltered bins as a dim "ghost"
+        // background so the user sees the full dataset shape even
+        // when filters are active. The filtered bins draw on top in
+        // the full accent color. When nothing is filtered, only the
+        // foreground draws (ghost is skipped because binsFiltered is
+        // null).
+        const fgBins = this.binsFiltered || this.bins;
+        const ghostBins = this.binsFiltered ? this.bins : null;
+
+        if (!fgBins || fgBins.length === 0) {
             // Empty state
             ctx.fillStyle = line;
             ctx.fillRect(0, h - 1, w, 1);
@@ -2227,14 +2239,30 @@ class TimeBrush {
         }
 
         const yearSpan = BRUSH_MAX_YEAR - BRUSH_MIN_YEAR;
+        // Scale against the unfiltered max so filtered bars shrink
+        // visibly rather than renormalising to fill the pane.
         let max = 1;
-        for (const b of this.bins) if (b.count > max) max = b.count;
+        const scaleBins = this.bins || fgBins;
+        for (const b of scaleBins) if (b.count > max) max = b.count;
 
-        // Histogram bars — one per year. Width = w / yearSpan.
         const barW = Math.max(1, w / yearSpan);
+
+        // Ghost (unfiltered) layer
+        if (ghostBins) {
+            ctx.fillStyle = accentDim;
+            ctx.globalAlpha = 0.25;
+            for (const b of ghostBins) {
+                if (b.year < BRUSH_MIN_YEAR || b.year > BRUSH_MAX_YEAR) continue;
+                const x = ((b.year - BRUSH_MIN_YEAR) / yearSpan) * w;
+                const hBar = (b.count / max) * (h - 14);
+                ctx.fillRect(x, h - hBar - 2, Math.max(0.6, barW - 0.4), hBar);
+            }
+        }
+
+        // Foreground (filtered or full) layer
         ctx.fillStyle = accent;
         ctx.globalAlpha = 0.85;
-        for (const b of this.bins) {
+        for (const b of fgBins) {
             if (b.year < BRUSH_MIN_YEAR || b.year > BRUSH_MAX_YEAR) continue;
             const x = ((b.year - BRUSH_MIN_YEAR) / yearSpan) * w;
             const hBar = (b.count / max) * (h - 14);
@@ -2249,6 +2277,14 @@ class TimeBrush {
         ctx.moveTo(0, h - 0.5);
         ctx.lineTo(w, h - 0.5);
         ctx.stroke();
+    }
+
+    // v0.8.6 — called by applyClientFilters() after the filter
+    // pipeline updates POINTS.visibleIdx. Pass null to clear the
+    // filtered overlay and restore the cached unfiltered bins.
+    retally(bins) {
+        this.binsFiltered = bins;
+        this._draw();
     }
 
     _drawAnnotations() {
@@ -2325,6 +2361,16 @@ class TimeBrush {
             }
         };
 
+        // v0.8.6: split drag handlers. During drag we only update
+        // the visual window position — no filter pipeline, no debounced
+        // onChange, no deck.gl setProps. On pointerup we commit once
+        // via the RAW (un-debounced) callback so the map updates
+        // within one frame of release.
+        //
+        // Prior behaviour queued a debounced onChange on EVERY
+        // pointermove, which meant a 300ms dead zone at the start
+        // of each drag plus cascading setProps calls if the user
+        // held the pointer down and swept quickly.
         const onPointerMove = (e) => {
             if (!dragging) return;
             const wrapRect = wrap.getBoundingClientRect();
@@ -2346,14 +2392,24 @@ class TimeBrush {
                 newR = Math.min(this.maxT, Math.max(newL + 30 * 86400000, dragging.startR + dt));
             }
             this.window = [newL, newR];
+            // Visual-only update: window rectangle + year labels.
+            // No filter commit yet.
             this._syncWindow();
-            this.onChange(this._isoDate(newL), this._isoDate(newR));
         };
 
         const onPointerUp = () => {
             if (!dragging) return;
+            const wasDragging = dragging;
             dragging = null;
             this.windowEl.classList.remove("dragging");
+            // v0.8.6: commit the final window directly, bypassing the
+            // debounce. Also cancel any stale debounced call so we don't
+            // re-apply the mid-drag window 300 ms later.
+            this.onChange.cancel?.();
+            const [L, R] = this.window;
+            if (this._onChangeRaw && wasDragging) {
+                this._onChangeRaw(this._isoDate(L), this._isoDate(R));
+            }
         };
 
         wrap.addEventListener("pointerdown", onPointerDown);
@@ -2527,12 +2583,37 @@ function onBrushWindowChange(fromISO, toISO) {
 
 // Small debounce helper used by TimeBrush.
 function debounce(fn, ms) {
+    // v0.8.6: flush() now actually fires any pending call synchronously
+    // and cancels the scheduled timer, so callers that need an
+    // immediate commit (brush pointerup, play STOP) get a real
+    // round-trip without waiting out the debounce window. Previous
+    // versions stored a no-op .flush which silently swallowed the
+    // final commit.
     let t = null;
+    let pendingArgs = null;
     const wrapped = (...args) => {
+        pendingArgs = args;
         clearTimeout(t);
-        t = setTimeout(() => fn(...args), ms);
+        t = setTimeout(() => {
+            t = null;
+            const a = pendingArgs;
+            pendingArgs = null;
+            fn(...a);
+        }, ms);
     };
-    wrapped.flush = () => { /* no-op for now */ };
+    wrapped.flush = () => {
+        if (t === null) return;
+        clearTimeout(t);
+        t = null;
+        const a = pendingArgs;
+        pendingArgs = null;
+        if (a) fn(...a);
+    };
+    wrapped.cancel = () => {
+        clearTimeout(t);
+        t = null;
+        pendingArgs = null;
+    };
     return wrapped;
 }
 
@@ -2625,334 +2706,248 @@ async function loadHeatmap(signal) {
 // =========================================================================
 // Timeline
 // =========================================================================
+// =========================================================================
+// Timeline tab (v0.8.6) — 3-card client-side dashboard
+// =========================================================================
+//
+// The Timeline tab used to hit /api/timeline on every load and render a
+// single stacked bar chart. v0.8.6 replaces it with three cards that
+// all compute from the in-memory bulk buffer:
+//
+//   1. Stacked-by-source year histogram (same data as the brush,
+//      bigger canvas, full legend)
+//   2. Median quality_score per year (line chart, 0-100 y-axis)
+//   3. Movement category share per year (stacked area, 10 series)
+//
+// Every card respects state.qualityFilter + filter rail. No server
+// round-trips; filter changes recompute in a few ms.
+
 async function loadTimeline() {
-    const params = getFilterParams();
-    const year = state.timelineYear;
-    if (year) params.set("year", year);
-
-    const titleEl = document.getElementById("timeline-title");
-    const backBtn = document.getElementById("timeline-back");
-    const viewBtn = document.getElementById("timeline-view-results");
-    const chartContainer = document.querySelector(".chart-container");
-
-    titleEl.textContent = year ? `Sightings in ${year} by Month` : "Sightings by Year";
-    backBtn.style.display = year ? "inline-block" : "none";
-
-    // Progressive loading: if we already have a chart on screen, keep it
-    // visible and just dim it while the new data loads. The fetched
-    // data is then applied via chart.update() which animates the bars
-    // smoothly between old and new values. First-time loads (no chart
-    // yet) skip the overlay since there's nothing to keep visible.
-    if (state.chart) {
-        showProgressiveLoading(chartContainer, "timeline", { header: "TIMELINE" });
+    // First visit: bootstrap the chart instances. Subsequent visits and
+    // filter changes go through refreshTimelineCards() instead.
+    if (!window.UFODeck || !window.UFODeck.POINTS || !window.UFODeck.POINTS.ready) {
+        // Bulk buffer not ready yet (cold cache). Show an empty state
+        // and retry once POINTS.ready flips. Most users land on the
+        // Observatory first so by the time they click Timeline the
+        // buffer is already loaded.
+        const labelEl = document.getElementById("timeline-range-label");
+        if (labelEl) labelEl.textContent = "loading…";
+        const countEl = document.getElementById("timeline-visible-count");
+        if (countEl) countEl.textContent = "0";
+        // Schedule a retry when the bulk buffer lands.
+        if (!state._timelinePending) {
+            state._timelinePending = true;
+            const iv = setInterval(() => {
+                if (window.UFODeck && window.UFODeck.POINTS && window.UFODeck.POINTS.ready) {
+                    clearInterval(iv);
+                    state._timelinePending = false;
+                    if (state.activeTab === "timeline") loadTimeline();
+                }
+            }, 200);
+        }
+        return;
     }
+    refreshTimelineCards();
+}
 
-    let data;
-    try {
-        data = await fetchJSON(`/api/timeline?${params}`);
-    } finally {
-        hideProgressiveLoading(chartContainer);
+function refreshTimelineCards() {
+    if (!window.UFODeck || !window.UFODeck.POINTS || !window.UFODeck.POINTS.ready) return;
+
+    const stacked = window.UFODeck.getYearHistogramBySource(true);
+    const quality = window.UFODeck.computeMedianByYear(window.UFODeck.POINTS.qualityScore);
+    const movement = window.UFODeck.computeMovementShareByYear();
+    const visible = window.UFODeck.countVisible();
+
+    renderTimelineMainChart(stacked);
+    renderTimelineQualityChart(quality);
+    renderTimelineMovementChart(movement);
+
+    const countEl = document.getElementById("timeline-visible-count");
+    if (countEl) countEl.textContent = visible.toLocaleString();
+
+    const labelEl = document.getElementById("timeline-range-label");
+    if (labelEl && stacked.years.length) {
+        labelEl.textContent = `${stacked.years[0]} — ${stacked.years[stacked.years.length - 1]}`;
     }
+}
 
-    // Build datasets per source
-    const periods = Object.keys(data.data).sort();
-    const sourceNames = new Set();
-    periods.forEach(p => {
-        Object.keys(data.data[p]).forEach(s => sourceNames.add(s));
-    });
-    const sourceList = Array.from(sourceNames);
+function renderTimelineMainChart(stacked) {
+    const canvas = document.getElementById("timeline-main-chart");
+    if (!canvas) return;
+    // Trim leading/trailing empty years so the chart doesn't have a
+    // hundred blank bars before the first sighting.
+    let start = 0, end = stacked.years.length - 1;
+    while (start < stacked.years.length && stacked.totals[start] === 0) start++;
+    while (end >= 0 && stacked.totals[end] === 0) end--;
+    if (start > end) { start = 0; end = stacked.years.length - 1; }
 
-    const datasets = sourceList.map(name => {
+    const labels = stacked.years.slice(start, end + 1);
+    const sourceCount = stacked.sources.length;
+    const datasets = [];
+    for (let s = 1; s < sourceCount; s++) {  // skip index 0 ("unknown")
+        const name = stacked.sources[s] || "Unknown";
         const c = sourceColor(name);
-        return {
+        const data = new Array(labels.length);
+        for (let y = 0; y < labels.length; y++) {
+            data[y] = stacked.counts[(start + y) * sourceCount + s];
+        }
+        datasets.push({
             label: name,
-            data: periods.map(p => data.data[p][name] || 0),
+            data,
             backgroundColor: c.bg,
             borderColor: c.border,
             borderWidth: 1,
-        };
-    });
-
-    // Labels
-    const labels = periods.map(p => {
-        if (data.mode === "monthly" && p.length >= 7) {
-            const monthNames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-            const mi = parseInt(p.substring(5, 7), 10) - 1;
-            return monthNames[mi] || p;
-        }
-        return p;
-    });
-
-    // Total across all visible bars (used by the "View N results" button label)
-    let visibleTotal = 0;
-    periods.forEach(p => {
-        Object.values(data.data[p]).forEach(v => { visibleTotal += v; });
-    });
-
-    // Configure the "View results" button to jump to search filtered to
-    // the currently displayed range. In yearly view, it filters by the
-    // currently active date_from/date_to (or "all years" if no filters).
-    // In monthly view, it filters to the whole displayed year.
-    if (viewBtn) {
-        if (visibleTotal > 0) {
-            viewBtn.textContent = `View ${visibleTotal.toLocaleString()} sightings →`;
-            viewBtn.style.display = "inline-block";
-            viewBtn.onclick = () => {
-                if (year) {
-                    navigateToSearch({ date_from: `${year}-01-01`, date_to: `${year}-12-31` });
-                } else {
-                    // Yearly view: just switch to search with current global filters
-                    navigateToSearch({});
-                }
-            };
-        } else {
-            viewBtn.style.display = "none";
-        }
+        });
     }
-
-    // Use a closure to lift the data we need into the click handler.
-    // This handler is rebound onto state.chart on every load so that
-    // the latest `data` / `periods` / `sourceList` are captured.
-    const onChartClick = (evt, elements) => {
-        if (!elements.length) return;
-        const el = elements[0];
-        const period = periods[el.index];
-        const sourceName = sourceList[el.datasetIndex];
-
-        // Visual feedback for the navigate-away (monthly→search) path.
-        // The drill-down (yearly→monthly) path no longer needs an
-        // is-loading flash because loadTimeline now overlays its own
-        // progressive terminal AND animates chart.update() — the
-        // old fade was an artifact of the destroy/recreate flow.
-        const chartContainer = document.querySelector(".chart-container");
-
-        if (data.mode === "yearly") {
-            // Click year bar -> drill down to monthly view (existing behavior).
-            // If user clicked a stacked source segment we ALSO remember to
-            // pre-filter the monthly drill-down by source via the global
-            // filter dropdown.
-            if (sourceName) {
-                const sourceObj = (window.__sourceMap || {})[sourceName];
-                if (sourceObj) {
-                    document.getElementById("filter-source").value = String(sourceObj.id);
-                }
-            }
-            state.timelineYear = period;
-            loadTimeline();
-        } else {
-            chartContainer?.classList.add("is-loading");
-            // Navigating away — clear the fade after a short delay
-            setTimeout(() => chartContainer?.classList.remove("is-loading"), 300);
-            // Monthly view -> jump to filtered search for that month.
-            // period is "YYYY-MM"
-            const [y, m] = period.split("-");
-            const lastDay = lastDayOfMonth(y, m);
-            const filterUpdates = {
-                date_from: `${y}-${m}-01`,
-                date_to:   `${y}-${m}-${String(lastDay).padStart(2, "0")}`,
-            };
-            // If user clicked a stacked segment, also filter by that source.
-            if (sourceName) {
-                const sourceObj = (window.__sourceMap || {})[sourceName];
-                if (sourceObj) filterUpdates.source = sourceObj.id;
-            }
-            navigateToSearch(filterUpdates);
-        }
-    };
-
-    // Build the tooltip footer callback fresh on every load so the
-    // "Click to drill into months" / "Click to view records" hint
-    // matches whichever mode (yearly/monthly) the new data is in.
-    const tooltipFooter = (items) => {
-        const total = items.reduce((s, i) => s + i.parsed.y, 0);
-        const hint = data.mode === "yearly"
-            ? "Click to drill into months"
-            : "Click to view records";
-        return `Total: ${total.toLocaleString()}\n${hint}`;
-    };
 
     if (state.chart) {
-        // Progressive update: Chart.js animates labels + datasets between
-        // the old and new state. The closures (onChartClick, tooltip
-        // callback) get rebound here so they capture the latest data.
         state.chart.data.labels = labels;
         state.chart.data.datasets = datasets;
-        state.chart.options.onClick = onChartClick;
-        state.chart.options.plugins.tooltip.callbacks.footer = tooltipFooter;
-        // "active" mode picks up the configured easing + duration so
-        // bars slide between values rather than snapping.
-        state.chart.update("active");
-    } else {
-        // Cold start — first load on the page.
-        const ctx = document.getElementById("timeline-chart").getContext("2d");
-        state.chart = new Chart(ctx, {
-            type: "bar",
-            data: { labels, datasets },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                interaction: { mode: "index", intersect: false },
-                animation: {
-                    duration: 600,
-                    easing: "easeOutQuart",
-                },
-                plugins: {
-                    legend: { position: "top" },
-                    tooltip: {
-                        callbacks: { footer: tooltipFooter },
+        state.chart.update("none");
+        return;
+    }
+    const ctx = canvas.getContext("2d");
+    state.chart = new Chart(ctx, {
+        type: "bar",
+        data: { labels, datasets },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: "index", intersect: false },
+            animation: { duration: 300, easing: "easeOutQuart" },
+            plugins: {
+                legend: { position: "top" },
+                tooltip: {
+                    callbacks: {
+                        footer: (items) => {
+                            const total = items.reduce((s, i) => s + i.parsed.y, 0);
+                            return `Total: ${total.toLocaleString()}`;
+                        },
                     },
                 },
-                scales: {
-                    x: { stacked: true },
-                    y: { stacked: true, beginAtZero: true },
-                },
-                onClick: onChartClick,
-                onHover: (evt, elements) => {
-                    evt.native.target.style.cursor = elements.length ? "pointer" : "";
-                },
             },
-        });
-    }
+            scales: {
+                x: { stacked: true, ticks: { maxTicksLimit: 16 } },
+                y: { stacked: true, beginAtZero: true },
+            },
+        },
+    });
 }
 
-// =========================================================================
-// Search
-// =========================================================================
-async function doSearch() {
-    state.searchPage = 0;
-    await executeSearch();
+function renderTimelineQualityChart(data) {
+    const canvas = document.getElementById("timeline-quality-chart");
+    if (!canvas) return;
+    // Drop years with no data so the line doesn't sag to zero between
+    // historical gaps.
+    const labels = [];
+    const values = [];
+    const accent = getComputedStyle(document.body).getPropertyValue("--accent").trim() || "#00F0FF";
+    const accentHover = getComputedStyle(document.body).getPropertyValue("--accent-hover").trim() || accent;
+    for (const row of data) {
+        if (row.count === 0 || row.median == null) continue;
+        labels.push(row.year);
+        values.push(row.median);
+    }
+
+    if (state.timelineQualityChart) {
+        state.timelineQualityChart.data.labels = labels;
+        state.timelineQualityChart.data.datasets[0].data = values;
+        state.timelineQualityChart.data.datasets[0].borderColor = accent;
+        state.timelineQualityChart.data.datasets[0].pointBackgroundColor = accentHover;
+        state.timelineQualityChart.update("none");
+        return;
+    }
+    const ctx = canvas.getContext("2d");
+    state.timelineQualityChart = new Chart(ctx, {
+        type: "line",
+        data: {
+            labels,
+            datasets: [{
+                label: "Median quality score",
+                data: values,
+                borderColor: accent,
+                backgroundColor: "transparent",
+                pointBackgroundColor: accentHover,
+                pointRadius: 2,
+                tension: 0.2,
+                borderWidth: 2,
+            }],
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: { duration: 300 },
+            plugins: { legend: { display: false } },
+            scales: {
+                x: { ticks: { maxTicksLimit: 16 } },
+                y: { min: 0, max: 100, title: { display: true, text: "Median QS (0-100)" } },
+            },
+        },
+    });
 }
 
-async function executeSearch() {
-    renderActiveFilterChips();
-    const q = document.getElementById("search-input").value.trim();
-    const params = getFilterParams();
-    if (q) params.set("q", q);
-    params.set("page", state.searchPage);
+function renderTimelineMovementChart(mv) {
+    const canvas = document.getElementById("timeline-movement-chart");
+    if (!canvas || !mv) return;
+    // Trim leading/trailing zero years
+    let start = 0, end = mv.years.length - 1;
+    while (start < mv.years.length && mv.totals[start] === 0) start++;
+    while (end >= 0 && mv.totals[end] === 0) end--;
+    if (start > end) { start = 0; end = mv.years.length - 1; }
 
-    const info     = document.getElementById("search-info");
-    const resultsEl= document.getElementById("search-results");
-    const pagerEl  = document.getElementById("search-pager");
-    const searchBtn= document.getElementById("btn-search");
-
-    // Disable the submit button so a double-click doesn't fire two requests
-    const restoreSearchBtn = disableButtonWhilePending(searchBtn, "Searching…");
-
-    // Progressive loading: if we already have real result cards on
-    // screen, keep them visible (dimmed) while the new request runs.
-    // v0.7: The terminal mounts in the info bar (edge HUD), but we
-    // NEVER cover the existing result cards with an overlay — that
-    // was the v0.6 behavior and it blocked interaction with cards
-    // users were trying to read. On cold start (empty results list)
-    // we still show the skeleton shimmer so the panel isn't blank.
-    // On refresh, existing cards stay fully visible and clickable
-    // until the new ones land and swap in.
-    mountLoadingTerminal(info, "search", { compact: true, header: "SEARCH" });
-    const hasExistingResults = !!resultsEl.querySelector(".result-card:not(.skeleton)");
-    if (!hasExistingResults) {
-        resultsEl.innerHTML = `
-            <div class="result-card skeleton"></div>
-            <div class="result-card skeleton"></div>
-            <div class="result-card skeleton"></div>
-        `;
-    }
-    pagerEl.innerHTML = "";
-
-    try {
-        const data = await fetchJSON(`/api/search?${params}`);
-        state.searchTotal = data.total;
-        // Stop the dim now that data has landed — the innerHTML swap
-        // below will replace the dimmed cards with the new ones, and
-        // the new ones get a stagger fade-in via .is-new.
-        hideProgressiveLoading(resultsEl);
-
-        // Sort client-side if asked. Backend always returns date_desc.
-        const sorted = (state.searchSort === "date_asc")
-            ? data.results.slice().sort((a, b) => (a.date || "").localeCompare(b.date || ""))
-            : data.results;
-
-        if (data.total === 0) {
-            resultsEl.innerHTML = `
-                <div class="empty-state">
-                    <div class="empty-state-icon"><svg class="icon icon-xl" width="64" height="32" viewBox="0 0 64 32" aria-hidden="true"><ellipse cx="32" cy="20" rx="28" ry="6"/><path d="M14 18 C14 10, 22 4, 32 4 C42 4, 50 10, 50 18"/><circle cx="32" cy="10" r="1.5" fill="currentColor" stroke="none"/><line x1="14" y1="26" x2="10" y2="30"/><line x1="32" y1="27" x2="32" y2="31"/><line x1="50" y1="26" x2="54" y2="30"/></svg></div>
-                    <div class="empty-state-title">No sightings found</div>
-                    <div class="empty-state-detail">
-                        Try clearing some filters above, or
-                        <a href="#" onclick="clearFilters(); document.getElementById('search-input').value=''; doSearch(); return false;">reset everything</a>.
-                    </div>
-                </div>
-            `;
-            info.textContent = `0 results${q ? ` for "${q}"` : ""}`;
-            return;
+    const labels = mv.years.slice(start, end + 1);
+    const M = 10;
+    // Palette for 10 movement categories — deterministic so series
+    // colours stay stable across filter changes.
+    const palette = [
+        "#00F0FF", "#FFB300", "#FF4E00", "#B8001F", "#7CF9FF",
+        "#8A94AD", "#6ea8ff", "#E6EAF2", "#C97B00", "#9C8B60",
+    ];
+    const datasets = [];
+    for (let b = 0; b < M; b++) {
+        const data = new Array(labels.length);
+        for (let y = 0; y < labels.length; y++) {
+            data[y] = mv.counts[(start + y) * M + b];
         }
-
-        info.innerHTML = `<strong>${data.total.toLocaleString()}</strong> results` +
-            (q ? ` for <em>"${escapeHtml(q)}"</em>` : "") +
-            ` &middot; page ${data.page + 1} of ${data.pages.toLocaleString()}`;
-
-        // v0.8.3 — no description text to highlight anymore. The
-        // <mark>q</mark> regex that used to light up query matches
-        // in the result snippet is gone because the snippet itself
-        // is gone. Result cards now show a compound derived-metadata
-        // line ("Black · Fear · quality 78") instead of a narrative
-        // preview.
-        resultsEl.innerHTML = "";
-        sorted.forEach((r, idx) => {
-            const card = document.createElement("div");
-            card.className = "result-card is-new";
-            // Stagger fade-in: each card delays slightly more than the
-            // last via the CSS calc(var(--i) * 22ms) animation-delay.
-            card.style.setProperty("--i", String(idx));
-            card.onclick = () => openDetail(r.id);
-
-            const loc = formatLocation(r.city, r.state, r.country);
-
-            // v0.8.3 — derived metadata line. Joins whichever of
-            // {color, dominant_emotion, quality_score} are populated
-            // on this row, with a · separator. Rows that have none
-            // of the three (unpopulated pipeline) get an empty line
-            // and the card collapses a bit. No fallback to raw
-            // description — that column is dropped.
-            const derivedParts = [];
-            if (r.color) derivedParts.push(escapeHtml(r.color));
-            if (r.dominant_emotion) derivedParts.push(escapeHtml(r.dominant_emotion));
-            if (r.quality_score != null)
-                derivedParts.push(`<span class="quality-inline">quality ${r.quality_score}</span>`);
-            if (r.hoax_likelihood != null && r.hoax_likelihood > 0.1)
-                derivedParts.push(`<span class="hoax-inline">hoax ${Number(r.hoax_likelihood).toFixed(2)}</span>`);
-            const derivedHtml = derivedParts.join(" · ");
-
-            const meta = [
-                r.hynek      ? `<span class="meta-pill">Hynek: ${escapeHtml(r.hynek)}</span>` : "",
-                r.witnesses  ? `<span class="meta-pill">${r.witnesses} witness${r.witnesses === 1 ? '' : 'es'}</span>` : "",
-                r.duration   ? `<span class="meta-pill">${escapeHtml(r.duration)}</span>` : "",
-                r.has_description ? `<span class="meta-pill has-desc">[ DESC ]</span>` : "",
-                r.has_media   ? `<span class="meta-pill has-media">[ MEDIA ]</span>` : "",
-            ].filter(Boolean).join("");
-
-            card.innerHTML = `
-                <div class="result-header">
-                    <span class="result-date">${escapeHtml(r.date || "Unknown date")}</span>
-                    ${sourceBadge(r.source)}
-                    ${r.shape ? `<span class="shape-tag">${escapeHtml(r.shape)}</span>` : ""}
-                </div>
-                <div class="result-loc">${escapeHtml(loc) || "Unknown location"}</div>
-                ${derivedHtml ? `<div class="result-derived">${derivedHtml}</div>` : ""}
-                ${meta ? `<div class="result-meta">${meta}</div>` : ""}
-            `;
-            resultsEl.appendChild(card);
+        datasets.push({
+            label: mv.movements[b] || `cat ${b}`,
+            data,
+            backgroundColor: palette[b] + "AA",
+            borderColor: palette[b],
+            borderWidth: 1,
+            fill: true,
         });
-
-        renderPager(data.page, data.pages);
-    } catch (err) {
-        hideProgressiveLoading(resultsEl);
-        info.textContent = "Couldn't run that search";
-        resultsEl.innerHTML = `<div class="empty-state"><div class="empty-state-icon"><svg class="icon icon-xl" width="48" height="48" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div><div class="empty-state-title">Search failed</div><div class="empty-state-detail">Check your filters or try again. <br><span style="opacity:0.6">${escapeHtml(err.message || String(err))}</span></div></div>`;
-        console.error(err);
-    } finally {
-        restoreSearchBtn();
     }
+
+    if (state.timelineMovementChart) {
+        state.timelineMovementChart.data.labels = labels;
+        state.timelineMovementChart.data.datasets = datasets;
+        state.timelineMovementChart.update("none");
+        return;
+    }
+    const ctx = canvas.getContext("2d");
+    state.timelineMovementChart = new Chart(ctx, {
+        type: "line",
+        data: { labels, datasets },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: "index", intersect: false },
+            animation: { duration: 300 },
+            plugins: { legend: { position: "top", labels: { boxWidth: 10 } } },
+            scales: {
+                x: { stacked: true, ticks: { maxTicksLimit: 16 } },
+                y: { stacked: true, beginAtZero: true },
+            },
+            elements: { point: { radius: 0 } },
+        },
+    });
 }
+
+// =========================================================================
+// Shared utility — kept from the old Search/Duplicates block because
+// applyFilters() and the AI panel + map place search still use it.
+// =========================================================================
 
 /**
  * Disable a button while a request is in flight, replacing its label
@@ -2972,195 +2967,14 @@ function disableButtonWhilePending(btn, loadingLabel) {
     };
 }
 
-function escapeRegExp(s) {
-    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function renderActiveFilterChips() {
-    const el = document.getElementById("search-active-filters");
-    if (!el) return;
-    const chips = [];
-    FILTER_FIELDS.forEach(({ id, key, label }) => {
-        if (key === "coords") return;
-        const input = document.getElementById(id);
-        if (!input || !input.value) return;
-        let display = input.value;
-        // For <select>, use the selected option's text as the display label
-        if (input.tagName === "SELECT") {
-            const opt = input.options[input.selectedIndex];
-            display = opt && opt.text ? opt.text : input.value;
-        }
-        chips.push(`
-            <span class="chip" data-field="${id}">
-                <span class="chip-label">${label}: ${escapeHtml(display)}</span>
-                <button class="chip-x" title="Remove this filter" onclick="removeFilter('${id}')">&times;</button>
-            </span>
-        `);
-    });
-    if (chips.length === 0) {
-        el.innerHTML = "";
-        el.style.display = "none";
-    } else {
-        chips.push(`<button class="chip-clear" onclick="clearFilters(); doSearch();">Clear all</button>`);
-        el.innerHTML = chips.join("");
-        el.style.display = "flex";
-    }
-}
-
-function removeFilter(inputId) {
-    const el = document.getElementById(inputId);
-    if (el) el.value = "";
-    state.searchPage = 0;
-    doSearch();
-}
-
-function renderPager(currentPage, totalPages) {
-    const pagerEl = document.getElementById("search-pager");
-    if (!pagerEl) return;
-    if (totalPages <= 1) { pagerEl.innerHTML = ""; return; }
-
-    const buttons = [];
-    const cur = currentPage; // 0-indexed
-    const last = totalPages - 1;
-
-    function btn(label, page, disabled = false, active = false) {
-        const cls = ["pager-btn"];
-        if (disabled) cls.push("disabled");
-        if (active)   cls.push("active");
-        const onclick = (disabled || active) ? "" : `onclick="goToPage(${page})"`;
-        return `<button class="${cls.join(' ')}" ${onclick}>${label}</button>`;
-    }
-
-    buttons.push(btn("« First", 0, cur === 0));
-    buttons.push(btn("‹ Prev",  cur - 1, cur === 0));
-
-    // Sliding window of page numbers around the current page
-    const windowSize = 2;
-    const start = Math.max(0, cur - windowSize);
-    const end   = Math.min(last, cur + windowSize);
-    if (start > 0) buttons.push(`<span class="pager-ellipsis">…</span>`);
-    for (let i = start; i <= end; i++) {
-        buttons.push(btn(String(i + 1), i, false, i === cur));
-    }
-    if (end < last) buttons.push(`<span class="pager-ellipsis">…</span>`);
-
-    buttons.push(btn("Next ›", cur + 1, cur === last));
-    buttons.push(btn("Last »", last,    cur === last));
-
-    pagerEl.innerHTML = buttons.join("");
-}
-
-function goToPage(page) {
-    state.searchPage = page;
-    executeSearch();
-    // Scroll the results container back to the top — it's overflow-y:auto
-    // inside a full-height panel, so scrollIntoView on the window does
-    // nothing visible. Setting scrollTop directly is the right call.
-    const results = document.getElementById("search-results");
-    if (results) results.scrollTop = 0;
-}
-
-// =========================================================================
-// Duplicates
-// =========================================================================
-function scoreColor(score) {
-    if (score >= 0.9) return "var(--green)";
-    if (score >= 0.7) return "var(--accent)";
-    if (score >= 0.5) return "var(--orange)";
-    if (score >= 0.3) return "#b07d10";
-    return "var(--text-muted)";
-}
-
-function scoreLabel(score) {
-    if (score >= 0.9) return "Certain";
-    if (score >= 0.7) return "Likely";
-    if (score >= 0.5) return "Possible";
-    if (score >= 0.3) return "Weak";
-    return "Unlikely";
-}
-
-async function loadDuplicates(append = false) {
-    const info = document.getElementById("dupes-info");
-    const resultsEl = document.getElementById("dupes-results");
-    const moreBtn = document.getElementById("btn-dupes-more");
-    const applyBtn = document.getElementById("btn-dupes-apply");
-
-    const restoreApplyBtn = disableButtonWhilePending(applyBtn, "Loading…");
-    mountLoadingTerminal(info, "duplicates", { compact: true, header: "DUPLICATES" });
-
-    const params = new URLSearchParams();
-    params.set("page", state.dupesPage);
-
-    const conf = document.getElementById("dupes-confidence").value;
-    if (conf) {
-        const [min, max] = conf.split(",");
-        params.set("min_score", min);
-        params.set("max_score", max);
-    }
-
-    const method = document.getElementById("dupes-method").value;
-    if (method) params.set("method", method);
-
-    const source = document.getElementById("dupes-source").value;
-    if (source) params.set("source", source);
-
-    try {
-        const data = await fetchJSON(`/api/duplicates?${params}`);
-        state.dupesTotal = data.total;
-
-        if (!append) {
-            resultsEl.innerHTML = "";
-        }
-
-        info.textContent = `${data.total.toLocaleString()} duplicate pairs` +
-            (data.total > 0 ? ` (page ${data.page + 1} of ${data.pages})` : "");
-
-        data.results.forEach(r => {
-            const card = document.createElement("div");
-            card.className = "dupe-card";
-
-            const pct = r.score !== null ? (r.score * 100).toFixed(0) : "?";
-            const label = r.score !== null ? scoreLabel(r.score) : "";
-            const color = r.score !== null ? scoreColor(r.score) : "var(--text-muted)";
-
-            const locA = formatLocation(r.a.city, r.a.state, "");
-            const locB = formatLocation(r.b.city, r.b.state, "");
-
-            card.innerHTML = `
-                <div class="dupe-card-header">
-                    <span class="dupe-card-score" style="color:${color}">${pct}% ${label}</span>
-                    <span class="dupe-card-method">${r.method || ""}</span>
-                </div>
-                <div class="dupe-card-pair">
-                    <div class="dupe-card-side" onclick="openDetail(${r.a.id})">
-                        ${sourceBadge(r.a.source)}
-                        <div class="dupe-card-date">${r.a.date || "Unknown"}</div>
-                        <div class="dupe-card-loc">${escapeHtml(locA)}</div>
-                        ${r.a.shape ? `<span class="shape-tag">${escapeHtml(r.a.shape)}</span>` : ""}
-                        <div class="dupe-card-desc">${escapeHtml(r.a.desc || "")}</div>
-                    </div>
-                    <div class="dupe-card-vs">vs</div>
-                    <div class="dupe-card-side" onclick="openDetail(${r.b.id})">
-                        ${sourceBadge(r.b.source)}
-                        <div class="dupe-card-date">${r.b.date || "Unknown"}</div>
-                        <div class="dupe-card-loc">${escapeHtml(locB)}</div>
-                        ${r.b.shape ? `<span class="shape-tag">${escapeHtml(r.b.shape)}</span>` : ""}
-                        <div class="dupe-card-desc">${escapeHtml(r.b.desc || "")}</div>
-                    </div>
-                </div>
-            `;
-            resultsEl.appendChild(card);
-        });
-
-        const hasMore = (state.dupesPage + 1) < data.pages;
-        moreBtn.style.display = hasMore ? "block" : "none";
-    } catch (err) {
-        info.textContent = "Couldn't load duplicate pairs — try again. (" + (err.message || err) + ")";
-        console.error(err);
-    } finally {
-        restoreApplyBtn();
-    }
-}
+// v0.8.6: Search panel and Duplicates panel functions were deleted.
+// `doSearch`, `executeSearch`, `renderActiveFilterChips`, `removeFilter`,
+// `renderPager`, `goToPage`, `scoreColor`, `scoreLabel`, and
+// `loadDuplicates` are gone along with the DOM elements they
+// mutated. Client-side filtering on the Observatory bulk buffer
+// replaces server-side faceted search; the v0.8.3b export ships
+// zero duplicate_candidate rows so the Duplicates panel had nothing
+// to show.
 
 // =========================================================================
 // Detail Modal
@@ -3171,6 +2985,12 @@ async function loadDuplicates(append = false) {
 async function loadInsights() {
     const statusEl = document.getElementById("insights-status");
     mountLoadingTerminal(statusEl, "insights", { compact: true, header: "INSIGHTS" });
+
+    // v0.8.6 — run the client-side cards unconditionally. They read
+    // straight from the bulk buffer and don't depend on the sentiment
+    // endpoint, so they work even when sentiment coverage is zero
+    // (e.g. very narrow date filter).
+    refreshInsightsClientCards();
 
     const params = getFilterParams();
     const qs = params.toString();
@@ -3184,23 +3004,13 @@ async function loadInsights() {
         ]);
 
         if (!overview.total_analyzed || overview.total_analyzed === 0) {
-            document.getElementById("insights-grid").innerHTML =
-                '<div class="insights-empty" style="grid-column:1/-1">' +
-                'No sentiment scores match these filters.<br>' +
-                'Sentiment is only computed for sightings with descriptions — try broadening your filters or picking a different date range.</div>';
-            statusEl.textContent = "No data";
+            // Sentiment is empty for this filter set. Leave the client-
+            // side cards in place (they already rendered above) and
+            // just show a compact badge in the status bar instead of
+            // nuking the whole grid. v0.8.6 retired the full-grid
+            // empty-state because the 4 client cards always render.
+            statusEl.textContent = "No sentiment scores for these filters";
             return;
-        }
-
-        // Restore grid if it was showing empty message
-        const grid = document.getElementById("insights-grid");
-        if (grid.querySelector(".insights-empty")) {
-            grid.innerHTML = `
-                <div class="insight-card"><h3>Emotion Distribution</h3><div class="insight-chart-wrap"><canvas id="emotion-radar-chart"></canvas></div></div>
-                <div class="insight-card"><h3>Sentiment Over Time</h3><div class="insight-chart-wrap"><canvas id="sentiment-timeline-chart"></canvas></div></div>
-                <div class="insight-card"><h3>Emotions by Source</h3><div class="insight-chart-wrap"><canvas id="emotion-source-chart"></canvas></div></div>
-                <div class="insight-card"><h3>Emotions by Shape (Top 10)</h3><div class="insight-chart-wrap"><canvas id="emotion-shape-chart"></canvas></div></div>
-            `;
         }
 
         statusEl.textContent = `${overview.total_analyzed.toLocaleString()} sightings analyzed | Avg sentiment: ${overview.avg_compound.toFixed(3)}`;
@@ -3210,9 +3020,331 @@ async function loadInsights() {
         renderEmotionBySource(bySource);
         renderEmotionByShape(byShape);
     } catch (err) {
-        statusEl.textContent = "Couldn't load insights — try again or change filters.";
+        statusEl.textContent = "Couldn't load sentiment insights — try again or change filters.";
         console.error("loadInsights error:", err);
     }
+}
+
+// v0.8.6 — refresh only the client-side cards (the 4 new ones).
+// Called by applyClientFilters() on filter change and by loadInsights()
+// on first mount so the cards are always in sync with the bulk buffer's
+// visibleIdx.
+function refreshInsightsClientCards() {
+    if (!window.UFODeck || !window.UFODeck.POINTS || !window.UFODeck.POINTS.ready) return;
+    renderQualityDistribution();
+    renderMovementTaxonomy();
+    renderShapeMovementMatrix();
+    renderHoaxCurve();
+}
+
+// -------------------------------------------------------------------------
+// v0.8.6 — client-side Insight cards. Each walks POINTS.visibleIdx
+// and feeds Chart.js directly. Cards recompute on every filter change
+// in single-digit milliseconds.
+// -------------------------------------------------------------------------
+
+function renderQualityDistribution() {
+    const P = window.UFODeck.POINTS;
+    const iter = P.visibleIdx || null;
+    const qs = P.qualityScore;
+    const UNK = 255;
+    const buckets = new Uint32Array(10);  // 0-9, 10-19, ..., 90-100
+    if (iter) {
+        for (let k = 0; k < iter.length; k++) {
+            const v = qs[iter[k]];
+            if (v === UNK) continue;
+            buckets[Math.min(9, (v / 10) | 0)]++;
+        }
+    } else {
+        for (let i = 0; i < P.count; i++) {
+            const v = qs[i];
+            if (v === UNK) continue;
+            buckets[Math.min(9, (v / 10) | 0)]++;
+        }
+    }
+
+    const labels = ["0-9", "10-19", "20-29", "30-39", "40-49", "50-59", "60-69", "70-79", "80-89", "90-100"];
+    const dimColor = getComputedStyle(document.body).getPropertyValue("--fg-dim").trim() || "#8A94AD";
+    const accent = getComputedStyle(document.body).getPropertyValue("--accent").trim() || "#00F0FF";
+    // Highlight the 60+ "high quality" threshold buckets
+    const backgroundColors = labels.map((_, i) => (i >= 6 ? accent + "CC" : dimColor + "55"));
+    const borderColors = labels.map((_, i) => (i >= 6 ? accent : dimColor));
+
+    const canvas = document.getElementById("quality-distribution-chart");
+    if (!canvas) return;
+    if (state.insightsCharts.qualityDist) {
+        const c = state.insightsCharts.qualityDist;
+        c.data.datasets[0].data = Array.from(buckets);
+        c.data.datasets[0].backgroundColor = backgroundColors;
+        c.data.datasets[0].borderColor = borderColors;
+        c.update("none");
+        return;
+    }
+    state.insightsCharts.qualityDist = new Chart(canvas.getContext("2d"), {
+        type: "bar",
+        data: {
+            labels,
+            datasets: [{
+                label: "Sightings",
+                data: Array.from(buckets),
+                backgroundColor: backgroundColors,
+                borderColor: borderColors,
+                borderWidth: 1,
+            }],
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: { duration: 300 },
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        title: (items) => `Quality Score ${items[0].label}`,
+                        label: (item) => `${item.parsed.y.toLocaleString()} sightings`,
+                    },
+                },
+            },
+            scales: {
+                x: { title: { display: true, text: "Quality Score bucket" } },
+                y: { beginAtZero: true },
+            },
+        },
+    });
+}
+
+function renderMovementTaxonomy() {
+    const P = window.UFODeck.POINTS;
+    const iter = P.visibleIdx || null;
+    const mf = P.movementFlags;
+    const M = 10;
+    const counts = new Uint32Array(M);
+    if (iter) {
+        for (let k = 0; k < iter.length; k++) {
+            const v = mf[iter[k]];
+            if (v === 0) continue;
+            for (let b = 0; b < M; b++) if (v & (1 << b)) counts[b]++;
+        }
+    } else {
+        for (let i = 0; i < P.count; i++) {
+            const v = mf[i];
+            if (v === 0) continue;
+            for (let b = 0; b < M; b++) if (v & (1 << b)) counts[b]++;
+        }
+    }
+
+    // Sort bars by count descending for readability.
+    const names = P.movements || [];
+    const rows = [];
+    for (let b = 0; b < M; b++) {
+        rows.push({ name: names[b] || `cat ${b}`, count: counts[b] });
+    }
+    rows.sort((a, b) => b.count - a.count);
+    const labels = rows.map(r => r.name.charAt(0).toUpperCase() + r.name.slice(1));
+    const data = rows.map(r => r.count);
+    const accent = getComputedStyle(document.body).getPropertyValue("--accent").trim() || "#00F0FF";
+
+    const canvas = document.getElementById("movement-taxonomy-chart");
+    if (!canvas) return;
+    if (state.insightsCharts.movementTax) {
+        const c = state.insightsCharts.movementTax;
+        c.data.labels = labels;
+        c.data.datasets[0].data = data;
+        c.update("none");
+        return;
+    }
+    state.insightsCharts.movementTax = new Chart(canvas.getContext("2d"), {
+        type: "bar",
+        data: {
+            labels,
+            datasets: [{
+                label: "Sightings with movement",
+                data,
+                backgroundColor: accent + "BB",
+                borderColor: accent,
+                borderWidth: 1,
+            }],
+        },
+        options: {
+            indexAxis: "y",
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: { duration: 300 },
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: (item) => `${item.parsed.x.toLocaleString()} sightings`,
+                    },
+                },
+            },
+            scales: {
+                x: { beginAtZero: true },
+            },
+        },
+    });
+}
+
+function renderShapeMovementMatrix() {
+    const P = window.UFODeck.POINTS;
+    const iter = P.visibleIdx || null;
+    const sh = P.shapeIdx;
+    const mf = P.movementFlags;
+    const S = (P.shapes || [null]).length;
+    const M = 10;
+    const matrix = new Uint32Array(S * M);
+    const shapeTotals = new Uint32Array(S);
+    const walk = (i) => {
+        const s = sh[i];
+        if (s === 0) return;
+        const v = mf[i];
+        if (v === 0) return;
+        shapeTotals[s]++;
+        const base = s * M;
+        for (let b = 0; b < M; b++) if (v & (1 << b)) matrix[base + b]++;
+    };
+    if (iter) {
+        for (let k = 0; k < iter.length; k++) walk(iter[k]);
+    } else {
+        for (let i = 0; i < P.count; i++) walk(i);
+    }
+
+    // Top-10 shapes by count of movement-tagged sightings.
+    const ranked = [];
+    for (let s = 1; s < S; s++) {
+        if (shapeTotals[s] > 0) ranked.push({ idx: s, total: shapeTotals[s] });
+    }
+    ranked.sort((a, b) => b.total - a.total);
+    const top = ranked.slice(0, 10);
+
+    const shapeNames = P.shapes || [];
+    const movementNames = P.movements || [];
+    const labels = top.map(r => shapeNames[r.idx] || `shape ${r.idx}`);
+
+    const palette = [
+        "#00F0FF", "#FFB300", "#FF4E00", "#B8001F", "#7CF9FF",
+        "#8A94AD", "#6ea8ff", "#E6EAF2", "#C97B00", "#9C8B60",
+    ];
+    const datasets = [];
+    for (let b = 0; b < M; b++) {
+        datasets.push({
+            label: (movementNames[b] || `cat ${b}`).charAt(0).toUpperCase() +
+                   (movementNames[b] || "").slice(1),
+            data: top.map(r => matrix[r.idx * M + b]),
+            backgroundColor: palette[b],
+            borderWidth: 0,
+        });
+    }
+
+    const canvas = document.getElementById("shape-movement-chart");
+    if (!canvas) return;
+    if (state.insightsCharts.shapeMovement) {
+        const c = state.insightsCharts.shapeMovement;
+        c.data.labels = labels;
+        c.data.datasets = datasets;
+        c.update("none");
+        return;
+    }
+    state.insightsCharts.shapeMovement = new Chart(canvas.getContext("2d"), {
+        type: "bar",
+        data: { labels, datasets },
+        options: {
+            indexAxis: "y",
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: { duration: 300 },
+            interaction: { mode: "index", intersect: false },
+            plugins: {
+                legend: { position: "bottom", labels: { boxWidth: 10 } },
+                tooltip: {
+                    callbacks: {
+                        footer: (items) => {
+                            const t = items.reduce((s, i) => s + i.parsed.x, 0);
+                            return `Total: ${t.toLocaleString()}`;
+                        },
+                    },
+                },
+            },
+            scales: {
+                x: { stacked: true, beginAtZero: true },
+                y: { stacked: true },
+            },
+        },
+    });
+}
+
+function renderHoaxCurve() {
+    const P = window.UFODeck.POINTS;
+    const iter = P.visibleIdx || null;
+    const hs = P.hoaxScore;
+    const UNK = 255;
+    // 20 buckets of 5 score-points each: 0-4, 5-9, ..., 95-100
+    const buckets = new Uint32Array(20);
+    if (iter) {
+        for (let k = 0; k < iter.length; k++) {
+            const v = hs[iter[k]];
+            if (v === UNK) continue;
+            buckets[Math.min(19, (v / 5) | 0)]++;
+        }
+    } else {
+        for (let i = 0; i < P.count; i++) {
+            const v = hs[i];
+            if (v === UNK) continue;
+            buckets[Math.min(19, (v / 5) | 0)]++;
+        }
+    }
+
+    const labels = [];
+    for (let i = 0; i < 20; i++) labels.push(`${i * 5}`);
+    const accent = getComputedStyle(document.body).getPropertyValue("--accent").trim() || "#00F0FF";
+    const hot = getComputedStyle(document.body).getPropertyValue("--accent-hot").trim() || "#FF4E00";
+    // Gradient from accent (likely genuine) to hot (likely hoax)
+    const pointColors = labels.map((_, i) => (i >= 16 ? hot : accent));
+
+    const canvas = document.getElementById("hoax-curve-chart");
+    if (!canvas) return;
+    if (state.insightsCharts.hoaxCurve) {
+        const c = state.insightsCharts.hoaxCurve;
+        c.data.datasets[0].data = Array.from(buckets);
+        c.data.datasets[0].pointBackgroundColor = pointColors;
+        c.update("none");
+        return;
+    }
+    state.insightsCharts.hoaxCurve = new Chart(canvas.getContext("2d"), {
+        type: "line",
+        data: {
+            labels,
+            datasets: [{
+                label: "Sightings",
+                data: Array.from(buckets),
+                borderColor: accent,
+                backgroundColor: accent + "22",
+                pointBackgroundColor: pointColors,
+                pointRadius: 3,
+                fill: true,
+                tension: 0.25,
+                borderWidth: 2,
+            }],
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: { duration: 300 },
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        title: (items) => `Hoax score ${items[0].label}-${(+items[0].label) + 4}`,
+                        label: (item) => `${item.parsed.y.toLocaleString()} sightings`,
+                    },
+                },
+            },
+            scales: {
+                x: { title: { display: true, text: "Hoax likelihood (0 = genuine, 100 = hoax)" } },
+                y: { beginAtZero: true },
+            },
+        },
+    });
 }
 
 function renderEmotionRadar(overview) {
@@ -4131,53 +4263,12 @@ function initMapPlaceSearch() {
 // Search panel: export buttons + copy-link button
 // =========================================================================
 
-function initSearchActions() {
-    const csvBtn = document.getElementById("btn-export-csv");
-    const jsonBtn = document.getElementById("btn-export-json");
-    const copyBtn = document.getElementById("btn-copy-link");
-
-    function downloadExport(format) {
-        // Reuse the same filter params the search panel just used
-        const params = getFilterParams();
-        const q = document.getElementById("search-input")?.value?.trim();
-        if (q) params.set("q", q);
-        const url = `/api/export.${format}?${params}`;
-        // Trigger a download by creating a temporary anchor — using
-        // window.location would replace the SPA URL hash.
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `ufosint-export.${format}`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-    }
-
-    if (csvBtn)  csvBtn.addEventListener("click", () => downloadExport("csv"));
-    if (jsonBtn) jsonBtn.addEventListener("click", () => downloadExport("json"));
-
-    if (copyBtn) {
-        copyBtn.addEventListener("click", async () => {
-            const url = window.location.origin + window.location.pathname + window.location.hash;
-            const original = copyBtn.innerHTML;
-            try {
-                await navigator.clipboard.writeText(url);
-                copyBtn.innerHTML = "✓ Copied";
-            } catch (err) {
-                // Fallback: execCommand for older browsers / restrictive contexts
-                const ta = document.createElement("textarea");
-                ta.value = url;
-                ta.style.position = "fixed";
-                ta.style.opacity = "0";
-                document.body.appendChild(ta);
-                ta.select();
-                try { document.execCommand("copy"); copyBtn.innerHTML = "✓ Copied"; }
-                catch (_) { copyBtn.innerHTML = "✗ Copy failed"; }
-                document.body.removeChild(ta);
-            }
-            setTimeout(() => { copyBtn.innerHTML = original; }, 1500);
-        });
-    }
-}
+// v0.8.6: initSearchActions() was deleted along with the Search
+// panel's CSV/JSON export buttons and the copy-link button. The
+// /api/export.csv and /api/export.json routes still work via
+// direct URL for anyone who wants scripted downloads, but nothing
+// in the UI binds to them anymore. Add an Observatory rail button
+// in a future release if users ask for filtered exports.
 
 
 function aiInitListeners() {
@@ -4343,7 +4434,7 @@ async function runChatLoop() {
             } catch (err) {
                 result = { error: String(err) };
             }
-            // Stash the most recent search args so the "view all in Search"
+            // Stash the most recent search args so the "view all on map"
             // affordance on inline result cards has something to link to.
             if (tc.name === "search_sightings") {
                 _lastSearchArgs = tc.arguments || {};
@@ -4542,7 +4633,7 @@ function renderToolCallResult(name, result) {
                 ${r.description ? `<div class="ai-result-desc">${escapeHtml(r.description.substring(0, 200))}${r.description.length > 200 ? "…" : ""}</div>` : ""}
             </a>`;
         }).join("");
-        const more = result.total > result.results.length ? `<div class="ai-result-more">+${(result.total - result.results.length).toLocaleString()} more — <a href="#" onclick="navigateToSearchFromAI(${JSON.stringify(getLastSearchArgs()).replace(/"/g, '&quot;')}); return false;">view all in Search →</a></div>` : "";
+        const more = result.total > result.results.length ? `<div class="ai-result-more">+${(result.total - result.results.length).toLocaleString()} more — <a href="#" onclick="navigateToSearchFromAI(${JSON.stringify(getLastSearchArgs()).replace(/"/g, '&quot;')}); return false;">view all on map →</a></div>` : "";
         appendBubble("tool-result", `<div class="ai-msg-body"><div class="ai-result-summary">${result.total.toLocaleString()} matching sightings (showing ${Math.min(8, result.results.length)})</div>${cards}${more}</div>`);
         return;
     }
@@ -4568,7 +4659,9 @@ function renderToolCallResult(name, result) {
     appendBubble("tool-result", `<div class="ai-msg-body"><pre class="ai-tool-json">${escapeHtml(truncated)}</pre></div>`);
 }
 
-// Last search args, captured for the "view all in Search" link
+// Last search args, captured for the AI "view all on map" link
+// (v0.8.6: link now routes to Observatory via the rewritten
+// navigateToSearch helper)
 let _lastSearchArgs = {};
 function getLastSearchArgs() { return _lastSearchArgs; }
 
@@ -4597,10 +4690,9 @@ function formatMarkdownLite(text) {
 // dynamically-injected markup (popup links, filter chips, pager buttons,
 // empty-state CTAs, etc.).
 window.openDetail   = openDetail;
-window.removeFilter = removeFilter;
-window.goToPage     = goToPage;
 window.clearFilters = clearFilters;
-window.doSearch     = doSearch;
+// v0.8.6: removeFilter, goToPage, doSearch window bindings removed
+// along with the Search panel's pager and chip-remove handlers.
 
 function closeModal() {
     const overlay = document.getElementById("modal-overlay");

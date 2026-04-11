@@ -160,52 +160,16 @@ def test_api_sighting_drops_raw_json_parse_block():
     assert "json.loads(record['raw_json'])" not in body
 
 
-def test_api_search_no_longer_ilike_description():
-    """The /api/search q parameter must not reference s.description or
-    s.summary in its WHERE clause anymore. It uses a 7-column faceted
-    match over location/shape/color/emotion/source."""
+# v0.8.6: /api/search was removed entirely. The three tests below used
+# to assert the v0.8.3 rewrite's WHERE clause and response shape; they
+# now flip to asserting the route is gone, leaving test_v086.py to
+# own that contract going forward.
+def test_api_search_route_removed_in_v086():
     src = _read(APP_PY)
-    start = src.find("def api_search(")
-    assert start != -1
-    end = src.find("\n# ---", start + 1)
-    body = src[start:end] if end != -1 else src[start:start + 5000]
-    assert "s.description ILIKE" not in body
-    assert "s.summary ILIKE" not in body
-    # And the new faceted clause is in place
-    assert "standardized_shape" in body
-    assert "primary_color" in body
-    assert "dominant_emotion" in body
-    assert "sd.name" in body  # source name match
-
-
-def test_api_search_response_has_no_description_key():
-    """The results dicts built by api_search must not write a
-    `description` key anymore."""
-    src = _read(APP_PY)
-    start = src.find("def api_search(")
-    end = src.find("\n# ---", start + 1)
-    body = src[start:end] if end != -1 else src[start:start + 5000]
-    # Look for a dict literal writing the description key
-    assert '"description":' not in body, (
-        "api_search response still writes a description key"
+    assert "def api_search(" not in src, (
+        "v0.8.6 deleted /api/search — see tests/test_v086.py for "
+        "the current contract"
     )
-
-
-def test_api_search_response_has_derived_fields():
-    """New response carries the derived fields the UI needs to
-    render the compound card."""
-    src = _read(APP_PY)
-    start = src.find("def api_search(")
-    end = src.find("\n# ---", start + 1)
-    body = src[start:end] if end != -1 else src[start:start + 5000]
-    for key in (
-        '"quality_score":',
-        '"hoax_likelihood":',
-        '"dominant_emotion":',
-        '"has_description":',
-        '"has_media":',
-    ):
-        assert key in body, f"api_search missing {key}"
 
 
 def test_export_columns_drop_description_summary():
@@ -302,33 +266,16 @@ def test_open_detail_renders_derived_metadata_section():
     assert "r.dominant_emotion" in body
 
 
-def test_execute_search_card_has_no_description_snippet():
-    """Result cards must not inject r.description anymore."""
+# v0.8.6: executeSearch was deleted along with the Search panel.
+# The two tests below used to probe the result-card template; they
+# flip to asserting the function itself is gone.
+def test_execute_search_deleted_in_v086():
     js = _read(APP_JS)
-    start = js.find("async function executeSearch(")
-    end = js.find("\nfunction ", start + 1)
-    body = js[start:end] if end != -1 else js[start:start + 8000]
-
-    assert "r.description" not in body, (
-        "executeSearch still references r.description in the result "
-        "card template"
+    assert "async function executeSearch(" not in js, (
+        "v0.8.6 deleted executeSearch — client-side filtering on "
+        "the Observatory bulk buffer replaced the server search. "
+        "See tests/test_v086.py."
     )
-    # <mark> highlighting also goes away
-    assert "escapeRegExp(q)" not in body, (
-        "The q-highlight regex is obsolete — there's no description "
-        "text to highlight anymore"
-    )
-    # No .result-desc class in the template (only in legacy CSS)
-    assert 'class="result-desc"' not in body
-
-
-def test_execute_search_card_has_derived_metadata_line():
-    js = _read(APP_JS)
-    start = js.find("async function executeSearch(")
-    end = js.find("\nfunction ", start + 1)
-    body = js[start:end] if end != -1 else js[start:start + 8000]
-    assert "r.quality_score" in body or "quality_score" in body
-    assert "result-derived" in body
 
 
 # ---------------------------------------------------------------------------

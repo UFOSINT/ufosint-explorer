@@ -42,10 +42,18 @@ def test_every_inline_svg_has_explicit_width_and_height(path: Path):
     Without width/height attributes, SVGs fall back to their default
     intrinsic size (300x150) when CSS fails to apply. That's what broke
     the Sprint 4 deploy for users holding stale CSS.
+
+    v0.8.6: app.js no longer contains any inline SVGs (the CSV/JSON/
+    copy-link buttons that embedded them were deleted with the Search
+    panel). If app.js has zero SVGs that's now fine — the check only
+    applies when there ARE SVGs to size.
     """
     content = _read(path)
     svgs = _SVG_OPEN_RE.findall(content)
-    assert svgs, f"no <svg> tags found in {path.name}"
+    if not svgs:
+        if path == APP_JS:
+            return  # v0.8.6: app.js has no inline SVGs anymore
+        raise AssertionError(f"no <svg> tags found in {path.name}")
     for svg in svgs:
         assert "width=" in svg, (
             f"{path.name}: <svg> without explicit width — "
@@ -57,13 +65,18 @@ def test_every_inline_svg_has_explicit_width_and_height(path: Path):
 
 
 def test_index_html_has_expected_svg_count():
-    """Lock the SVG count so accidental duplication is obvious in diffs."""
+    """Lock the SVG count so accidental duplication is obvious in diffs.
+
+    v0.8.6: dropped from 10 → 7 because the Search panel's CSV /
+    JSON download buttons and the Copy-link button were deleted.
+    Remaining: settings gear, Ask AI, Connect, Near me, AI empty UFO,
+    chat fab, chat popover UFO.
+    """
     content = _read(INDEX_HTML)
-    assert len(_SVG_OPEN_RE.findall(content)) == 10, (
-        "Expected 10 inline SVGs in index.html (settings gear, Ask AI, "
-        "Connect, Near me, CSV, JSON, Copy link, AI empty UFO, chat fab, "
-        "chat popover UFO). If this changed intentionally, update the "
-        "expected count."
+    assert len(_SVG_OPEN_RE.findall(content)) == 7, (
+        "Expected 7 inline SVGs in index.html (settings gear, Ask AI, "
+        "Connect, Near me, AI empty UFO, chat fab, chat popover UFO). "
+        "If this changed intentionally, update the expected count."
     )
 
 

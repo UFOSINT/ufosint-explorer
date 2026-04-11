@@ -627,6 +627,258 @@
         return out;
     }
 
+    // =================================================================
+    // v0.8.6 — aggregate helpers for the Timeline page + Insights cards
+    // =================================================================
+    // All helpers in this block share a common shape:
+    //
+    //   1. Walk POINTS.visibleIdx (the filtered subset) when available,
+    //      else fall back to "all rows" for the unfiltered variant.
+    //   2. Use the same yearStarts binary-search pattern as
+    //      getYearHistogram() so the year-bin math stays consistent.
+    //   3. Return plain JS objects small enough to hand straight to
+    //      Chart.js — no further post-processing on the consumer side.
+    //
+    // Every call walks the bulk buffer exactly once and runs in
+    // single-digit milliseconds on 396k rows. None of them cache —
+    // the brush + timeline + insights code calls them on filter
+    // changes and expects fresh results.
+
+    // Build a yearStarts lookup table: yearStarts[k] = day-index of
+    // Jan 1 of (min + k). Used by every per-year walker below.
+    function _buildYearStarts() {
+        _ensureYearStats();
+        const min = _yearStats.min;
+        const max = _yearStats.max;
+        if (min == null || max == null) {
+            return { min: null, max: null, span: 0, yearStarts: null };
+        }
+        const span = max - min + 1;
+        const yearStarts = new Uint32Array(span + 1);
+        for (let y = 0; y <= span; y++) {
+            yearStarts[y] = _yearToDays(min + y);
+        }
+        return { min, max, span, yearStarts };
+    }
+
+    // Binary search for the year bin of a day-index. Returns the
+    // index into yearStarts such that yearStarts[bin] <= d < yearStarts[bin+1].
+    // Inlined in hot loops for speed; exposed here for one-off callers.
+    function _dayToBin(d, yearStarts, span) {
+        let lo = 0, hi = span;
+        while (lo < hi) {
+            const mid = (lo + hi + 1) >>> 1;
+            if (yearStarts[mid] <= d) lo = mid;
+            else hi = mid - 1;
+        }
+        return lo;
+    }
+
+    // Return the filtered set of row indices to iterate. Prefers
+    // POINTS.visibleIdx (filtered) and falls back to a synthetic
+    // range for the unfiltered path. The synthetic range is a
+    // plain Uint32Array created on demand — cheap (~1 MB for 400k
+    // rows, allocated once per call) but only used when nothing
+    // has filtered yet.
+    function _resolveIterSet(useVisible) {
+        if (useVisible && POINTS.visibleIdx && POINTS.visibleIdx.length) {
+            return POINTS.visibleIdx;
+        }
+        // Full-range fallback: all rows.
+        const full = new Uint32Array(POINTS.count);
+        for (let i = 0; i < POINTS.count; i++) full[i] = i;
+        return full;
+    }
+
+    // Stacked-by-source year histogram. Returns
+    //   {
+    //     years:  [1900, 1901, ..., maxYear],
+    //     sources: [...POINTS.sources],
+    //     counts: Uint32Array of (span * sources.length),  // row-major
+    //     totals: Uint32Array(span),
+    //     maxTotal: int,
+    //   }
+    // counts[y * sourceCount + s] is the count for year y, source s.
+    //
+    // `useVisible` (default true) walks POINTS.visibleIdx so the
+    // result respects the current filter state. Pass false for the
+    // unfiltered full-dataset version used by the Observatory brush
+    // on initial mount.
+    function getYearHistogramBySource(useVisible) {
+        if (!POINTS.ready) return null;
+        const info = _buildYearStarts();
+        const min = info.min, span = info.span, yearStarts = info.yearStarts;
+        const sources = POINTS.sources.slice();
+        const sourceCount = sources.length;
+        if (min == null) {
+            return { years: [], sources, counts: new Uint32Array(0),
+                     totals: new Uint32Array(0), maxTotal: 0 };
+        }
+        const counts = new Uint32Array(span * sourceCount);
+        const totals = new Uint32Array(span);
+
+        const iter = _resolveIterSet(useVisible !== false);
+        const dd = POINTS.dateDays;
+        const si = POINTS.sourceIdx;
+        const N = iter.length;
+        for (let k = 0; k < N; k++) {
+            const i = iter[k];
+            const d = dd[i];
+            if (d === 0) continue;
+            const bin = _dayToBin(d, yearStarts, span);
+            if (bin < 0 || bin >= span) continue;
+            const src = si[i];
+            counts[bin * sourceCount + src]++;
+            totals[bin]++;
+        }
+
+        let maxTotal = 0;
+        for (let y = 0; y < span; y++) {
+            if (totals[y] > maxTotal) maxTotal = totals[y];
+        }
+        const years = new Array(span);
+        for (let y = 0; y < span; y++) years[y] = min + y;
+
+        return { years, sources, counts, totals, maxTotal };
+    }
+
+    // Filtered single-series year histogram, same shape as the
+    // cached getYearHistogram() output but recomputed every call
+    // from POINTS.visibleIdx. The brush uses this to redraw its
+    // background bars against the currently filtered set without
+    // blowing away the cached full-dataset histogram.
+    //
+    // Returns [{ year, count }].
+    function getYearHistogramForVisible() {
+        if (!POINTS.ready) return null;
+        const info = _buildYearStarts();
+        const min = info.min, span = info.span, yearStarts = info.yearStarts;
+        if (min == null) return [];
+        const bins = new Uint32Array(span);
+        const iter = POINTS.visibleIdx || _resolveIterSet(false);
+        const dd = POINTS.dateDays;
+        const N = iter.length;
+        for (let k = 0; k < N; k++) {
+            const i = iter[k];
+            const d = dd[i];
+            if (d === 0) continue;
+            const bin = _dayToBin(d, yearStarts, span);
+            if (bin >= 0 && bin < span) bins[bin]++;
+        }
+        const out = new Array(span);
+        for (let i = 0; i < span; i++) out[i] = { year: min + i, count: bins[i] };
+        return out;
+    }
+
+    // Per-year median of a uint8 typed array from POINTS (e.g.
+    // qualityScore, hoaxScore, richnessScore). The 255 sentinel is
+    // treated as "unknown" and excluded from the median.
+    //
+    // Returns [{ year, median, count }] where count is the number
+    // of non-sentinel rows contributing to that year.
+    //
+    // Implementation: a small Uint32Array histogram of the 0-100
+    // value range per year bin. Median is the first bucket whose
+    // cumulative count crosses half the total. O(N) per walk.
+    function computeMedianByYear(byteArray) {
+        if (!POINTS.ready || !byteArray) return [];
+        const info = _buildYearStarts();
+        const min = info.min, span = info.span, yearStarts = info.yearStarts;
+        if (min == null) return [];
+
+        // span rows × 256 buckets = value distribution per year.
+        // Sized to 256 rather than 101 so the code flips cleanly
+        // to other uint8 columns in future without rewriting.
+        const hist = new Uint32Array(span * 256);
+        const totals = new Uint32Array(span);
+
+        const iter = POINTS.visibleIdx || _resolveIterSet(false);
+        const dd = POINTS.dateDays;
+        const N = iter.length;
+        for (let k = 0; k < N; k++) {
+            const i = iter[k];
+            const v = byteArray[i];
+            if (v === 255) continue;  // UNK sentinel
+            const d = dd[i];
+            if (d === 0) continue;
+            const bin = _dayToBin(d, yearStarts, span);
+            if (bin < 0 || bin >= span) continue;
+            hist[bin * 256 + v]++;
+            totals[bin]++;
+        }
+
+        const out = new Array(span);
+        for (let y = 0; y < span; y++) {
+            const tot = totals[y];
+            if (tot === 0) {
+                out[y] = { year: min + y, median: null, count: 0 };
+                continue;
+            }
+            const half = tot >>> 1;
+            let cum = 0, med = 0;
+            const base = y * 256;
+            for (let v = 0; v <= 100; v++) {
+                cum += hist[base + v];
+                if (cum > half) { med = v; break; }
+            }
+            out[y] = { year: min + y, median: med, count: tot };
+        }
+        return out;
+    }
+
+    // Per-year share of the 10 movement categories. For each year
+    // bin, returns the count of sightings tagged with each movement
+    // category bit (categories are NOT mutually exclusive — a single
+    // sighting may tag multiple).
+    //
+    // Returns {
+    //   years: [int], movements: [string],
+    //   counts: Uint32Array(span * 10),  // row-major
+    //   totals: Uint32Array(span),       // unique sightings with any movement
+    // }
+    function computeMovementShareByYear() {
+        if (!POINTS.ready) return null;
+        const info = _buildYearStarts();
+        const min = info.min, span = info.span, yearStarts = info.yearStarts;
+        if (min == null) {
+            return { years: [], movements: POINTS.movements.slice(),
+                     counts: new Uint32Array(0), totals: new Uint32Array(0) };
+        }
+        const M = 10;  // _MOVEMENT_CATS length, locked in bit order
+        const counts = new Uint32Array(span * M);
+        const totals = new Uint32Array(span);
+
+        const iter = POINTS.visibleIdx || _resolveIterSet(false);
+        const dd = POINTS.dateDays;
+        const mf = POINTS.movementFlags;
+        const N = iter.length;
+        for (let k = 0; k < N; k++) {
+            const i = iter[k];
+            const v = mf[i];
+            if (v === 0) continue;
+            const d = dd[i];
+            if (d === 0) continue;
+            const bin = _dayToBin(d, yearStarts, span);
+            if (bin < 0 || bin >= span) continue;
+            totals[bin]++;
+            const base = bin * M;
+            for (let b = 0; b < M; b++) {
+                if (v & (1 << b)) counts[base + b]++;
+            }
+        }
+
+        const years = new Array(span);
+        for (let y = 0; y < span; y++) years[y] = min + y;
+        return { years, movements: POINTS.movements.slice(), counts, totals };
+    }
+
+    // Count of currently visible rows. Cheap wrapper so the Timeline
+    // header and Insights headers don't reach into POINTS directly.
+    function countVisible() {
+        if (!POINTS.ready) return 0;
+        return POINTS.visibleIdx ? POINTS.visibleIdx.length : POINTS.count;
+    }
+
     // Integer min/max year across non-zero rows. Caches on first
     // call via _ensureYearStats().
     function getYearRange() {
@@ -900,6 +1152,13 @@
         getYearHistogram,
         getYearRange,
         isTimeWindowActive: () => _timeState.enabled,
+
+        // v0.8.6 — aggregate helpers for Timeline page + Insights
+        getYearHistogramBySource,
+        getYearHistogramForVisible,
+        computeMedianByYear,
+        computeMovementShareByYear,
+        countVisible,
 
         // v0.8.2 — derived-fields API
         getDayRange,

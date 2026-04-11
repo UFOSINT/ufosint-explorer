@@ -1352,16 +1352,26 @@ def _points_bulk_etag() -> str:
     """Cheap ETag for the bulk points endpoint.
 
     Derived from the schema version + geocoded row count + max sighting
-    id + the set of derived columns present in the schema. Both SQL
-    aggregates are O(1) under the existing indexes (idx_location_coords
-    and the primary key), so this runs in a few milliseconds and is
-    safe to call on every request.
+    id + count of has_movement_mentioned rows + the set of derived
+    columns present in the schema. All SQL aggregates use existing
+    indexes (idx_location_coords, primary key, idx_sighting_has_movement)
+    so this runs in ~20ms and is safe to call on every request.
 
-    Including the column set in the ETag means when the v0.8.2
-    migration finally lands (adding new columns), the ETag changes
-    and every browser-side cache invalidates automatically.
+    Including the column set in the ETag means when a new migration
+    lands (adding new columns), the ETag changes and every
+    browser-side cache invalidates automatically.
+
+    v0.8.6 — the has_movement count is included as a data-content
+    signal. A v0.8.5 reload replaced content in-place while
+    preserving row IDs and column count, which meant the old
+    `{count}-{max_id}-{cols}` etag stayed identical across the
+    reload. The in-process @lru_cache returned a stale buffer with
+    coverage.has_movement = 0 despite PG holding 249,217 movement
+    rows. Adding SUM(has_movement_mentioned) to the etag catches
+    content-replace reloads without requiring a manual app restart.
     """
     conn = get_db()
+    mv_count: int | str = "x"  # sentinel for pre-v0.8.3 schemas
     try:
         cur = conn.cursor()
         cur.execute(
@@ -1377,10 +1387,30 @@ def _points_bulk_etag() -> str:
         )
         cnt, max_id = cur.fetchone()
         cols = _points_bulk_column_set(conn)
+
+        # v0.8.6 — include has_movement count as a data-content
+        # signal. Uses idx_sighting_has_movement (added by
+        # add_v083_derived_columns.sql). Falls back to sentinel "x"
+        # on pre-v0.8.3 schemas where the column doesn't exist,
+        # and also on any cursor state that returns None for
+        # fetchone() (some test fakes don't know about this query).
+        try:
+            cur.execute(
+                "SELECT COUNT(*)::bigint FROM sighting "
+                "WHERE has_movement_mentioned = 1"
+            )
+            row = cur.fetchone()
+            mv_count = int(row[0]) if row and row[0] is not None else "x"
+        except psycopg.errors.UndefinedColumn:
+            conn.rollback()
+            mv_count = "x"
     finally:
         conn.close()
     cols_tag = "-".join(sorted(cols)) if cols else "base"
-    return f"{_POINTS_BULK_SCHEMA_VERSION}-{int(cnt)}-{int(max_id)}-{cols_tag}"
+    return (
+        f"{_POINTS_BULK_SCHEMA_VERSION}"
+        f"-{int(cnt)}-{int(max_id)}-mv{mv_count}-{cols_tag}"
+    )
 
 
 def _duration_log2(sec) -> int:
@@ -1973,147 +2003,21 @@ def api_timeline():
     })
 
 
-@app.route("/api/search")
-@cache.cached(timeout=300, query_string=True)
-def api_search():
-    """Search sightings by faceted query + filters.
-
-    v0.8.3: The `q` parameter's semantics changed. It previously ran
-    ILIKE against `s.description` and `s.summary` (the raw narrative
-    text), which forced a pg_trgm GIN index scan. v0.8.3 drops those
-    columns from the public schema — there IS no description text to
-    search anymore. Instead, `q` now runs case-insensitive substring
-    matching against seven structured / derived columns:
-
-      city · state · country · standardized_shape · primary_color ·
-      dominant_emotion · source_name
-
-    So `q=triangle` matches every sighting whose standardized_shape
-    is "Triangle" (and any city/country with "triangle" in the name,
-    which is effectively none). `q=texas` matches every Texas
-    sighting regardless of shape. `q=fear london` — wait, that's
-    actually not supported; `q` is a single substring, not a
-    multi-word AND. For AND behaviour, use the faceted filters
-    (source/shape/date_from/etc.) alongside q.
-
-    Every column in the WHERE has a btree index from
-    scripts/pg_schema.sql or scripts/add_v082_derived_columns.sql,
-    so the faceted search stays sub-second on 614k rows.
-    """
-    conn = get_db()
-    cur = conn.cursor()
-
-    q = request.args.get("q", "").strip()
-    page = int(request.args.get("page", 0))
-    per_page = 50
-    offset = page * per_page
-
-    clauses = []
-    args = []
-
-    if q:
-        # Faceted OR: match any of 7 columns with the same substring.
-        # Seven copies of %q% pattern into args.
-        clauses.append(
-            "("
-            "COALESCE(l.city, '')                              ILIKE %s OR "
-            "COALESCE(l.state, '')                             ILIKE %s OR "
-            "COALESCE(l.country, '')                           ILIKE %s OR "
-            "COALESCE(s.standardized_shape, s.shape, '')       ILIKE %s OR "
-            "COALESCE(s.primary_color, s.color, '')            ILIKE %s OR "
-            "COALESCE(s.dominant_emotion, '')                  ILIKE %s OR "
-            "COALESCE(sd.name, '')                             ILIKE %s"
-            ")"
-        )
-        like = f"%{q}%"
-        args.extend([like] * 7)
-
-    add_common_filters(request.args, clauses, args)
-
-    where = " AND ".join(clauses) if clauses else "TRUE"
-
-    # Count total. The joins below mirror the page query so the WHERE
-    # clauses that reference `sd.name`, `l.city`, etc. resolve.
-    count_sql = f"""
-        SELECT COUNT(*)
-        FROM sighting s
-        JOIN source_database sd ON s.source_db_id = sd.id
-        LEFT JOIN location l ON s.location_id = l.id
-        WHERE {where}
-    """
-    cur.execute(count_sql, args)
-    total = cur.fetchone()[0]
-
-    # v0.8.3: Fetch page with derived fields in the SELECT.
-    # Explicit column list — NEVER references description/summary/
-    # notes/raw_json (the 4 columns scripts/strip_raw_for_public.py
-    # drops). Response carries the v0.8.2 derived metadata so the
-    # frontend can render compound result cards instead of a plain
-    # description snippet.
-    sql = f"""
-        SELECT s.id, s.date_event, s.sighting_datetime,
-               s.shape, s.standardized_shape,
-               COALESCE(s.primary_color, s.color, '') AS color,
-               s.dominant_emotion,
-               s.quality_score, s.richness_score, s.hoax_likelihood,
-               s.has_description, s.has_media,
-               sd.name AS source_name,
-               COALESCE(l.city, '')    AS city,
-               COALESCE(l.state, '')   AS state,
-               COALESCE(l.country, '') AS country,
-               s.hynek, s.num_witnesses, s.duration,
-               COALESCE(sc.name, '') AS collection
-        FROM sighting s
-        JOIN source_database sd ON s.source_db_id = sd.id
-        LEFT JOIN source_collection sc ON sd.collection_id = sc.id
-        LEFT JOIN location l ON s.location_id = l.id
-        WHERE {where}
-        ORDER BY s.date_event DESC NULLS LAST
-        LIMIT %s OFFSET %s
-    """
-    cur.execute(sql, args + [per_page, offset])
-
-    results = []
-    for r in cur.fetchall():
-        results.append({
-            "id": r[0],
-            "date": r[1],
-            "sighting_datetime": r[2],
-            "shape": r[4] or r[3],  # standardized_shape falls back to raw
-            "color": r[5] or None,
-            "dominant_emotion": r[6],
-            "quality_score": r[7],
-            "richness_score": r[8],
-            "hoax_likelihood": r[9],
-            "has_description": bool(r[10]) if r[10] is not None else None,
-            "has_media": bool(r[11]) if r[11] is not None else None,
-            "source": r[12],
-            "city": r[13],
-            "state": r[14],
-            "country": r[15],
-            "hynek": r[16],
-            "witnesses": r[17],
-            "duration": r[18],
-            "collection": r[19],
-        })
-
-    conn.close()
-    return jsonify({
-        "results": results,
-        "total": total,
-        "page": page,
-        "per_page": per_page,
-        "pages": (total + per_page - 1) // per_page,
-    })
+# v0.8.6: /api/search and the Search panel were removed. Client-side
+# faceted filtering on the Observatory bulk buffer supersedes the old
+# ILIKE-based server search — filtering 396k rows in ~5ms beats any
+# server round trip. The export routes below keep the same WHERE-
+# clause builder so users can still download filtered result sets
+# directly via URL even without the search UI.
 
 
 # ---------------------------------------------------------------------------
-# Export — CSV / JSON download of the current search filter set
+# Export — CSV / JSON download of the current filter set
 # ---------------------------------------------------------------------------
-# Reuses the same WHERE clause as /api/search so the file the user
-# downloads matches what they saw on screen. Capped at 5,000 rows by
-# default; the response always includes the total so the UI can show
-# "downloaded 5,000 of 12,408 — for the full dataset use the MCP API".
+# Uses `add_common_filters` directly (same semantics the v0.8.5
+# Observatory rail uses). Capped at 5,000 rows by default; the
+# response always includes the total so the UI can show "downloaded
+# 5,000 of 12,408 — for the full dataset use the MCP API".
 
 EXPORT_MAX_ROWS = 5000
 
@@ -2144,13 +2048,19 @@ EXPORT_COLUMNS = [
 
 
 def _build_export_query(request_args):
-    """Return (sql, args) for the export query — same filters as /api/search.
+    """Return (sql, args) for the export query — shares filter semantics
+    with the Observatory rail via `add_common_filters`.
 
-    v0.8.3: the `q` parameter uses the same 7-column faceted OR as
-    /api/search (no more ILIKE against description/summary), and the
+    v0.8.3: the `q` parameter runs a 7-column faceted OR (city/state/
+    country/standardized_shape/primary_color/dominant_emotion/source_name)
+    instead of the old ILIKE against description/summary, and the
     SELECT never references the 4 raw-narrative columns the strip
     script drops. Column order matches EXPORT_COLUMNS exactly so the
     dict(zip(...)) in api_export_json works without remapping.
+
+    v0.8.6: /api/search was removed but the export routes kept this
+    builder so `/api/export.csv?q=triangle&...` still works for direct
+    download links.
     """
     q = (request_args.get("q") or "").strip()
     clauses = []
@@ -2713,103 +2623,13 @@ def api_sentiment_by_shape():
     return jsonify({"data": data})
 
 
-@app.route("/api/duplicates")
-@cache.cached(timeout=600, query_string=True)
-def api_duplicates():
-    """Browse duplicate candidate pairs with filtering."""
-    conn = get_db()
-    cur = conn.cursor()
-
-    page = int(request.args.get("page", 0))
-    per_page = 50
-    offset = page * per_page
-
-    clauses = []
-    args = []
-
-    # Score threshold filter
-    min_score = request.args.get("min_score")
-    if min_score:
-        clauses.append("dc.similarity_score >= %s")
-        args.append(float(min_score))
-
-    max_score = request.args.get("max_score")
-    if max_score:
-        clauses.append("dc.similarity_score < %s")
-        args.append(float(max_score))
-
-    # Match method filter
-    method = request.args.get("method")
-    if method:
-        clauses.append("dc.match_method = %s")
-        args.append(method)
-
-    # Source filter — either sighting must be from this source
-    source = request.args.get("source")
-    if source:
-        clauses.append("(sa.source_db_id = %s OR sb.source_db_id = %s)")
-        args.extend([int(source), int(source)])
-
-    where = " AND ".join(clauses) if clauses else "TRUE"
-
-    # Count total
-    count_sql = f"""
-        SELECT COUNT(*) FROM duplicate_candidate dc
-        JOIN sighting sa ON dc.sighting_id_a = sa.id
-        JOIN sighting sb ON dc.sighting_id_b = sb.id
-        WHERE {where}
-    """
-    cur.execute(count_sql, args)
-    total = cur.fetchone()[0]
-
-    # Fetch page
-    sql = f"""
-        SELECT dc.id, dc.similarity_score, dc.match_method,
-               dc.sighting_id_a, sda.name, sa.date_event,
-               COALESCE(la.city, '') as city_a, COALESCE(la.state, '') as state_a,
-               SUBSTR(COALESCE(sa.description, sa.summary, ''), 1, 120) as desc_a,
-               sa.shape as shape_a,
-               dc.sighting_id_b, sdb.name, sb.date_event,
-               COALESCE(lb.city, '') as city_b, COALESCE(lb.state, '') as state_b,
-               SUBSTR(COALESCE(sb.description, sb.summary, ''), 1, 120) as desc_b,
-               sb.shape as shape_b
-        FROM duplicate_candidate dc
-        JOIN sighting sa ON dc.sighting_id_a = sa.id
-        JOIN sighting sb ON dc.sighting_id_b = sb.id
-        JOIN source_database sda ON sa.source_db_id = sda.id
-        JOIN source_database sdb ON sb.source_db_id = sdb.id
-        LEFT JOIN location la ON sa.location_id = la.id
-        LEFT JOIN location lb ON sb.location_id = lb.id
-        WHERE {where}
-        ORDER BY dc.similarity_score DESC
-        LIMIT %s OFFSET %s
-    """
-    cur.execute(sql, args + [per_page, offset])
-
-    results = []
-    for r in cur.fetchall():
-        results.append({
-            "pair_id": r[0],
-            "score": round(r[1], 3) if r[1] is not None else None,
-            "method": r[2],
-            "a": {
-                "id": r[3], "source": r[4], "date": r[5],
-                "city": r[6], "state": r[7], "desc": r[8], "shape": r[9],
-            },
-            "b": {
-                "id": r[10], "source": r[11], "date": r[12],
-                "city": r[13], "state": r[14], "desc": r[15], "shape": r[16],
-            },
-        })
-
-    conn.close()
-    return jsonify({
-        "results": results,
-        "total": total,
-        "page": page,
-        "per_page": per_page,
-        "pages": (total + per_page - 1) // per_page,
-    })
+# v0.8.6: /api/duplicates and the Duplicates panel were removed.
+# The v0.8.3b science-team export ships with zero duplicate_candidate
+# rows (the new pipeline resolves duplicates at ingest rather than
+# flagging candidate pairs), so the panel rendered empty on every
+# query. The per-sighting `duplicates` array on /api/sighting/<id>
+# still works — it's populated via the inline UNION-ALL query at
+# api_sighting() and is independent of this removed route.
 
 
 # ---------------------------------------------------------------------------

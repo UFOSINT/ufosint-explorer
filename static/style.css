@@ -781,7 +781,7 @@ select:focus {
     color: #fff !important;
 }
 
-/* ---- Timeline ---- */
+/* ---- Timeline (v0.8.6 redesign) ---- */
 .timeline-header {
     display: flex;
     align-items: center;
@@ -790,9 +790,17 @@ select:focus {
     flex-shrink: 0;
 }
 
-#timeline-title {
+.timeline-title {
     font-size: 15px;
     font-weight: 600;
+}
+
+.timeline-meta {
+    font-size: 11px;
+    color: var(--fg-dim);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin-left: auto;
 }
 
 .chart-container {
@@ -802,8 +810,55 @@ select:focus {
     position: relative;  /* needed for the .progressive-overlay anchor */
 }
 
-#timeline-chart {
-    width: 100% !important;
+/* v0.8.6 — 3-card Timeline dashboard. Reuses the same
+   layout language as .insights-grid so the two tabs feel
+   consistent. The wide card spans both columns at desktop
+   widths, collapsing to single-column on mobile. */
+.timeline-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    padding: 0 16px 16px;
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+}
+
+.timeline-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    box-shadow: var(--shadow-sm);
+    min-width: 0;
+}
+
+.timeline-card h3 {
+    font-size: 12px;
+    color: var(--fg-dim);
+    margin-bottom: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 600;
+}
+
+.timeline-card-wide {
+    grid-column: 1 / -1;
+}
+
+.timeline-card .chart-container {
+    flex: 1;
+    padding: 0;
+    position: relative;
+    min-height: 220px;
+}
+
+@media (max-width: 900px) {
+    .timeline-grid {
+        grid-template-columns: 1fr;
+    }
 }
 
 /* ---- Search ---- */
@@ -1783,6 +1838,13 @@ select:focus {
     color: var(--text-muted);
     padding: 60px 20px;
     font-size: 14px;
+}
+
+/* v0.8.6 — allow an insight card to span the full grid row.
+   Used by the Shape × Movement matrix so its horizontal
+   stacked-bar layout has room to breathe. */
+.insight-card-wide {
+    grid-column: 1 / -1;
 }
 
 @media (max-width: 900px) {

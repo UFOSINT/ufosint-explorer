@@ -125,6 +125,13 @@ class _FakeBulkCursor:
         if "count(*)" in s and "coalesce(max" in s:
             max_id = max((r[0] for r in self.sightings), default=0)
             self._current = [(len(self.sightings), max_id)]
+        elif "has_movement_mentioned = 1" in s:
+            # v0.8.6 — _points_bulk_etag() probes this count as a
+            # data-content signal. Count rows whose 18th tuple slot
+            # (has_movement_mentioned) is truthy. Sightings here are
+            # 19-tuples per _make_sighting()'s order.
+            n = sum(1 for r in self.sightings if len(r) >= 18 and r[17])
+            self._current = [(n,)]
         elif "information_schema.columns" in s:
             # The endpoint probes which derived columns exist.
             self._current = [(c,) for c in self.present_columns]

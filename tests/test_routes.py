@@ -20,7 +20,11 @@ EXPECTED_ROUTES = {
     "/api/map",
     "/api/heatmap",
     "/api/timeline",
-    "/api/search",
+    # v0.8.6: /api/search and /api/duplicates were removed.
+    # Client-side filtering on the Observatory bulk buffer replaces
+    # the server-side faceted search. The v0.8.3b export ships with
+    # zero duplicate_candidate rows so /api/duplicates had nothing
+    # to return anyway.
     "/api/export.csv",
     "/api/export.json",
     "/api/sighting/<int:sid>",
@@ -28,9 +32,23 @@ EXPECTED_ROUTES = {
     "/api/sentiment/timeline",
     "/api/sentiment/by-source",
     "/api/sentiment/by-shape",
-    "/api/duplicates",
     "/mcp",
 }
+
+
+REMOVED_ROUTES = {
+    # v0.8.6: these routes MUST NOT be registered. A regression that
+    # re-adds them would re-introduce the ILIKE / empty-duplicates
+    # failure modes the v0.8.6 cleanup was designed to remove.
+    "/api/search",
+    "/api/duplicates",
+}
+
+
+def test_removed_routes_are_gone(flask_app):
+    rules = {r.rule for r in flask_app.url_map.iter_rules()}
+    leftover = REMOVED_ROUTES & rules
+    assert not leftover, f"v0.8.6 removed routes snuck back in: {sorted(leftover)}"
 
 
 def test_every_expected_route_is_registered(flask_app):

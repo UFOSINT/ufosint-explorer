@@ -17,6 +17,128 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 Nothing yet.
 
+## [0.8.6] — 2026-04-11 — Timeline redesign + Insights buildout + cleanup
+
+Four tracks landing in one release:
+
+1. **Timeline tab becomes a client-side dashboard.** The old single
+   Chart.js bar chart is replaced with a 3-card grid that reads
+   straight from the in-memory bulk buffer. Cards: stacked-by-source
+   yearly histogram, median quality score per year, movement category
+   share per year. Zero `/api/timeline` round trips after the initial
+   Observatory mount; filter changes re-tally in a few milliseconds.
+2. **Four new Insight cards.** Quality Score Distribution, Movement
+   Taxonomy, Shape × Movement Matrix, Hoax Likelihood Curve — all
+   computed client-side from the bulk buffer so they respect the
+   current Observatory filter state and don't depend on any new
+   backend endpoints.
+3. **Search and Duplicates tabs deleted.** The Observatory rail + bulk
+   buffer supersede the old ILIKE faceted search, and the v0.8.3b
+   science-team export ships zero `duplicate_candidate` rows so the
+   Duplicates panel had nothing to render anyway. Routes, panels,
+   JS helpers, and nav buttons all removed.
+4. **Two real bug fixes** hit during the v0.8.5 reload verification:
+   the `_points_bulk_etag` stale-cache bug (content-replace reloads
+   kept the same `(count, max_id, cols)` tuple so the in-process
+   `lru_cache` served a stale buffer — now includes a
+   `has_movement_mentioned` data-content signal), and the
+   Observatory brush drag lag (300ms debounce on every `pointermove`
+   — now visual-only during drag, commits on `pointerup` via a raw
+   un-debounced callback).
+
+### Added
+
+- **`deck.js` aggregate helpers** (`getYearHistogramBySource`,
+  `getYearHistogramForVisible`, `computeMedianByYear`,
+  `computeMovementShareByYear`, `countVisible`). Every helper walks
+  `POINTS.visibleIdx` once and runs in single-digit milliseconds on
+  396k rows. These are the shared primitives the Timeline page and
+  Insights cards both use.
+- **`TimeBrush.retally(bins)`** method. Called from
+  `applyClientFilters()` after the filter pipeline updates
+  `POINTS.visibleIdx`. The brush now draws a "ghost" background of
+  the unfiltered dataset with the filtered bins overlaid in the
+  accent color, so the user sees the filter's shape over time
+  without losing sight of the full range.
+- **Insights Phase 5 cards.** Four new `renderXxx()` functions in
+  `app.js`: `renderQualityDistribution` (10-bucket bar chart, 60+
+  buckets highlighted in accent), `renderMovementTaxonomy`
+  (horizontal bar chart of the 10 movement categories sorted by
+  count), `renderShapeMovementMatrix` (stacked horizontal bar chart
+  of top-10 shapes × 10 movement categories), and `renderHoaxCurve`
+  (20-bucket line chart red-shifted on the right tail).
+- **`refreshTimelineCards()` and `refreshInsightsClientCards()`**
+  callable from `applyClientFilters()` so the two dashboards
+  respond to rail changes on any tab.
+- **`tests/test_v086.py`** with 28 tests locking every point of the
+  v0.8.6 contract (routes gone, etag has `mv` segment, new deck.js
+  helpers, TimeBrush drag split, Timeline canvas IDs, Insights
+  canvas IDs, dead JS functions deleted).
+
+### Changed
+
+- **`_points_bulk_etag()`** now includes
+  `mv{has_movement_count}` as an ingredient, reusing the indexed
+  scan the `/api/stats` endpoint already runs. Cost: ~15ms per
+  request (cached by `@lru_cache` on the response side). Guards
+  against pre-v0.8.3 schemas with an `UndefinedColumn` rollback
+  that falls back to the sentinel `mvx`.
+- **`TimeBrush` drag semantics.** `pointermove` updates the window
+  rectangle visually only; `pointerup` commits via the raw
+  un-debounced callback. Stored `this._onChangeRaw` alongside the
+  debounced `this.onChange` so callers that still want coalescing
+  (programmatic hash restore, play mode) keep it.
+- **`debounce()` helper upgraded.** The previous implementation had
+  a no-op `.flush()`. v0.8.6 tracks `pendingArgs` so `flush()`
+  actually fires the pending call synchronously and `cancel()`
+  discards it cleanly.
+- **`navigateToSearch()`** rewritten. Callers that used to jump to
+  the Search tab now land on the Observatory with the filter
+  applied via `applyFilters()`. The `q` (free-text) parameter is
+  silently ignored because Observatory filtering is faceted, not
+  full-text.
+- **`drillToMonth()`** (Leaflet popup handler) now applies a month
+  date range to the Observatory filter instead of switching to the
+  deleted Timeline drill-down mode.
+- **AI tool panel** "view all in Search →" link text changed to
+  "view all on map →" to match the new destination.
+
+### Removed
+
+- `/api/search` and `/api/duplicates` routes + handlers (~270
+  lines of `app.py`).
+- `#panel-search` and `#panel-duplicates` panels (~50 lines of
+  `index.html`), plus the two `<button data-tab>` nav entries.
+- Search + Duplicates functions from `app.js`: `doSearch`,
+  `executeSearch`, `renderActiveFilterChips`, `removeFilter`,
+  `renderPager`, `goToPage`, `scoreColor`, `scoreLabel`,
+  `loadDuplicates`, `initSearchActions`, `escapeRegExp`. The
+  shared helper `disableButtonWhilePending` stays — still used by
+  `applyFilters()` and the AI/map-search paths.
+- `state.searchPage`, `state.searchTotal`, `state.searchSort`,
+  `state.dupesPage`, `state.dupesTotal` from the app state bag.
+- `window.doSearch`, `window.goToPage`, `window.removeFilter`
+  global bindings.
+- Timeline drill-down "back to years" button and the monthly
+  drill-down flow — the new 3-card dashboard has no monthly view.
+- 3 inline SVGs from `index.html` (the Search panel's CSV/JSON/
+  copy-link icons). Expected `test_index_html_has_expected_svg_count`
+  dropped 10 → 7.
+
+### Fixed
+
+- **`/api/points-bulk` stale cache after content-replace reload.**
+  Hit during v0.8.5 verification: the bulk endpoint returned
+  `coverage.has_movement = 0` after a reload that populated 249,217
+  movement rows, because the etag's `(count, max_id, column_set)`
+  tuple was unchanged. The reload was forced to a live state with
+  a manual Azure App Service restart. v0.8.6's etag now includes
+  `mv{has_movement_count}` so the cache invalidates automatically
+  on any future content swap.
+- **Brush drag visibly lagged on the first 300ms of each drag.**
+  Caused by the debounced `onChange` running on every `pointermove`.
+  Now visual-only during drag with a single commit on `pointerup`.
+
 ## [0.8.5] — 2026-04-11 — Movement classification + rebalanced quality scoring
 
 App-side ship of the science team's v0.8.3b data layer. Two new

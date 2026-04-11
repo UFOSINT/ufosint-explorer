@@ -96,8 +96,10 @@
             <button class="tab active" data-tab="observatory">Observatory</button>
             <button class="tab legacy-tab" data-tab="map" hidden>Map</button>
             <button class="tab" data-tab="timeline">Timeline</button>
-            <button class="tab" data-tab="search">Search</button>
-            <button class="tab" data-tab="duplicates">Duplicates</button>
+            <!-- v0.8.6: Search + Duplicates nav buttons removed. Client-
+                 side filtering on the Observatory bulk buffer supersedes
+                 the old ILIKE search, and the v0.8.3b science-team
+                 export ships with zero duplicate_candidate rows. -->
             <button class="tab" data-tab="insights">Insights</button>
             <button class="tab" data-tab="methodology">Methodology</button>
             <!-- v0.8.4 — top-nav theme pill. The operator asked for the
@@ -320,71 +322,38 @@
              switchTab()'s alias path. Hidden via the .legacy-tab CSS rule. -->
         <div id="panel-map" class="panel legacy-panel" hidden></div>
 
-        <!-- Timeline Panel -->
+        <!-- Timeline Panel — v0.8.6 redesign: 3-card dashboard driven
+             entirely by the client-side bulk buffer. No /api/timeline
+             round-trip on a clean load; cards recompute on filter
+             change via refreshTimelineCards(). -->
         <div id="panel-timeline" class="panel">
             <div class="timeline-header">
-                <button id="timeline-back" class="btn btn-small" style="display:none">&larr; Back to Years</button>
-                <span id="timeline-title">Sightings by Year</span>
-                <span class="timeline-spacer"></span>
-                <button id="timeline-view-results" class="btn btn-primary btn-small" style="display:none">View results</button>
+                <span class="timeline-title">Sightings Timeline</span>
+                <div class="timeline-meta">
+                    <span id="timeline-range-label">1900 — 2026</span>
+                    · <span id="timeline-visible-count">0</span> in view
+                </div>
             </div>
-            <div class="timeline-hint">Click a bar to drill into months or jump to records.</div>
-            <div class="chart-container">
-                <canvas id="timeline-chart"></canvas>
+            <div class="timeline-hint">All three charts reflect the current Observatory filter state. Change a filter on any tab and these cards re-tally instantly.</div>
+            <div class="timeline-grid">
+                <div class="timeline-card timeline-card-wide">
+                    <h3>All sightings by year, stacked by source</h3>
+                    <div class="chart-container"><canvas id="timeline-main-chart"></canvas></div>
+                </div>
+                <div class="timeline-card">
+                    <h3>Quality score over time (median per year)</h3>
+                    <div class="chart-container"><canvas id="timeline-quality-chart"></canvas></div>
+                </div>
+                <div class="timeline-card">
+                    <h3>Movement categories over time (yearly share)</h3>
+                    <div class="chart-container"><canvas id="timeline-movement-chart"></canvas></div>
+                </div>
             </div>
         </div>
 
-        <!-- Search Panel -->
-        <div id="panel-search" class="panel">
-            <div class="search-bar">
-                <label class="sr-only" for="search-input">Search witness descriptions</label>
-                <input type="text" id="search-input" placeholder="Search witness descriptions — try 'triangle', 'bright light', 'hovering over trees'" />
-                <button id="btn-search" class="btn btn-primary">Search</button>
-                <label class="sr-only" for="search-sort">Sort order</label>
-                <select id="search-sort" class="search-sort" title="Sort order" aria-label="Sort order">
-                    <option value="date_desc">Newest first</option>
-                    <option value="date_asc">Oldest first</option>
-                </select>
-            </div>
-            <div class="search-actions">
-                <button id="btn-export-csv" class="btn btn-secondary btn-small" title="Download current results as CSV (max 5,000 rows)"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> CSV</button>
-                <button id="btn-export-json" class="btn btn-secondary btn-small" title="Download current results as JSON (max 5,000 rows)"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> JSON</button>
-                <button id="btn-copy-link" class="btn btn-secondary btn-small" title="Copy a shareable link to this filter view"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg> Copy link</button>
-            </div>
-            <div id="search-active-filters" class="active-filters" aria-live="polite"></div>
-            <div id="search-info" class="search-info" aria-live="polite"></div>
-            <div id="search-results" class="search-results"></div>
-            <div id="search-pager" class="search-pager"></div>
-        </div>
-
-        <!-- Duplicates Panel -->
-        <div id="panel-duplicates" class="panel">
-            <div class="dupes-toolbar">
-                <div class="filter-group">
-                    <label for="dupes-confidence">Confidence</label>
-                    <select id="dupes-confidence">
-                        <option value="">All</option>
-                        <option value="0.9,1.01">Certain (0.9+)</option>
-                        <option value="0.7,0.9">Likely (0.7-0.9)</option>
-                        <option value="0.5,0.7">Possible (0.5-0.7)</option>
-                        <option value="0.3,0.5">Weak (0.3-0.5)</option>
-                        <option value="0.0,0.3">Unlikely (&lt;0.3)</option>
-                    </select>
-                </div>
-                <div class="filter-group">
-                    <label for="dupes-method">Method</label>
-                    <select id="dupes-method"><option value="">All</option></select>
-                </div>
-                <div class="filter-group">
-                    <label for="dupes-source">Source</label>
-                    <select id="dupes-source"><option value="">All</option></select>
-                </div>
-                <button id="btn-dupes-apply" class="btn btn-primary">Apply</button>
-            </div>
-            <div id="dupes-info" class="search-info" aria-live="polite"></div>
-            <div id="dupes-results" class="dupes-results"></div>
-            <button id="btn-dupes-more" class="btn btn-secondary" style="display:none">Load More</button>
-        </div>
+        <!-- v0.8.6: Search + Duplicates panels removed. Observatory
+             rail filters replace Search; the v0.8.3b science-team
+             export ships with zero duplicate_candidate rows. -->
 
         <!-- Insights Panel -->
         <div id="panel-insights" class="panel">
@@ -415,6 +384,34 @@
                     <h3>Emotions by Shape (Top 10)</h3>
                     <div class="insight-chart-wrap">
                         <canvas id="emotion-shape-chart"></canvas>
+                    </div>
+                </div>
+                <!-- v0.8.6 — four new cards computed client-side from
+                     the bulk buffer. Each recomputes on filter change
+                     via refreshInsightsClientCards() without hitting
+                     the server. -->
+                <div class="insight-card">
+                    <h3>Quality Score Distribution</h3>
+                    <div class="insight-chart-wrap">
+                        <canvas id="quality-distribution-chart"></canvas>
+                    </div>
+                </div>
+                <div class="insight-card">
+                    <h3>Movement Taxonomy</h3>
+                    <div class="insight-chart-wrap">
+                        <canvas id="movement-taxonomy-chart"></canvas>
+                    </div>
+                </div>
+                <div class="insight-card insight-card-wide">
+                    <h3>Shape &times; Movement Matrix (Top 10 shapes)</h3>
+                    <div class="insight-chart-wrap">
+                        <canvas id="shape-movement-chart"></canvas>
+                    </div>
+                </div>
+                <div class="insight-card">
+                    <h3>Hoax Likelihood Curve</h3>
+                    <div class="insight-chart-wrap">
+                        <canvas id="hoax-curve-chart"></canvas>
                     </div>
                 </div>
             </div>
