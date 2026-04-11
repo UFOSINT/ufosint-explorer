@@ -3116,53 +3116,71 @@ function disableButtonWhilePending(btn, loadingLabel) {
 // =========================================================================
 async function loadInsights() {
     const statusEl = document.getElementById("insights-status");
-    mountLoadingTerminal(statusEl, "insights", { compact: true, header: "INSIGHTS" });
 
-    // v0.8.6 — run the client-side cards unconditionally. They read
-    // straight from the bulk buffer and don't depend on the sentiment
-    // endpoint, so they work even when sentiment coverage is zero
-    // (e.g. very narrow date filter).
+    // v0.8.8 — all 8 insight cards are now client-side. The
+    // /api/sentiment/* endpoints were returning empty data after the
+    // v0.8.5 reload (sentiment_analysis table was truncated and the
+    // public ufo_public.db doesn't ship sentiment rows because it
+    // strips the raw narrative text they were computed from). We
+    // rewrote the 4 emotion cards to read from POINTS.emotionIdx,
+    // which IS populated for 149,607 rows and ships in the bulk
+    // buffer. No server trips, everything recomputes on filter
+    // change in a few milliseconds.
+    if (!window.UFODeck || !window.UFODeck.POINTS || !window.UFODeck.POINTS.ready) {
+        // Bulk buffer still loading. Show a brief message and
+        // schedule a retry when POINTS.ready flips.
+        if (statusEl) statusEl.textContent = "loading bulk data…";
+        if (!state._insightsPending) {
+            state._insightsPending = true;
+            const iv = setInterval(() => {
+                if (window.UFODeck && window.UFODeck.POINTS && window.UFODeck.POINTS.ready) {
+                    clearInterval(iv);
+                    state._insightsPending = false;
+                    if (state.activeTab === "insights") loadInsights();
+                }
+            }, 200);
+        }
+        return;
+    }
+
     refreshInsightsClientCards();
 
-    const params = getFilterParams();
-    const qs = params.toString();
-
-    try {
-        const [overview, timeline, bySource, byShape] = await Promise.all([
-            fetchJSON(`/api/sentiment/overview?${qs}`),
-            fetchJSON(`/api/sentiment/timeline?${qs}`),
-            fetchJSON(`/api/sentiment/by-source?${qs}`),
-            fetchJSON(`/api/sentiment/by-shape?${qs}`),
-        ]);
-
-        if (!overview.total_analyzed || overview.total_analyzed === 0) {
-            // Sentiment is empty for this filter set. Leave the client-
-            // side cards in place (they already rendered above) and
-            // just show a compact badge in the status bar instead of
-            // nuking the whole grid. v0.8.6 retired the full-grid
-            // empty-state because the 4 client cards always render.
-            statusEl.textContent = "No sentiment scores for these filters";
-            return;
+    // Status line: surface the emotion coverage number so users
+    // know the denominator the cards are computed against.
+    const P = window.UFODeck.POINTS;
+    const visible = P.visibleIdx ? P.visibleIdx.length : P.count;
+    let emotionCovered = 0;
+    const ei = P.emotionIdx;
+    if (P.visibleIdx) {
+        for (let k = 0; k < P.visibleIdx.length; k++) {
+            if (ei[P.visibleIdx[k]] > 0) emotionCovered++;
         }
-
-        statusEl.textContent = `${overview.total_analyzed.toLocaleString()} sightings analyzed | Avg sentiment: ${overview.avg_compound.toFixed(3)}`;
-
-        renderEmotionRadar(overview);
-        renderSentimentTimeline(timeline);
-        renderEmotionBySource(bySource);
-        renderEmotionByShape(byShape);
-    } catch (err) {
-        statusEl.textContent = "Couldn't load sentiment insights — try again or change filters.";
-        console.error("loadInsights error:", err);
+    } else {
+        for (let i = 0; i < P.count; i++) {
+            if (ei[i] > 0) emotionCovered++;
+        }
+    }
+    if (statusEl) {
+        statusEl.textContent =
+            `${emotionCovered.toLocaleString()} sightings with emotion classification · ${visible.toLocaleString()} in view`;
     }
 }
 
-// v0.8.6 — refresh only the client-side cards (the 4 new ones).
-// Called by applyClientFilters() on filter change and by loadInsights()
-// on first mount so the cards are always in sync with the bulk buffer's
-// visibleIdx.
+// v0.8.6 — refresh all 8 client-side cards. Called by loadInsights
+// on first mount and by applyClientFilters on every filter change
+// so the cards stay in sync with POINTS.visibleIdx.
+//
+// v0.8.8: the 4 emotion cards (radar, over-time, by-source, by-shape)
+// were rewritten to read from POINTS.emotionIdx instead of the dead
+// /api/sentiment/* endpoints. All 8 cards are now purely client-side.
 function refreshInsightsClientCards() {
     if (!window.UFODeck || !window.UFODeck.POINTS || !window.UFODeck.POINTS.ready) return;
+    // v0.8.8 emotion cards (client-side)
+    renderEmotionRadar();
+    renderEmotionOverTime();
+    renderEmotionBySource();
+    renderEmotionByShape();
+    // v0.8.6 derived cards
     renderQualityDistribution();
     renderMovementTaxonomy();
     renderShapeMovementMatrix();
@@ -3479,25 +3497,94 @@ function renderHoaxCurve() {
     });
 }
 
-function renderEmotionRadar(overview) {
-    if (state.insightsCharts.radar) state.insightsCharts.radar.destroy();
+// =========================================================================
+// v0.8.8 — Emotion cards (client-side, from POINTS.emotionIdx)
+// =========================================================================
+// The /api/sentiment/* endpoints return empty data after the v0.8.5
+// reload (sentiment_analysis table truncated, ufo_public.db doesn't
+// ship sentiment rows). dominant_emotion IS populated in the bulk
+// buffer at offset 22 (149,607 of 396,158 rows), so we compute the
+// 4 cards client-side with the same walk-POINTS.visibleIdx pattern
+// the v0.8.6 derived cards use.
+//
+// Note: these renderers now take NO arguments — they read directly
+// from POINTS inside the function body. That's consistent with the
+// v0.8.6 renderQualityDistribution / renderMovementTaxonomy / etc.
 
-    const values = EMOTION_NAMES.map(e => overview[e] || 0);
-    const total = values.reduce((a, b) => a + b, 1);
-    const normalized = values.map(v => v / total);
+// Helper: collect counts of each emotion across visibleIdx.
+// Returns { names: [...], counts: Uint32Array, total: int }
+function _collectEmotionCounts(P) {
+    const iter = P.visibleIdx || null;
+    const ei = P.emotionIdx;
+    const names = P.emotions || [];
+    const counts = new Uint32Array(names.length);
+    let total = 0;
+    if (iter) {
+        for (let k = 0; k < iter.length; k++) {
+            const idx = ei[iter[k]];
+            if (idx > 0) { counts[idx]++; total++; }
+        }
+    } else {
+        for (let i = 0; i < P.count; i++) {
+            const idx = ei[i];
+            if (idx > 0) { counts[idx]++; total++; }
+        }
+    }
+    return { names, counts, total };
+}
 
-    const ctx = document.getElementById("emotion-radar-chart").getContext("2d");
+// Look up the EMOTION_COLORS entry for a name, falling back to a
+// neutral pair if the name isn't in the palette (POINTS.emotions is
+// from the server and could in principle include a name EMOTION_COLORS
+// doesn't know about).
+function _emotionColor(name) {
+    return EMOTION_COLORS[name] || { bg: "rgba(139,148,158,0.6)", border: "#8b949e" };
+}
+
+function renderEmotionRadar() {
+    const canvas = document.getElementById("emotion-radar-chart");
+    if (!canvas) return;
+    const P = window.UFODeck.POINTS;
+    const { names, counts, total } = _collectEmotionCounts(P);
+
+    // Build a stable label+data pair skipping the index-0 null slot.
+    const labels = [];
+    const values = [];
+    const borderColors = [];
+    for (let i = 1; i < names.length; i++) {
+        labels.push(names[i].charAt(0).toUpperCase() + names[i].slice(1));
+        values.push(counts[i]);
+        borderColors.push(_emotionColor(names[i]).border);
+    }
+    // Normalise to the [0, 1] range so the radar doesn't scale to a
+    // single dominant emotion. Guard against divide-by-zero when the
+    // current filter set has no emotion-classified rows.
+    const maxCount = values.reduce((m, v) => Math.max(m, v), 1);
+    const normalized = values.map(v => v / maxCount);
+
+    if (state.insightsCharts.radar) {
+        const c = state.insightsCharts.radar;
+        c.data.labels = labels;
+        c.data.datasets[0].data = normalized;
+        c.data.datasets[0].pointBackgroundColor = borderColors;
+        c._rawValues = values;  // stash for tooltip callback
+        c._total = total;
+        c.update("none");
+        return;
+    }
+
+    const ctx = canvas.getContext("2d");
     state.insightsCharts.radar = new Chart(ctx, {
         type: "radar",
         data: {
-            labels: EMOTION_NAMES.map(e => e.charAt(0).toUpperCase() + e.slice(1)),
+            labels,
             datasets: [{
                 label: "Emotion Distribution",
                 data: normalized,
-                backgroundColor: "rgba(88, 166, 255, 0.2)",
-                borderColor: "rgba(88, 166, 255, 0.8)",
+                backgroundColor: "rgba(0, 240, 255, 0.18)",
+                borderColor: "rgba(0, 240, 255, 0.85)",
                 borderWidth: 2,
-                pointBackgroundColor: EMOTION_NAMES.map(e => EMOTION_COLORS[e].border),
+                pointBackgroundColor: borderColors,
                 pointBorderColor: "#fff",
                 pointRadius: 5,
             }],
@@ -3505,12 +3592,13 @@ function renderEmotionRadar(overview) {
         options: {
             responsive: true,
             maintainAspectRatio: false,
+            animation: { duration: 300 },
             scales: {
                 r: {
                     beginAtZero: true,
-                    grid: { color: "rgba(48, 54, 61, 0.6)" },
-                    angleLines: { color: "rgba(48, 54, 61, 0.6)" },
-                    pointLabels: { color: "#e6edf3", font: { size: 12 } },
+                    grid: { color: "rgba(139, 148, 158, 0.3)" },
+                    angleLines: { color: "rgba(139, 148, 158, 0.3)" },
+                    pointLabels: { font: { size: 12 } },
                     ticks: { display: false },
                 },
             },
@@ -3519,172 +3607,314 @@ function renderEmotionRadar(overview) {
                 tooltip: {
                     callbacks: {
                         label: (ctx) => {
-                            const raw = values[ctx.dataIndex];
-                            const pct = (normalized[ctx.dataIndex] * 100).toFixed(1);
-                            return `${raw.toLocaleString()} words (${pct}%)`;
+                            const c = state.insightsCharts.radar;
+                            const raw = c._rawValues ? c._rawValues[ctx.dataIndex] : 0;
+                            const tot = c._total || 1;
+                            const pct = ((raw / tot) * 100).toFixed(1);
+                            return `${raw.toLocaleString()} sightings (${pct}%)`;
                         }
                     }
                 }
             },
         },
     });
+    // Stash after creation for the first tooltip invocation.
+    state.insightsCharts.radar._rawValues = values;
+    state.insightsCharts.radar._total = total;
 }
 
-function renderSentimentTimeline(timeline) {
-    if (state.insightsCharts.timeline) state.insightsCharts.timeline.destroy();
+// Stacked-area chart: emotion counts per year. Walks POINTS.dateDays
+// + emotionIdx once, bins by year, emits 8 series (one per emotion).
+function renderEmotionOverTime() {
+    const canvas = document.getElementById("sentiment-timeline-chart");
+    if (!canvas) return;
+    if (!window.UFODeck.computeMedianByYear) return;  // old deck.js
 
-    const data = timeline.data;
-    const years = data.map(d => d.year);
-    const compounds = data.map(d => d.avg_compound);
-    const counts = data.map(d => d.count);
+    const P = window.UFODeck.POINTS;
+    const iter = P.visibleIdx || null;
+    const dd = P.dateDays;
+    const ei = P.emotionIdx;
+    const names = P.emotions || [];
+    const nEmo = names.length;
 
-    const ctx = document.getElementById("sentiment-timeline-chart").getContext("2d");
+    // Build yearStarts via the same binary-search pattern deck.js
+    // getYearHistogram uses. We inline a small version here because
+    // the cross-product (year × emotion) isn't shaped like any of
+    // the existing helpers.
+    const yearRange = window.UFODeck.getYearRange();
+    if (!yearRange || yearRange.min == null) return;
+    const yMin = yearRange.min, yMax = yearRange.max;
+    const span = yMax - yMin + 1;
+    const yearStarts = new Uint32Array(span + 1);
+    for (let y = 0; y <= span; y++) {
+        yearStarts[y] = Math.floor(
+            (Date.UTC(yMin + y, 0, 1) - Date.UTC(1900, 0, 1)) / 86400000,
+        );
+    }
+    const dayToBin = (d) => {
+        let lo = 0, hi = span;
+        while (lo < hi) {
+            const mid = (lo + hi + 1) >>> 1;
+            if (yearStarts[mid] <= d) lo = mid;
+            else hi = mid - 1;
+        }
+        return lo;
+    };
+
+    const grid = new Uint32Array(span * nEmo);  // row-major: year * nEmo + emo
+    const totals = new Uint32Array(span);
+    const N = iter ? iter.length : P.count;
+    for (let k = 0; k < N; k++) {
+        const i = iter ? iter[k] : k;
+        const e = ei[i];
+        if (e === 0) continue;
+        const d = dd[i];
+        if (d === 0) continue;
+        const bin = dayToBin(d);
+        if (bin < 0 || bin >= span) continue;
+        grid[bin * nEmo + e]++;
+        totals[bin]++;
+    }
+
+    // Trim leading/trailing zero years so the chart doesn't span the
+    // full 1900-2026 range when most of it is empty.
+    let start = 0, end = span - 1;
+    while (start < span && totals[start] === 0) start++;
+    while (end >= 0 && totals[end] === 0) end--;
+    if (start > end) { start = 0; end = span - 1; }
+
+    const labels = [];
+    for (let y = start; y <= end; y++) labels.push(yMin + y);
+
+    const datasets = [];
+    for (let e = 1; e < nEmo; e++) {
+        const color = _emotionColor(names[e]);
+        const data = new Array(labels.length);
+        for (let y = 0; y < labels.length; y++) {
+            data[y] = grid[(start + y) * nEmo + e];
+        }
+        datasets.push({
+            label: names[e].charAt(0).toUpperCase() + names[e].slice(1),
+            data,
+            backgroundColor: color.bg,
+            borderColor: color.border,
+            borderWidth: 1,
+            fill: true,
+            pointRadius: 0,
+            tension: 0.2,
+        });
+    }
+
+    if (state.insightsCharts.timeline) {
+        const c = state.insightsCharts.timeline;
+        c.data.labels = labels;
+        c.data.datasets = datasets;
+        c.update("none");
+        return;
+    }
+
+    const ctx = canvas.getContext("2d");
     state.insightsCharts.timeline = new Chart(ctx, {
         type: "line",
-        data: {
-            labels: years,
-            datasets: [
-                {
-                    label: "Avg Sentiment (VADER)",
-                    data: compounds,
-                    borderColor: "#58a6ff",
-                    backgroundColor: "rgba(88, 166, 255, 0.1)",
-                    fill: true,
-                    tension: 0.3,
-                    pointRadius: 1,
-                    yAxisID: "y",
-                },
-                {
-                    label: "Records Analyzed",
-                    data: counts,
-                    borderColor: "rgba(139, 148, 158, 0.5)",
-                    backgroundColor: "rgba(139, 148, 158, 0.1)",
-                    fill: false,
-                    tension: 0.3,
-                    pointRadius: 0,
-                    borderDash: [4, 4],
-                    yAxisID: "y1",
-                }
-            ],
-        },
+        data: { labels, datasets },
         options: {
             responsive: true,
             maintainAspectRatio: false,
             interaction: { mode: "index", intersect: false },
+            animation: { duration: 300 },
             plugins: {
-                legend: { position: "top", labels: { color: "#e6edf3" } },
+                legend: { position: "top", labels: { boxWidth: 10 } },
+                tooltip: {
+                    callbacks: {
+                        footer: (items) => {
+                            const total = items.reduce((s, i) => s + i.parsed.y, 0);
+                            return `Total: ${total.toLocaleString()}`;
+                        },
+                    },
+                },
             },
             scales: {
-                x: { ticks: { color: "#8b949e", maxTicksLimit: 20 } },
-                y: {
-                    title: { display: true, text: "VADER Compound", color: "#8b949e" },
-                    min: -1, max: 1,
-                    ticks: { color: "#8b949e" },
-                    grid: { color: "rgba(48, 54, 61, 0.4)" },
-                },
-                y1: {
-                    position: "right",
-                    title: { display: true, text: "Record Count", color: "#8b949e" },
-                    ticks: { color: "#8b949e" },
-                    grid: { display: false },
-                },
+                x: { stacked: true, ticks: { maxTicksLimit: 16 } },
+                y: { stacked: true, beginAtZero: true },
             },
         },
     });
 }
 
-function renderEmotionBySource(bySource) {
-    if (state.insightsCharts.source) state.insightsCharts.source.destroy();
+// Stacked bar chart: per source (x-axis), show the share of each
+// emotion (stacked, sum-to-100%). Reads POINTS.sourceIdx + emotionIdx.
+function renderEmotionBySource() {
+    const canvas = document.getElementById("emotion-source-chart");
+    if (!canvas) return;
+    const P = window.UFODeck.POINTS;
+    const iter = P.visibleIdx || null;
+    const si = P.sourceIdx;
+    const ei = P.emotionIdx;
+    const sources = P.sources || [];
+    const emotions = P.emotions || [];
+    const nSrc = sources.length;
+    const nEmo = emotions.length;
 
-    const sources = bySource.data.map(d => d.source_name);
+    const grid = new Uint32Array(nSrc * nEmo);
+    const srcTotals = new Uint32Array(nSrc);
+    const N = iter ? iter.length : P.count;
+    for (let k = 0; k < N; k++) {
+        const i = iter ? iter[k] : k;
+        const s = si[i];
+        if (s === 0) continue;
+        const e = ei[i];
+        if (e === 0) continue;
+        grid[s * nEmo + e]++;
+        srcTotals[s]++;
+    }
 
-    const datasets = EMOTION_NAMES.map(emo => {
-        const c = EMOTION_COLORS[emo];
-        return {
-            label: emo.charAt(0).toUpperCase() + emo.slice(1),
-            data: bySource.data.map(d => {
-                const total = EMOTION_NAMES.reduce((sum, e) => sum + (d[e] || 0), 0);
-                return total > 0 ? (d[emo] || 0) / total : 0;
-            }),
-            backgroundColor: c.bg,
-            borderColor: c.border,
+    // Collect non-empty sources, skipping index 0.
+    const srcIdxes = [];
+    for (let s = 1; s < nSrc; s++) {
+        if (srcTotals[s] > 0) srcIdxes.push(s);
+    }
+    const labels = srcIdxes.map(s => sources[s] || "Unknown");
+
+    const datasets = [];
+    for (let e = 1; e < nEmo; e++) {
+        const color = _emotionColor(emotions[e]);
+        const data = srcIdxes.map(s => {
+            const tot = srcTotals[s];
+            return tot > 0 ? (grid[s * nEmo + e] / tot) * 100 : 0;
+        });
+        datasets.push({
+            label: emotions[e].charAt(0).toUpperCase() + emotions[e].slice(1),
+            data,
+            backgroundColor: color.bg,
+            borderColor: color.border,
             borderWidth: 1,
-        };
-    });
+        });
+    }
 
-    const ctx = document.getElementById("emotion-source-chart").getContext("2d");
+    if (state.insightsCharts.source) {
+        const c = state.insightsCharts.source;
+        c.data.labels = labels;
+        c.data.datasets = datasets;
+        c.update("none");
+        return;
+    }
+
+    const ctx = canvas.getContext("2d");
     state.insightsCharts.source = new Chart(ctx, {
         type: "bar",
-        data: { labels: sources, datasets },
+        data: { labels, datasets },
         options: {
             responsive: true,
             maintainAspectRatio: false,
+            animation: { duration: 300 },
             plugins: {
-                legend: { position: "top", labels: { color: "#e6edf3", boxWidth: 12 } },
+                legend: { position: "top", labels: { boxWidth: 10 } },
                 tooltip: {
                     callbacks: {
-                        label: (ctx) => `${ctx.dataset.label}: ${(ctx.raw * 100).toFixed(1)}%`
-                    }
-                }
+                        label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}%`,
+                    },
+                },
             },
             scales: {
-                x: { ticks: { color: "#8b949e" }, stacked: false },
+                x: { stacked: true },
                 y: {
+                    stacked: true,
                     beginAtZero: true,
-                    ticks: { color: "#8b949e", callback: (v) => (v * 100) + "%" },
-                    grid: { color: "rgba(48, 54, 61, 0.4)" },
-                    stacked: false,
+                    max: 100,
+                    ticks: { callback: (v) => v + "%" },
                 },
             },
         },
     });
 }
 
-function renderEmotionByShape(byShape) {
-    if (state.insightsCharts.shape) state.insightsCharts.shape.destroy();
+// Horizontal stacked bar chart: top-10 shapes by emotion-classified
+// count, each bar split into 8 emotion segments. Reads
+// POINTS.shapeIdx + emotionIdx.
+function renderEmotionByShape() {
+    const canvas = document.getElementById("emotion-shape-chart");
+    if (!canvas) return;
+    const P = window.UFODeck.POINTS;
+    const iter = P.visibleIdx || null;
+    const sh = P.shapeIdx;
+    const ei = P.emotionIdx;
+    const shapes = P.shapes || [];
+    const emotions = P.emotions || [];
+    const nShp = shapes.length;
+    const nEmo = emotions.length;
 
-    const shapes = byShape.data.map(d => d.shape);
+    const grid = new Uint32Array(nShp * nEmo);
+    const shpTotals = new Uint32Array(nShp);
+    const N = iter ? iter.length : P.count;
+    for (let k = 0; k < N; k++) {
+        const i = iter ? iter[k] : k;
+        const s = sh[i];
+        if (s === 0) continue;
+        const e = ei[i];
+        if (e === 0) continue;
+        grid[s * nEmo + e]++;
+        shpTotals[s]++;
+    }
 
-    const datasets = EMOTION_NAMES.map(emo => {
-        const c = EMOTION_COLORS[emo];
-        return {
-            label: emo.charAt(0).toUpperCase() + emo.slice(1),
-            data: byShape.data.map(d => {
-                const total = EMOTION_NAMES.reduce((sum, e) => sum + (d[e] || 0), 0);
-                return total > 0 ? (d[emo] || 0) / total : 0;
-            }),
-            backgroundColor: c.bg,
-            borderColor: c.border,
+    // Top 10 shapes by emotion-classified count.
+    const ranked = [];
+    for (let s = 1; s < nShp; s++) {
+        if (shpTotals[s] > 0) ranked.push({ idx: s, total: shpTotals[s] });
+    }
+    ranked.sort((a, b) => b.total - a.total);
+    const top = ranked.slice(0, 10);
+    const labels = top.map(r => shapes[r.idx] || `shape ${r.idx}`);
+
+    const datasets = [];
+    for (let e = 1; e < nEmo; e++) {
+        const color = _emotionColor(emotions[e]);
+        const data = top.map(r => {
+            const tot = r.total;
+            return tot > 0 ? (grid[r.idx * nEmo + e] / tot) * 100 : 0;
+        });
+        datasets.push({
+            label: emotions[e].charAt(0).toUpperCase() + emotions[e].slice(1),
+            data,
+            backgroundColor: color.bg,
+            borderColor: color.border,
             borderWidth: 1,
-        };
-    });
+        });
+    }
 
-    const ctx = document.getElementById("emotion-shape-chart").getContext("2d");
+    if (state.insightsCharts.shape) {
+        const c = state.insightsCharts.shape;
+        c.data.labels = labels;
+        c.data.datasets = datasets;
+        c.update("none");
+        return;
+    }
+
+    const ctx = canvas.getContext("2d");
     state.insightsCharts.shape = new Chart(ctx, {
         type: "bar",
-        data: { labels: shapes, datasets },
+        data: { labels, datasets },
         options: {
             indexAxis: "y",
             responsive: true,
             maintainAspectRatio: false,
+            animation: { duration: 300 },
+            interaction: { mode: "index", intersect: false },
             plugins: {
                 legend: { display: false },
                 tooltip: {
                     callbacks: {
-                        label: (ctx) => `${ctx.dataset.label}: ${(ctx.raw * 100).toFixed(1)}%`
-                    }
-                }
+                        label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.x.toFixed(1)}%`,
+                    },
+                },
             },
             scales: {
                 x: {
                     stacked: true,
-                    ticks: { color: "#8b949e", callback: (v) => (v * 100) + "%" },
-                    grid: { color: "rgba(48, 54, 61, 0.4)" },
+                    beginAtZero: true,
+                    max: 100,
+                    ticks: { callback: (v) => v + "%" },
                 },
-                y: {
-                    stacked: true,
-                    ticks: { color: "#8b949e" },
-                },
+                y: { stacked: true },
             },
         },
     });

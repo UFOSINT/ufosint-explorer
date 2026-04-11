@@ -17,6 +17,103 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 Nothing yet.
 
+## [0.8.8] — 2026-04-11 — Emotion cards client-side + methodology expansion
+
+Two tracks:
+
+1. **The 4 Insight emotion cards were rewritten to read from
+   `POINTS.emotionIdx` instead of the `/api/sentiment/*` endpoints.**
+   Those endpoints had been returning empty data since the v0.8.5
+   reload: the `sentiment_analysis` table was truncated, and the
+   v0.8.3b public export (`ufo_public.db`) doesn't ship sentiment
+   rows because they were computed from raw narrative text which
+   was stripped for privacy. The cards rendered blank with a
+   "No sentiment scores for these filters" message regardless of
+   filter state.
+
+   `dominant_emotion` IS populated in the bulk buffer at byte
+   offset 22 (149,607 of 396,158 mapped rows), so all 4 cards can
+   be computed client-side with the same walk-POINTS.visibleIdx
+   pattern the v0.8.6 derived cards already use. No server trips,
+   filter-reactive for free, and the Insights tab now renders
+   **8 working cards** instead of 4 blank + 4 working.
+
+2. **The methodology page gained three new sections** explaining
+   the data layer that's been accumulating since v0.8.3b:
+
+   - **How Sightings Get Mapped** — walks through the
+     614,505 → 396,158 → 105,854 split, explaining why the stats
+     badge used to under-count mapped sightings by ~4× (it was
+     counting distinct geocoded places, not sighting rows). Covers
+     the ~35% of sightings without coordinates and where they come
+     from (pre-GPS historical records, free-text locations,
+     structurally missing data).
+   - **Movement + Quality Classification** — documents the 10
+     movement categories with per-category counts and example
+     narrative patterns, the composite quality_score formula and
+     60-threshold for the High Quality filter, the hoax_likelihood
+     heuristic, the richness_score companion, plus the
+     dominant_emotion and primary_color sparse columns that drive
+     the Observatory's Color/Emotion dropdowns and Insights cards.
+   - **Notes on the v0.8.3b Data Pipeline** — three retirement
+     notes explaining why raw text is no longer in the public DB,
+     why the Duplicates tab was removed (duplicate_candidate ships
+     empty because dedup moved to ingest time), and why sentiment
+     had to be migrated to dominant_emotion.
+
+### Added
+
+- **4 new emotion renderers in `app.js`** (`renderEmotionRadar`,
+  `renderEmotionOverTime`, `renderEmotionBySource`,
+  `renderEmotionByShape`). All take no arguments — they read
+  directly from `window.UFODeck.POINTS.emotionIdx` / `.shapeIdx` /
+  `.sourceIdx` / `.dateDays` and compute via a single walk of
+  `POINTS.visibleIdx`. Share two helpers: `_collectEmotionCounts`
+  and `_emotionColor`.
+- **Methodology page: "How Sightings Get Mapped"** section with the
+  3-query explanation table and the 4-bucket breakdown of why
+  sightings lack coordinates.
+- **Methodology page: "Movement + Quality Classification"** section
+  with the 10-category movement table, quality_score formula
+  breakdown, hoax_likelihood explanation, and richness_score notes.
+- **Methodology page: "Notes on the v0.8.3b Data Pipeline"**
+  section covering raw text retirement, duplicates table
+  emptiness, and sentiment pipeline migration.
+- **`tests/test_v088.py`** — 15 tests locking the v0.8.8 contract
+  (emotion cards client-side, no /api/sentiment fetches, new
+  renderer signatures, methodology sections present).
+
+### Changed
+
+- **`loadInsights()`** no longer calls `/api/sentiment/overview`,
+  `/api/sentiment/timeline`, `/api/sentiment/by-source`, or
+  `/api/sentiment/by-shape`. Gates on `POINTS.ready` like
+  `loadTimeline()` does, schedules a retry via `setInterval` if
+  the bulk buffer isn't loaded yet.
+- **`refreshInsightsClientCards()`** now calls all 8 renderers
+  (the 4 v0.8.8 emotion cards + the 4 v0.8.6 derived cards).
+- **Insights status bar** shows "149,607 sightings with emotion
+  classification · N in view" instead of the old "X sightings
+  analyzed | Avg sentiment: Y.YYY" (we don't have VADER compound
+  scores anymore).
+- **`renderSentimentTimeline` → `renderEmotionOverTime`**. The
+  new version is a stacked-area chart with 8 emotion series
+  (joy/fear/anger/sadness/surprise/disgust/trust/anticipation)
+  and no sentiment-compound line. Inline yearStarts binary
+  search mirrors the `deck.js` helpers.
+- **Methodology page** removed the stale mention of the
+  "All Coords / Original Only / Geocoded Only" dropdown that
+  v0.8.7 deleted.
+
+### Fixed
+
+- **4 blank Insight cards on the live site.** Emotion Distribution,
+  Sentiment Over Time, Emotions By Source, and Emotions By Shape
+  were rendering empty because the sentiment endpoints returned
+  `total_analyzed: 0`. v0.8.8's client-side rewrite uses the
+  already-populated `dominant_emotion` column instead. No reload,
+  no schema change, no server-side re-compute needed.
+
 ## [0.8.7] — 2026-04-11 — Filter bar cleanup + Movement cluster + Quality rail bug fix
 
 Four changes:

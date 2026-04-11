@@ -961,7 +961,7 @@ DATABASE_URL="postgresql://..." python mcp_server.py</code></pre>
                     <li><strong>Raw text parsing:</strong> Regex extraction of city/state/country from free-text location strings</li>
                 </ol>
 
-                <p>The <code>geocode_src</code> column on the <code>location</code> table tracks provenance: <code>NULL</code> = coordinates from original source data, <code>geonames_exact</code> / <code>geonames_city_country</code> / <code>geonames_city_only</code> = geocoded via GeoNames. The map includes a dropdown to toggle between &ldquo;All Coords&rdquo;, &ldquo;Original Only&rdquo;, and &ldquo;Geocoded Only&rdquo;.</p>
+                <p>The <code>geocode_src</code> column on the <code>location</code> table tracks provenance: <code>NULL</code> = coordinates from original source data, <code>geonames_exact</code> / <code>geonames_city_country</code> / <code>geonames_city_only</code> = geocoded via GeoNames.</p>
 
                 <!-- ============ Collections ============ -->
                 <h3>Source Collection Provenance</h3>
@@ -975,6 +975,117 @@ DATABASE_URL="postgresql://..." python mcp_server.py</code></pre>
                     </tbody>
                 </table>
                 <p>Collections are filterable in the explorer UI. The three-layer provenance model (<code>source_collection</code> &rarr; <code>source_database</code> &rarr; <code>source_origin</code>) traces every record back to its ultimate origin.</p>
+
+                <!-- ============ How Sightings Get Mapped (v0.8.7.2) ============ -->
+                <h2>How Sightings Get Mapped</h2>
+                <p>The Observatory map renders <strong>396,158 markers</strong> out of the <strong>614,505 total sightings</strong> &mdash; roughly <strong>64.5%</strong> of the database. The other ~218k sightings exist in the DB but have no coordinates, so they never reach the map.</p>
+
+                <h3>The sighting &harr; location split</h3>
+                <p>The <code>sighting</code> table and the <code>location</code> table are joined through a foreign key: <code>sighting.location_id &rarr; location.id</code>. Multiple sightings can share a single location row &mdash; for example, <em>Phoenix, AZ</em> is one row in <code>location</code>, but hundreds of Phoenix Lights sightings all point at it through their <code>location_id</code>. This is the key to understanding why two different numbers show up in the UI:</p>
+                <table>
+                    <thead><tr><th>Query</th><th>Count</th><th>Meaning</th></tr></thead>
+                    <tbody>
+                        <tr>
+                            <td><code>COUNT(*) FROM sighting</code></td>
+                            <td>614,505</td>
+                            <td>Total sightings in the database</td>
+                        </tr>
+                        <tr>
+                            <td><code>COUNT(*) FROM sighting s JOIN location l ON s.location_id = l.id WHERE l.latitude IS NOT NULL</code></td>
+                            <td><strong>396,158</strong></td>
+                            <td><strong>Sightings on the map</strong> &mdash; the "mapped" chip in the stats badge</td>
+                        </tr>
+                        <tr>
+                            <td><code>COUNT(*) FROM location WHERE latitude IS NOT NULL</code></td>
+                            <td>105,854</td>
+                            <td>Distinct geocoded places (one row per unique coordinate pair)</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <p>The ratio <strong>396,158 / 105,854 &approx; 3.74 sightings per place</strong> reflects the long tail of major UFO hotspots: a few hundred cities accumulate dozens to hundreds of sightings each, while the bulk of the <code>location</code> table is rural or historical one-offs.</p>
+
+                <h3>Why ~35% of sightings have no coordinates</h3>
+                <p>The 218,347 unmapped sightings fall into four rough buckets:</p>
+                <ul>
+                    <li><strong>Pre-GPS historical records</strong> &mdash; UFOCAT and UFO-search contain thousands of entries dating back to antiquity. The original catalogs often record only a country or region ("Ohio, 1952"), which the ETL can't resolve to a single coordinate pair.</li>
+                    <li><strong>Free-text locations</strong> &mdash; "my backyard", "en route to LAX", "over the Bermuda Triangle", "somewhere in the Pacific". The geocoder skips these rather than risk a wrong coordinate.</li>
+                    <li><strong>Ambiguous city names</strong> &mdash; "Springfield" without a state qualifier hits dozens of candidates. The ETL prefers silence over a wrong guess.</li>
+                    <li><strong>Structurally missing data</strong> &mdash; some source records legitimately have no location field at all (the original witness report didn't include one).</li>
+                </ul>
+
+                <h3>Original coordinates vs GeoNames lookup</h3>
+                <p>The <code>location</code> table's <code>geocode_src</code> column distinguishes two provenance paths:</p>
+                <ul>
+                    <li><strong>Original coordinates</strong> (<code>geocode_src IS NULL</code>) &mdash; latitude/longitude came directly from the source catalog. UFOCAT ships these for most records; MUFON and NUFORC ship them when the witness submitted a specific address.</li>
+                    <li><strong>GeoNames lookup</strong> (<code>geocode_src = 'geonames_*'</code>) &mdash; the ETL resolved a city/state/country string against the open GeoNames gazetteer. Three granularity levels are tracked: <code>geonames_exact</code> (city + state + country matched), <code>geonames_city_country</code> (state-level ambiguity resolved by picking the largest city in the country), and <code>geonames_city_only</code> (no country at all; picks the globally largest city with that name).</li>
+                </ul>
+                <p>The Observatory map treats both sources identically &mdash; once a row has a valid <code>latitude</code>/<code>longitude</code>, it's a marker. The <code>geocoded_original</code> and <code>geocoded_geonames</code> counts in the stats popover let you see the split.</p>
+
+                <!-- ============ v0.8.3b classification pipeline ============ -->
+                <h2>Movement + Quality Classification</h2>
+                <p>v0.8.3b added a set of derived columns on the <code>sighting</code> table that enrich each record with structured analysis extracted from its narrative. These are the columns the Observatory rail filters (Data Quality) and the Timeline/Insights dashboards (Quality Score Distribution, Movement Taxonomy, etc.) read from.</p>
+
+                <h3>Movement categories (<code>movement_categories</code>, <code>has_movement_mentioned</code>)</h3>
+                <p>A narrative text classifier scans each description for references to <strong>10 movement categories</strong>. The classifier emits a JSON array of the categories it found, plus a boolean flag indicating any movement at all. <strong>249,217 sightings (40.5% of the database)</strong> carry at least one movement tag.</p>
+                <table>
+                    <thead><tr><th>Category</th><th>Sightings</th><th>Example narrative patterns</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>vanished</code></td><td>102,178</td><td>"disappeared", "faded out", "winked out", "vanished into thin air"</td></tr>
+                        <tr><td><code>hovering</code></td><td>89,964</td><td>"stationary", "stayed in place for several minutes", "hovered silently"</td></tr>
+                        <tr><td><code>followed</code></td><td>51,499</td><td>"followed the car", "paced the aircraft", "tracked us for miles"</td></tr>
+                        <tr><td><code>descending</code></td><td>27,148</td><td>"came down", "dropped altitude", "descended toward the field"</td></tr>
+                        <tr><td><code>ascending</code></td><td>27,067</td><td>"rose straight up", "shot skyward", "climbed at an impossible rate"</td></tr>
+                        <tr><td><code>landed</code></td><td>26,592</td><td>"touched down", "on the ground", "set down in the clearing"</td></tr>
+                        <tr><td><code>accelerating</code></td><td>22,627</td><td>"suddenly sped up", "took off at incredible speed", "bolted"</td></tr>
+                        <tr><td><code>linear</code></td><td>21,106</td><td>"flew straight", "on a direct heading", "steady course"</td></tr>
+                        <tr><td><code>rotating</code></td><td>19,641</td><td>"spinning", "rotating counter-clockwise", "wobbling as it turned"</td></tr>
+                        <tr><td><code>erratic</code></td><td>8,877</td><td>"zig-zagging", "erratic motion", "changed direction abruptly"</td></tr>
+                    </tbody>
+                </table>
+                <p>Categories are <strong>not mutually exclusive</strong> &mdash; a single sighting can carry multiple tags (e.g. "hovered briefly, then accelerated away" gets both <code>hovering</code> and <code>accelerating</code>). The Observatory's Movement cluster uses OR semantics: a sighting matches if <em>any</em> of the checked categories' bits are set.</p>
+                <p>Under the hood, the category set is bit-packed into a <code>uint16</code> on the binary wire format so the client can filter ~396k rows in a few milliseconds without a server round-trip.</p>
+
+                <h3>Quality score (<code>quality_score</code>)</h3>
+                <p>A composite <strong>0&ndash;100 integer</strong> derived from the richness of structured metadata on each row. Higher means more data you can cross-reference, not necessarily "more credible". The rebalanced v0.8.3b formula weights:</p>
+                <ul>
+                    <li><strong>Date precision</strong> (0&ndash;25 points) &mdash; full ISO date beats year-only beats decade-only</li>
+                    <li><strong>Location specificity</strong> (0&ndash;25 points) &mdash; city + state + country beats country-only beats region</li>
+                    <li><strong>Shape classification</strong> (0&ndash;15 points) &mdash; populated <code>standardized_shape</code> (one of the 25 canonical shapes) beats raw shape text beats NULL</li>
+                    <li><strong>Witness count</strong> (0&ndash;15 points) &mdash; multi-witness reports score higher than single-witness</li>
+                    <li><strong>Source reliability</strong> (0&ndash;10 points) &mdash; investigator-vetted sources (MUFON) score higher than self-reported (NUFORC)</li>
+                    <li><strong>Narrative presence</strong> (0&ndash;10 points) &mdash; <code>has_description = 1</code> adds 10; media attachments add another bump</li>
+                </ul>
+                <p>The Observatory's "High quality only" toggle filters to <code>quality_score &ge; 60</code>, which corresponds to <strong>118,320 sightings (19.3% of the database)</strong>. The threshold was calibrated against a hand-reviewed training set &mdash; below 60 the records are typically missing at least one major dimension (no date, no location, or no shape). The Insights tab's <em>Quality Score Distribution</em> chart shows the shape of the distribution; the 60+ buckets are highlighted in the accent colour.</p>
+
+                <h3>Hoax likelihood (<code>hoax_likelihood</code>)</h3>
+                <p>A <strong>0&ndash;100 integer</strong> estimating the probability a record is a hoax, prank, or misidentification, based on patterns like:</p>
+                <ul>
+                    <li>Obvious hoax language in the narrative ("April Fools", "just kidding", "for Halloween")</li>
+                    <li>Shapes that correlate strongly with known-hoax submissions (Chinese lanterns tagged as "triangle formation")</li>
+                    <li>Date/location collisions with known viral hoaxes or film releases</li>
+                    <li>Source reliability priors (some aggregator sub-sources have high hoax rates)</li>
+                </ul>
+                <p>The "Hide likely hoaxes" toggle in the Quality rail filters to <code>hoax_likelihood &le; 50</code>. The Insights tab's <em>Hoax Likelihood Curve</em> shows the distribution; the right tail (80-100) is red-shifted so "likely hoax" is visually distinct from "likely genuine". Like the quality score, this is a heuristic filter, not a verdict &mdash; no records are ever deleted, just de-emphasised.</p>
+
+                <h3>Richness score (<code>richness_score</code>)</h3>
+                <p>A companion to <code>quality_score</code>. Where quality asks "how much structured data do we have", richness asks "how much <em>narrative detail</em> do we have". Higher richness means more distinct observation words (colours, durations, sound descriptions, object count, witness count, reaction details). It's the score that tells you how <em>readable</em> a record is going to be, not how <em>verifiable</em> it is. Also a 0&ndash;100 integer; no explicit threshold filter in the UI but it's available via the binary wire format for future use.</p>
+
+                <h3>Dominant emotion + primary color</h3>
+                <p>Two small categorical columns also derived at v0.8.3b time:</p>
+                <ul>
+                    <li><strong><code>dominant_emotion</code></strong> &mdash; one of 8 emotions (joy, fear, anger, sadness, surprise, disgust, trust, anticipation) extracted via a lightweight keyword+sentiment classifier. Populated for <strong>149,607 sightings</strong>. Drives the Insights tab's Emotion Distribution, Emotion Over Time, Emotions By Source, and Emotions By Shape cards.</li>
+                    <li><strong><code>primary_color</code></strong> &mdash; one of 22 colours (red, blue, metallic silver, etc.) extracted from the narrative. Populated for <strong>145,209 sightings</strong>. Available as a dropdown in the Observatory filter bar.</li>
+                </ul>
+                <p>Both columns are sparsely populated because they're only meaningful when the original record includes narrative text &mdash; which the <code>ufo_public.db</code> public export strips for privacy. Emotion and colour were computed from the <em>private</em> text corpus before the strip and ride along with the public export as derived columns, so the Observatory can filter by them even though the raw descriptions are gone.</p>
+
+                <!-- ============ Data Retirement Notes ============ -->
+                <h2>Notes on the v0.8.3b Data Pipeline</h2>
+                <p>A few details worth knowing if you're comparing counts to earlier versions:</p>
+                <ul>
+                    <li><strong>Raw narrative text is not in the public database.</strong> The <code>description</code>, <code>summary</code>, <code>notes</code>, and <code>raw_json</code> columns were dropped from <code>ufo_public.db</code> by <code>scripts/strip_raw_for_public.py</code>. The Observatory's faceted filters work against the derived columns above; the full free-text search capability from earlier versions isn't available in the public instance.</li>
+                    <li><strong>The <code>duplicate_candidate</code> table ships empty in v0.8.3b.</strong> The science team moved deduplication to happen at ingest time rather than as a post-hoc pairing step, so the old "review X similar pairs" workflow has no rows to display. The per-sighting <code>duplicates</code> array on <code>/api/sighting/&lt;id&gt;</code> still surfaces cross-source matches when they exist. The Duplicates tab was removed in v0.8.6.</li>
+                    <li><strong>Sentiment analysis is disabled in the public instance.</strong> VADER sentiment scores (the <code>sentiment_analysis</code> table) depend on the raw narrative text, which was stripped. The Insights tab's emotion cards were rewritten in v0.8.8 to read from <code>dominant_emotion</code> directly instead of hitting the dead <code>/api/sentiment/*</code> endpoints.</li>
+                </ul>
 
             </div>
         </div>
