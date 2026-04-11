@@ -1836,11 +1836,29 @@ def api_timeline():
 @app.route("/api/search")
 @cache.cached(timeout=300, query_string=True)
 def api_search():
-    """Search sightings by text and filters.
+    """Search sightings by faceted query + filters.
 
-    Uses ILIKE (case-insensitive substring match) backed by the
-    pg_trgm GIN indexes from pg_schema.sql so substring queries don't
-    require a full table scan.
+    v0.8.3: The `q` parameter's semantics changed. It previously ran
+    ILIKE against `s.description` and `s.summary` (the raw narrative
+    text), which forced a pg_trgm GIN index scan. v0.8.3 drops those
+    columns from the public schema — there IS no description text to
+    search anymore. Instead, `q` now runs case-insensitive substring
+    matching against seven structured / derived columns:
+
+      city · state · country · standardized_shape · primary_color ·
+      dominant_emotion · source_name
+
+    So `q=triangle` matches every sighting whose standardized_shape
+    is "Triangle" (and any city/country with "triangle" in the name,
+    which is effectively none). `q=texas` matches every Texas
+    sighting regardless of shape. `q=fear london` — wait, that's
+    actually not supported; `q` is a single substring, not a
+    multi-word AND. For AND behaviour, use the faceted filters
+    (source/shape/date_from/etc.) alongside q.
+
+    Every column in the WHERE has a btree index from
+    scripts/pg_schema.sql or scripts/add_v082_derived_columns.sql,
+    so the faceted search stays sub-second on 614k rows.
     """
     conn = get_db()
     cur = conn.cursor()
@@ -1854,60 +1872,89 @@ def api_search():
     args = []
 
     if q:
-        clauses.append("(s.description ILIKE %s OR s.summary ILIKE %s)")
+        # Faceted OR: match any of 7 columns with the same substring.
+        # Seven copies of %q% pattern into args.
+        clauses.append(
+            "("
+            "COALESCE(l.city, '')                              ILIKE %s OR "
+            "COALESCE(l.state, '')                             ILIKE %s OR "
+            "COALESCE(l.country, '')                           ILIKE %s OR "
+            "COALESCE(s.standardized_shape, s.shape, '')       ILIKE %s OR "
+            "COALESCE(s.primary_color, s.color, '')            ILIKE %s OR "
+            "COALESCE(s.dominant_emotion, '')                  ILIKE %s OR "
+            "COALESCE(sd.name, '')                             ILIKE %s"
+            ")"
+        )
         like = f"%{q}%"
-        args.extend([like, like])
+        args.extend([like] * 7)
 
     add_common_filters(request.args, clauses, args)
 
     where = " AND ".join(clauses) if clauses else "TRUE"
 
-    # Count total. The LEFT JOIN location is required because the WHERE
-    # clause may reference l.country / l.state / l.geocode_src via
-    # add_common_filters. Without the join those references would error.
+    # Count total. The joins below mirror the page query so the WHERE
+    # clauses that reference `sd.name`, `l.city`, etc. resolve.
     count_sql = f"""
-        SELECT COUNT(*) FROM sighting s
+        SELECT COUNT(*)
+        FROM sighting s
+        JOIN source_database sd ON s.source_db_id = sd.id
         LEFT JOIN location l ON s.location_id = l.id
         WHERE {where}
     """
     cur.execute(count_sql, args)
     total = cur.fetchone()[0]
 
-    # Fetch page
+    # v0.8.3: Fetch page with derived fields in the SELECT.
+    # Explicit column list — NEVER references description/summary/
+    # notes/raw_json (the 4 columns scripts/strip_raw_for_public.py
+    # drops). Response carries the v0.8.2 derived metadata so the
+    # frontend can render compound result cards instead of a plain
+    # description snippet.
     sql = f"""
-        SELECT s.id, s.date_event, s.shape, s.description, s.summary,
-               sd.name as source_name,
-               COALESCE(l.city, '') as city,
-               COALESCE(l.state, '') as state,
-               COALESCE(l.country, '') as country,
+        SELECT s.id, s.date_event, s.sighting_datetime,
+               s.shape, s.standardized_shape,
+               COALESCE(s.primary_color, s.color, '') AS color,
+               s.dominant_emotion,
+               s.quality_score, s.richness_score, s.hoax_likelihood,
+               s.has_description, s.has_media,
+               sd.name AS source_name,
+               COALESCE(l.city, '')    AS city,
+               COALESCE(l.state, '')   AS state,
+               COALESCE(l.country, '') AS country,
                s.hynek, s.num_witnesses, s.duration,
-               COALESCE(sc.name, '') as collection
+               COALESCE(sc.name, '') AS collection
         FROM sighting s
         JOIN source_database sd ON s.source_db_id = sd.id
         LEFT JOIN source_collection sc ON sd.collection_id = sc.id
         LEFT JOIN location l ON s.location_id = l.id
         WHERE {where}
-        ORDER BY s.date_event DESC
+        ORDER BY s.date_event DESC NULLS LAST
         LIMIT %s OFFSET %s
     """
     cur.execute(sql, args + [per_page, offset])
 
     results = []
     for r in cur.fetchall():
-        desc = r[3] or r[4] or ""
         results.append({
             "id": r[0],
             "date": r[1],
-            "shape": r[2],
-            "description": desc[:300] if desc else "",
-            "source": r[5],
-            "city": r[6],
-            "state": r[7],
-            "country": r[8],
-            "hynek": r[9],
-            "witnesses": r[10],
-            "duration": r[11],
-            "collection": r[12],
+            "sighting_datetime": r[2],
+            "shape": r[4] or r[3],  # standardized_shape falls back to raw
+            "color": r[5] or None,
+            "dominant_emotion": r[6],
+            "quality_score": r[7],
+            "richness_score": r[8],
+            "hoax_likelihood": r[9],
+            "has_description": bool(r[10]) if r[10] is not None else None,
+            "has_media": bool(r[11]) if r[11] is not None else None,
+            "source": r[12],
+            "city": r[13],
+            "state": r[14],
+            "country": r[15],
+            "hynek": r[16],
+            "witnesses": r[17],
+            "duration": r[18],
+            "collection": r[19],
         })
 
     conn.close()
@@ -1930,32 +1977,77 @@ def api_search():
 
 EXPORT_MAX_ROWS = 5000
 
+# v0.8.3: export drops `summary` and `description` (raw narrative
+# text retired from the public schema by scripts/strip_raw_for_public.py)
+# and adds the v0.8.2 derived fields (standardized_shape,
+# primary_color, dominant_emotion, quality_score, richness_score,
+# hoax_likelihood, has_description, has_media, sighting_datetime).
+# The download now reflects what users see in the search UI, which
+# is the derived analysis, not the raw narrative.
 EXPORT_COLUMNS = [
-    "id", "date_event", "shape", "hynek", "vallee", "num_witnesses",
-    "duration", "summary", "description",
+    "id",
+    "date_event",
+    "sighting_datetime",
+    "shape",
+    "standardized_shape",
+    "primary_color",
+    "dominant_emotion",
+    "hynek", "vallee", "event_type",
+    "num_witnesses",
+    "duration", "duration_seconds",
+    "quality_score", "richness_score", "hoax_likelihood",
+    "has_description", "has_media",
     "source", "collection",
     "city", "state", "country",
     "latitude", "longitude",
 ]
 
+
 def _build_export_query(request_args):
-    """Return (sql, args) for the export query — same filters as /api/search."""
+    """Return (sql, args) for the export query — same filters as /api/search.
+
+    v0.8.3: the `q` parameter uses the same 7-column faceted OR as
+    /api/search (no more ILIKE against description/summary), and the
+    SELECT never references the 4 raw-narrative columns the strip
+    script drops. Column order matches EXPORT_COLUMNS exactly so the
+    dict(zip(...)) in api_export_json works without remapping.
+    """
     q = (request_args.get("q") or "").strip()
     clauses = []
     args = []
     if q:
-        clauses.append("(s.description ILIKE %s OR s.summary ILIKE %s)")
+        clauses.append(
+            "("
+            "COALESCE(l.city, '')                        ILIKE %s OR "
+            "COALESCE(l.state, '')                       ILIKE %s OR "
+            "COALESCE(l.country, '')                     ILIKE %s OR "
+            "COALESCE(s.standardized_shape, s.shape, '') ILIKE %s OR "
+            "COALESCE(s.primary_color, s.color, '')      ILIKE %s OR "
+            "COALESCE(s.dominant_emotion, '')            ILIKE %s OR "
+            "COALESCE(sd.name, '')                       ILIKE %s"
+            ")"
+        )
         like = f"%{q}%"
-        args.extend([like, like])
+        args.extend([like] * 7)
     add_common_filters(request_args, clauses, args)
     where = " AND ".join(clauses) if clauses else "TRUE"
     sql = f"""
-        SELECT s.id, s.date_event, s.shape, s.hynek, s.vallee, s.num_witnesses,
-               s.duration, s.summary, s.description,
+        SELECT s.id,
+               s.date_event,
+               s.sighting_datetime,
+               s.shape,
+               s.standardized_shape,
+               s.primary_color,
+               s.dominant_emotion,
+               s.hynek, s.vallee, s.event_type,
+               s.num_witnesses,
+               s.duration, s.duration_seconds,
+               s.quality_score, s.richness_score, s.hoax_likelihood,
+               s.has_description, s.has_media,
                sd.name AS source,
                COALESCE(sc.name, '') AS collection,
-               COALESCE(l.city, '') AS city,
-               COALESCE(l.state, '') AS state,
+               COALESCE(l.city, '')    AS city,
+               COALESCE(l.state, '')   AS state,
                COALESCE(l.country, '') AS country,
                l.latitude, l.longitude
         FROM sighting s
@@ -2033,6 +2125,96 @@ def api_export_json():
     )
 
 
+# v0.8.3 — explicit sighting detail column list.
+#
+# Previously this endpoint used `SELECT s.*` which implicitly pulled
+# every column on the sighting table, including `description`,
+# `summary`, `notes`, and `raw_json` — the four raw-narrative columns
+# that `scripts/strip_raw_for_public.py` drops from the public
+# Postgres. With `s.*` the endpoint would 500 with
+# `column "description" does not exist` the moment the drop ran.
+#
+# Switching to an explicit column list makes the endpoint
+# forward-compatible: the list never references the 4 dropped
+# columns, so it works identically before and after
+# strip_raw_for_public.py runs. The v0.8.2 derived fields
+# (quality_score, hoax_likelihood, ...) are added to the SELECT so
+# the new detail modal can render the Data Quality + Derived
+# Metadata sections. See docs/V083_PLAN.md for the full rationale.
+#
+# Columns explicitly NOT in this list (operator-confirmed drop):
+#   description, summary, notes, raw_json
+#
+# Columns kept in the schema AND in the SELECT (short structured
+# free text — flagged for science-team cleanup in v0.8.4+,
+# see docs/V083_BACKLOG.md):
+#   date_event_raw, time_raw, witness_names, witness_age, witness_sex,
+#   explanation, characteristics, weather, terrain
+_SIGHTING_DETAIL_COLUMNS = (
+    # Identity + provenance
+    "s.id",
+    "s.source_db_id",
+    "s.source_record_id",
+    "s.origin_id",
+    "s.origin_record_id",
+    "s.source_ref",
+    "s.page_volume",
+    "s.created_at",
+    # Date / time
+    "s.date_event",
+    "s.date_event_raw",
+    "s.date_end",
+    "s.time_raw",
+    "s.timezone",
+    "s.date_reported",
+    "s.date_posted",
+    "s.sighting_datetime",
+    # Observation (structured)
+    "s.shape",
+    "s.color",
+    "s.size_estimated",
+    "s.angular_size",
+    "s.distance",
+    "s.duration",
+    "s.duration_seconds",
+    "s.num_objects",
+    "s.num_witnesses",
+    "s.sound",
+    "s.direction",
+    "s.elevation_angle",
+    "s.viewed_from",
+    # Witness (structured free text — kept for now)
+    "s.witness_age",
+    "s.witness_sex",
+    "s.witness_names",
+    # Classification
+    "s.hynek",
+    "s.vallee",
+    "s.event_type",
+    "s.svp_rating",
+    # Resolution (structured free text — kept for now)
+    "s.explanation",
+    "s.characteristics",
+    "s.weather",
+    "s.terrain",
+    # v0.8.2 derived analysis fields
+    "s.standardized_shape",
+    "s.primary_color",
+    "s.dominant_emotion",
+    "s.quality_score",
+    "s.richness_score",
+    "s.hoax_likelihood",
+    "s.has_description",
+    "s.has_media",
+    "s.topic_id",
+    # Joined
+    "sd.name AS source_name",
+    "l.raw_text AS loc_raw",
+    "l.city", "l.county", "l.state", "l.country", "l.region",
+    "l.latitude", "l.longitude",
+)
+
+
 @app.route("/api/sighting/<int:sid>")
 @cache.cached(timeout=600, query_string=False)
 def api_sighting(sid):
@@ -2045,20 +2227,29 @@ def api_sighting(sid):
     across two columns with no supporting index — see idx_duplicate_a /
     idx_duplicate_b added in scripts/add_v07_indexes.sql, and the
     UNION ALL rewrite below.
+
+    v0.8.3: the SELECT list is explicit (no `s.*`). The 4 raw-narrative
+    columns (description, summary, notes, raw_json) are deliberately
+    excluded so the endpoint is forward-compatible with
+    scripts/strip_raw_for_public.py dropping them. The 9 v0.8.2
+    derived fields ARE in the SELECT so the detail modal can render
+    the new Data Quality + Derived Metadata sections.
     """
     conn = get_db()
     try:
         cur = conn.cursor()
 
-        cur.execute("""
-            SELECT s.*, sd.name as source_name,
-                   l.raw_text as loc_raw, l.city, l.county, l.state, l.country,
-                   l.region, l.latitude, l.longitude
+        select_sql = ",\n                   ".join(_SIGHTING_DETAIL_COLUMNS)
+        cur.execute(
+            f"""
+            SELECT {select_sql}
             FROM sighting s
             JOIN source_database sd ON s.source_db_id = sd.id
             LEFT JOIN location l ON s.location_id = l.id
             WHERE s.id = %s
-        """, (sid,))
+            """,
+            (sid,),
+        )
 
         row = cur.fetchone()
         if not row:
@@ -2071,12 +2262,9 @@ def api_sighting(sid):
             if v is not None and v != "":
                 record[k] = v
 
-        # Parse raw_json for display
-        if "raw_json" in record:
-            try:
-                record["raw_json"] = json.loads(record["raw_json"])
-            except (json.JSONDecodeError, TypeError):
-                record["raw_json"] = "(parse error)"
+        # v0.8.3 — no raw_json field to parse anymore. (The `raw_json`
+        # column is one of the 4 that scripts/strip_raw_for_public.py
+        # drops, and it was never in the v0.8.3 explicit SELECT list.)
 
         # Check for duplicate candidates.
         #

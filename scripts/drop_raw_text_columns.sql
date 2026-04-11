@@ -95,14 +95,19 @@ END $$;
 -- Drop the raw text columns. In PG 11+ this is metadata-only — the
 -- column data is orphaned in the heap pages and reclaimed on the next
 -- VACUUM FULL. Plan a VACUUM FULL afterwards to actually free the disk.
+--
+-- v0.8.3 trim: date_event_raw and time_raw are NOT dropped here
+-- (operator's explicit choice). They're short structured strings and
+-- the detail modal keeps showing them. Other short free-text fields
+-- (explanation, characteristics, weather, terrain, witness_names) are
+-- also intentionally preserved for a science-team cleanup pass in
+-- v0.8.4+ — see docs/V083_BACKLOG.md.
 
 ALTER TABLE sighting
     DROP COLUMN IF EXISTS description,
     DROP COLUMN IF EXISTS summary,
     DROP COLUMN IF EXISTS notes,
-    DROP COLUMN IF EXISTS raw_json,
-    DROP COLUMN IF EXISTS date_event_raw,
-    DROP COLUMN IF EXISTS time_raw;
+    DROP COLUMN IF EXISTS raw_json;
 
 -- Drop the trigram indexes that relied on the text columns. CASCADE
 -- would handle this automatically, but explicit is clearer.

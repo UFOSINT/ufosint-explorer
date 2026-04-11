@@ -857,10 +857,77 @@ select:focus {
     border-radius: 2px;
 }
 
+/* v0.8.3 — derived metadata line on search result cards.
+   Replaces .result-desc for most cards now that the raw description
+   text is gone from the schema. Compact single-line with · separators.
+   Shape / color / emotion / quality / hoax inline chip styling. */
+.result-derived {
+    font-size: var(--fs-13);
+    line-height: 1.6;
+    color: var(--text-muted);
+    margin-bottom: var(--s-2);
+    letter-spacing: 0.01em;
+}
+.result-derived .quality-inline {
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+}
+.result-derived .hoax-inline {
+    color: var(--danger, #e15759);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+}
+
+/* v0.8.3 — has_description / has_media meta pills get the same
+   visual language as the .popup-desc-badge pills on marker popups
+   so the indicator is consistent across the app. */
+.meta-pill.has-desc,
+.meta-pill.has-media {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: rgba(0, 240, 255, 0.08);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
 .result-meta {
     display: flex;
     flex-wrap: wrap;
     gap: var(--s-2);
+}
+
+/* v0.8.3 — Data Quality bars in the detail modal. Quality and
+   Richness use --accent (cyan on signal, burgundy on declass);
+   Hoax is inverted and uses --danger so higher = worse. */
+.quality-bar {
+    display: inline-block;
+    width: 160px;
+    height: 10px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    overflow: hidden;
+    vertical-align: middle;
+    margin: 0 var(--s-2);
+}
+.quality-bar-fill {
+    height: 100%;
+    background: var(--accent);
+    transition: width 0.2s ease-out;
+}
+.quality-bar-hoax .quality-bar-fill {
+    background: var(--danger, #e15759);
+}
+.quality-bar-value {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    letter-spacing: 0.04em;
 }
 
 /* ---- Unified chips (Sprint 4) ----

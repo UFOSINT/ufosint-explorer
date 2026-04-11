@@ -2755,7 +2755,12 @@ async function executeSearch() {
             (q ? ` for <em>"${escapeHtml(q)}"</em>` : "") +
             ` &middot; page ${data.page + 1} of ${data.pages.toLocaleString()}`;
 
-        const hl = q ? new RegExp(`(${escapeRegExp(q)})`, "gi") : null;
+        // v0.8.3 — no description text to highlight anymore. The
+        // <mark>q</mark> regex that used to light up query matches
+        // in the result snippet is gone because the snippet itself
+        // is gone. Result cards now show a compound derived-metadata
+        // line ("Black · Fear · quality 78") instead of a narrative
+        // preview.
         resultsEl.innerHTML = "";
         sorted.forEach((r, idx) => {
             const card = document.createElement("div");
@@ -2766,15 +2771,28 @@ async function executeSearch() {
             card.onclick = () => openDetail(r.id);
 
             const loc = formatLocation(r.city, r.state, r.country);
-            const desc = r.description || "";
-            const descHtml = hl
-                ? escapeHtml(desc).replace(hl, '<mark>$1</mark>')
-                : escapeHtml(desc);
+
+            // v0.8.3 — derived metadata line. Joins whichever of
+            // {color, dominant_emotion, quality_score} are populated
+            // on this row, with a · separator. Rows that have none
+            // of the three (unpopulated pipeline) get an empty line
+            // and the card collapses a bit. No fallback to raw
+            // description — that column is dropped.
+            const derivedParts = [];
+            if (r.color) derivedParts.push(escapeHtml(r.color));
+            if (r.dominant_emotion) derivedParts.push(escapeHtml(r.dominant_emotion));
+            if (r.quality_score != null)
+                derivedParts.push(`<span class="quality-inline">quality ${r.quality_score}</span>`);
+            if (r.hoax_likelihood != null && r.hoax_likelihood > 0.1)
+                derivedParts.push(`<span class="hoax-inline">hoax ${Number(r.hoax_likelihood).toFixed(2)}</span>`);
+            const derivedHtml = derivedParts.join(" · ");
 
             const meta = [
-                r.hynek    ? `<span class="meta-pill">Hynek: ${escapeHtml(r.hynek)}</span>` : "",
-                r.witnesses? `<span class="meta-pill">${r.witnesses} witness${r.witnesses === 1 ? '' : 'es'}</span>` : "",
-                r.duration ? `<span class="meta-pill">${escapeHtml(r.duration)}</span>` : "",
+                r.hynek      ? `<span class="meta-pill">Hynek: ${escapeHtml(r.hynek)}</span>` : "",
+                r.witnesses  ? `<span class="meta-pill">${r.witnesses} witness${r.witnesses === 1 ? '' : 'es'}</span>` : "",
+                r.duration   ? `<span class="meta-pill">${escapeHtml(r.duration)}</span>` : "",
+                r.has_description ? `<span class="meta-pill has-desc">[ DESC ]</span>` : "",
+                r.has_media   ? `<span class="meta-pill has-media">[ MEDIA ]</span>` : "",
             ].filter(Boolean).join("");
 
             card.innerHTML = `
@@ -2784,7 +2802,7 @@ async function executeSearch() {
                     ${r.shape ? `<span class="shape-tag">${escapeHtml(r.shape)}</span>` : ""}
                 </div>
                 <div class="result-loc">${escapeHtml(loc) || "Unknown location"}</div>
-                <div class="result-desc">${descHtml}</div>
+                ${derivedHtml ? `<div class="result-derived">${derivedHtml}</div>` : ""}
                 ${meta ? `<div class="result-meta">${meta}</div>` : ""}
             `;
             resultsEl.appendChild(card);
@@ -3412,15 +3430,91 @@ async function openDetail(id) {
             html += `</div>`;
         }
 
-        // Description
-        if (r.description || r.summary) {
-            html += `<div class="detail-section detail-full-width"><h3>Description</h3>`;
-            if (r.summary) html += `<div class="detail-row"><strong>${escapeHtml(r.summary)}</strong></div>`;
-            if (r.description) html += `<div class="detail-desc">${escapeHtml(r.description)}</div>`;
+        // v0.8.3 — Data Quality section.
+        //
+        // Three horizontal bars for the derived scores from the
+        // ufo-dedup analyze.py pipeline. Replaces the old
+        // "Description" paragraph section that rendered raw
+        // narrative text from r.description / r.summary — those
+        // columns are dropped from the public schema by
+        // scripts/strip_raw_for_public.py, so the response doesn't
+        // carry them anymore.
+        const hasAnyScore = (
+            r.quality_score != null ||
+            r.richness_score != null ||
+            r.hoax_likelihood != null
+        );
+        if (hasAnyScore) {
+            html += `<div class="detail-section"><h3>Data Quality</h3>`;
+            if (r.quality_score != null) {
+                const pct = Math.max(0, Math.min(100, r.quality_score));
+                html += `<div class="detail-row">
+                    <span class="detail-label">Quality:</span>
+                    <div class="quality-bar"><div class="quality-bar-fill" style="width:${pct}%"></div></div>
+                    <span class="quality-bar-value">${pct} / 100</span>
+                </div>`;
+            }
+            if (r.richness_score != null) {
+                const pct = Math.max(0, Math.min(100, r.richness_score));
+                html += `<div class="detail-row">
+                    <span class="detail-label">Richness:</span>
+                    <div class="quality-bar"><div class="quality-bar-fill" style="width:${pct}%"></div></div>
+                    <span class="quality-bar-value">${pct} / 100</span>
+                </div>`;
+            }
+            if (r.hoax_likelihood != null) {
+                // hoax_likelihood is REAL 0.0-1.0. Render as a
+                // burgundy "danger" bar — higher = more likely hoax.
+                const val = Number(r.hoax_likelihood);
+                const pct = Math.max(0, Math.min(100, Math.round(val * 100)));
+                html += `<div class="detail-row">
+                    <span class="detail-label">Hoax likelihood:</span>
+                    <div class="quality-bar quality-bar-hoax"><div class="quality-bar-fill" style="width:${pct}%"></div></div>
+                    <span class="quality-bar-value">${val.toFixed(2)}</span>
+                </div>`;
+            }
             html += `</div>`;
         }
 
-        // Resolution / Explanation
+        // v0.8.3 — Derived Metadata section. Shows the ufo-dedup
+        // pipeline's canonical analysis values alongside raw columns
+        // in Observation above. When standardized_shape / primary_color
+        // / dominant_emotion are null the pipeline didn't find a
+        // confident match — hide the row entirely rather than show
+        // "None".
+        const hasDerived = (
+            r.standardized_shape || r.primary_color || r.dominant_emotion ||
+            r.has_description != null || r.has_media != null
+        );
+        if (hasDerived) {
+            html += `<div class="detail-section"><h3>Derived Metadata</h3>`;
+            if (r.standardized_shape)
+                html += `<div class="detail-row"><span class="detail-label">Shape (canon):</span> <span class="shape-tag">${escapeHtml(r.standardized_shape)}</span></div>`;
+            if (r.primary_color)
+                html += `<div class="detail-row"><span class="detail-label">Color:</span> ${escapeHtml(r.primary_color)}</div>`;
+            if (r.dominant_emotion)
+                html += `<div class="detail-row"><span class="detail-label">Emotion:</span> ${escapeHtml(r.dominant_emotion)}</div>`;
+            if (r.has_description != null) {
+                const tag = r.has_description
+                    ? `<span class="popup-desc-badge has-desc">[ DESC ]</span>`
+                    : `<span class="popup-desc-badge no-desc">[ NO DESC ]</span>`;
+                html += `<div class="detail-row"><span class="detail-label">Description:</span> ${tag}</div>`;
+            }
+            if (r.has_media != null) {
+                const tag = r.has_media
+                    ? `<span class="popup-desc-badge has-desc">[ MEDIA ]</span>`
+                    : `<span class="popup-desc-badge no-desc">[ NO MEDIA ]</span>`;
+                html += `<div class="detail-row"><span class="detail-label">Media:</span> ${tag}</div>`;
+            }
+            html += `</div>`;
+        }
+
+        // Resolution / Explanation — short free text from the source
+        // record. v0.8.3 keeps this field because it's structured
+        // enough ("Chinese lantern", "Venus at low horizon") and
+        // genuinely useful context for explained sightings. Flagged
+        // for science-team cleanup in docs/V083_BACKLOG.md under
+        // "Science-team cleanup of free-text fields".
         if (r.explanation) {
             html += `<div class="detail-section detail-full-width"><h3>Explanation</h3>
                 <div class="detail-row">${escapeHtml(r.explanation)}</div></div>`;
@@ -3442,13 +3536,11 @@ async function openDetail(id) {
             html += `</div>`;
         }
 
-        // Raw JSON toggle
-        if (r.raw_json) {
-            html += `<div class="detail-section detail-full-width">
-                <h3><a href="#" onclick="document.getElementById('raw-json-block').style.display = document.getElementById('raw-json-block').style.display === 'none' ? 'block' : 'none'; return false;">Raw JSON (toggle)</a></h3>
-                <pre id="raw-json-block" style="display:none" class="raw-json">${escapeHtml(JSON.stringify(r.raw_json, null, 2))}</pre>
-            </div>`;
-        }
+        // v0.8.3 — no Raw JSON toggle. The `raw_json` column is one
+        // of the 4 that scripts/strip_raw_for_public.py drops, and
+        // /api/sighting/:id never returns it anymore. The section
+        // was useful for debugging the original ETL but those days
+        // are behind us now.
 
         html += "</div>";
         body.innerHTML = html;

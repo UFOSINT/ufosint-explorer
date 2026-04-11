@@ -17,6 +17,129 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 Nothing yet.
 
+## [0.8.3] — 2026-04-11 — Raw text retirement (search + detail rewire)
+
+The preparation step for dropping the raw narrative columns from the
+public Postgres. v0.8.3 removes every code path that reads
+`description`, `summary`, `notes`, or `raw_json` from the sighting
+table, so `scripts/strip_raw_for_public.py` can safely drop those
+columns without breaking the app. The full raw text remains in the
+private SQLite on the operator's machine — it's just not in the
+public copy anymore.
+
+See [`docs/V083_PLAN.md`](docs/V083_PLAN.md) for the full rationale,
+column inventory, and acceptance criteria.
+
+### Changed
+
+- **`/api/sighting/:id`** now uses an explicit SELECT column list
+  (the new `_SIGHTING_DETAIL_COLUMNS` tuple) instead of
+  `SELECT s.*`. The list never references the 4 dropped columns
+  so the endpoint is forward-compatible with
+  `strip_raw_for_public.py`. It also adds the 9 v0.8.2 derived
+  fields (`standardized_shape`, `primary_color`, `dominant_emotion`,
+  `quality_score`, `richness_score`, `hoax_likelihood`,
+  `has_description`, `has_media`, `sighting_datetime`) so the
+  detail modal can render Data Quality + Derived Metadata sections.
+  The legacy `json.loads(record["raw_json"])` parse block is gone.
+
+- **`/api/search` `q` parameter** changes semantics. Previously it
+  ran `ILIKE` against `s.description` and `s.summary` (the raw
+  narrative text); now it runs a 7-column faceted match over
+  `l.city`, `l.state`, `l.country`, `s.standardized_shape`,
+  `s.primary_color`, `s.dominant_emotion`, and `sd.name`. So
+  `q=triangle` returns every triangle-shaped sighting;
+  `q=texas` returns every Texas sighting. Multi-word ANDs
+  work via the faceted filters alongside `q`. Every column
+  in the WHERE has a btree index (from v0.7 + v0.8.2
+  migrations), so the search stays sub-second on 614k rows.
+
+- **`/api/search` response shape** adds derived fields
+  (`quality_score`, `hoax_likelihood`, `dominant_emotion`,
+  `primary_color`, `has_description`, `has_media`,
+  `sighting_datetime`, `standardized_shape`) and drops the
+  300-char `description` snippet. Result cards now render a
+  compound metadata line (`Black · Fear · quality 78`) instead
+  of a description preview. The `<mark>q</mark>` regex
+  highlighting is gone — nothing to highlight.
+
+- **`/api/export.csv` and `/api/export.json`**. `EXPORT_COLUMNS`
+  drops `summary` and `description`; adds `sighting_datetime`,
+  `standardized_shape`, `primary_color`, `dominant_emotion`,
+  `event_type`, `duration_seconds`, `quality_score`,
+  `richness_score`, `hoax_likelihood`, `has_description`,
+  `has_media`. `_build_export_query` uses the same faceted
+  7-column `q` clause as `/api/search`.
+
+- **`static/app.js openDetail()`** drops the Description and
+  Raw JSON sections. Adds two new sections:
+  - **Data Quality**: three horizontal bars rendering
+    `quality_score`, `richness_score`, and `hoax_likelihood`.
+    The hoax bar uses the danger color (inverted: higher = more
+    red) and shows the raw REAL 0.0–1.0 value, not the 0–100
+    scale.
+  - **Derived Metadata**: `standardized_shape` (chip),
+    `primary_color`, `dominant_emotion`, plus `[ DESC ]` /
+    `[ NO DESC ]` and `[ MEDIA ]` / `[ NO MEDIA ]` badges from
+    the flag fields.
+
+  The Sentiment Analysis section (VADER compound + NRC emotion
+  bars) is kept alongside Data Quality — the operator chose to
+  preserve it for now. Same with the Explanation section: it's
+  short structured text ("Chinese lantern", "Venus at low
+  horizon") and stays in v0.8.3, flagged for science-team cleanup
+  in `docs/V083_BACKLOG.md` under "Science-team cleanup of
+  free-text fields".
+
+- **`static/app.js executeSearch()`** result cards replace the
+  description snippet with a compound derived-metadata line
+  (`color · emotion · quality N · hoax X`) and add
+  `[ DESC ]` / `[ MEDIA ]` pills to the meta row. No more
+  `<mark>q</mark>` highlighting.
+
+- **`static/style.css`** gains `.quality-bar`, `.quality-bar-fill`,
+  `.quality-bar-hoax`, `.quality-bar-value`, `.result-derived`,
+  `.meta-pill.has-desc`, `.meta-pill.has-media`, plus inline
+  `.quality-inline` and `.hoax-inline` accent chips for the
+  search result cards.
+
+- **`scripts/strip_raw_for_public.py` `RAW_COLUMNS`** trimmed
+  from 6 entries to the 4 the operator confirmed during v0.8.3
+  scoping: `description`, `summary`, `notes`, `raw_json`.
+  `date_event_raw` and `time_raw` are kept in the schema.
+  `scripts/drop_raw_text_columns.sql` updated to match.
+
+### Added
+
+- **`docs/V083_PLAN.md`** — full architecture plan, column
+  inventory, acceptance criteria, ship sequence, and risk
+  register.
+
+- **`tests/test_v083_no_raw_text.py`** — 20 regression
+  assertions that lock the v0.8.3 contract. Every check is a
+  grep-style source-level assertion so the tests fail loudly
+  if a future refactor re-introduces a `s.description` /
+  `s.summary` read, a `r.description` render, or bumps the
+  strip script's `RAW_COLUMNS` list back up.
+
+### Not shipped yet (deferred to the post-ship ops step)
+
+- **`scripts/strip_raw_for_public.py` has not been run against
+  Azure Postgres yet.** That's the final irreversible step and
+  happens after v0.8.3 ships, deploys, and the operator signs
+  off that the detail modal + search work correctly. The script
+  will ask for host-name confirmation before executing and will
+  refuse to run if `quality_score` coverage is below 90%.
+
+- **`sighting_analysis` table migration**. Still SQLite-private,
+  flagged as v0.9 scope in `docs/V083_BACKLOG.md` APP-1.
+
+- **Science-team cleanup of free-text fields**
+  (`explanation`, `characteristics`, `weather`, `terrain`,
+  `witness_names`). Kept in the schema for now; flagged as
+  v0.8.4+ scope per the operator's sign-off during v0.8.3
+  scoping.
+
 ## [0.8.2] — 2026-04-10 — Derived public fields + quality rail
 
 The science team's `ufo-dedup` pipeline delivered a batch of derived

@@ -261,3 +261,28 @@ Stashed here so they're not lost.
 - **Duration bucket UI** — blocked on SCI-4.
 - **sighting_analysis JSON side-fields surfaced in detail modal**
   (APP-1).
+- **Science-team cleanup of free-text fields**. During v0.8.3
+  scoping the operator said: *"We need to ask the science team to
+  clean up the data so we don't show too much raw data but just
+  our analysis on it with simplified ML shapes."* The detail modal
+  currently renders several short-ish free-text columns that are
+  structured enough to keep for v0.8.3 but ideally should become
+  derived categorical fields in a future pipeline pass. Fields to
+  review with the science team:
+    - `explanation` — the "resolution" for explained sightings
+      ("Chinese lantern", "Venus at low horizon"). Could become a
+      standardized `explanation_category` enum with ~15 values,
+      plus a `explanation_confidence` score.
+    - `characteristics` — free text describing distinctive traits
+      ("pulsating lights", "silent", "emitted sparks"). Could
+      become a multi-label `characteristic_tags` array (~20 tags).
+    - `weather`, `terrain` — usually one-word: "clear", "overcast",
+      "forest", "desert". Could become standardized enums.
+    - `witness_age`, `witness_sex` — already structured-ish but
+      mixed formats.
+    - `witness_names` — privacy concern; could drop entirely in
+      favor of a `has_named_witness` boolean.
+  The v0.8.3 detail modal keeps rendering these as-is for now.
+  When the science team delivers the standardized derived fields,
+  v0.8.4 would rewire the modal to show the derived values and
+  drop the raw text columns as a follow-up raw-text-drop pass.
