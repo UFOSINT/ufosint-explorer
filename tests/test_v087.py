@@ -457,6 +457,50 @@ def test_common_filter_keys_trimmed_to_six():
     )
 
 
+def test_app_js_has_no_orphaned_dead_id_references():
+    """Guard against the v0.8.7.1 hotfix bug.
+
+    The initial v0.8.7 landing left a bootstrap event listener on
+    `document.getElementById("coords-filter")` at app.js:137 that
+    crashed the whole page with `Cannot read properties of null`
+    because the element was deleted in Phase 4. pytest didn't catch
+    it because the dead reference was outside any testable function
+    body — a bare call at module-level script execution.
+
+    This test scans the entire app.js source for any reference to
+    the deleted element IDs in a context that would null-deref at
+    runtime: `.getElementById("dead-id")` followed by anything
+    other than `?.` or `)?`. If someone re-introduces one, the
+    test fails immediately.
+    """
+    src = _read(APP_JS)
+    dead_ids = [
+        "filter-country",
+        "filter-state",
+        "filter-hynek",
+        "filter-vallee",
+        "filter-collection",
+        "coords-filter",
+        "btn-more-filters",
+        "filters-advanced",
+        "more-filter-count",
+    ]
+    for dead in dead_ids:
+        # Unsafe pattern: getElementById("x").something
+        # Safe pattern:   getElementById("x")?.something
+        unsafe = re.compile(
+            r'getElementById\(\s*"' + re.escape(dead) + r'"\s*\)\s*\.',
+        )
+        match = unsafe.search(src)
+        assert not match, (
+            f"app.js has an unsafe getElementById({dead!r}).xxx "
+            f"call — this element was deleted in v0.8.7 so the "
+            f"lookup returns null and the .xxx access crashes the "
+            f"page on bootstrap. Found at char offset "
+            f"{match.start()}."
+        )
+
+
 def test_init_filters_trimmed():
     """init_filters at startup should only query the 4 surviving
     filter vocabularies. hynek/vallee/collections/countries/states/

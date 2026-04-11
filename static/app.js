@@ -133,21 +133,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     document.getElementById("btn-apply-filters").addEventListener("click", applyFilters);
     document.getElementById("btn-clear-filters").addEventListener("click", clearFilters);
 
-    // Coords source filter (auto-refresh map on change)
-    document.getElementById("coords-filter").addEventListener("change", () => {
-        if (state.activeTab === "map" || state.activeTab === "observatory") {
-            // v0.8.2-cleanup-2: Route through the GPU filter pipeline
-            // when deck.gl is active. The legacy loadMapMarkers /
-            // loadHeatmap path would silently re-attach the legacy
-            // markerCluster layer over the deck.gl ScatterplotLayer.
-            if (state.useDeckGL || state.deckBoot === "pending") {
-                if (typeof applyClientFilters === "function") applyClientFilters();
-                return;
-            }
-            if (state.mapMode === "heatmap") loadHeatmap();
-            else loadMapMarkers();
-        }
-    });
+    // v0.8.7: #coords-filter was deleted (had no byte slot in the
+    // bulk buffer so the filter pipeline couldn't use it). The old
+    // change handler that bound to it here is gone with the element.
 
     // v0.8.6: Search panel, Duplicates panel, and Timeline drill-down
     // "back" button were all removed. Search semantics moved to the
@@ -4155,21 +4143,21 @@ function initSettingsMenu() {
 
 
 // =========================================================================
-// Sprint 3: Filter bar polish — auto-apply, is-dirty, advanced drawer,
-// mobile collapse, active filter counts
+// Sprint 3: Filter bar polish — auto-apply, is-dirty, mobile collapse,
+// active filter counts. v0.8.7 dropped the advanced drawer (all dead
+// filters) and narrowed the auto-apply + dirty lists to the 6
+// surviving fields.
 // =========================================================================
 
 // Selects that should auto-apply with a debounce. Text inputs (the
 // date range) keep the explicit Apply button because you don't want
-// fire-on-keystroke there.
+// fire-on-keystroke there. v0.8.7: trimmed to the 4 surviving
+// <select> filters.
 const AUTO_APPLY_SELECT_IDS = [
     "filter-shape",
-    "filter-collection",
     "filter-source",
-    "filter-country",
-    "filter-state",
-    "filter-hynek",
-    "filter-vallee",
+    "filter-color",
+    "filter-emotion",
 ];
 
 // Text inputs that mark the Apply button "dirty" on input. User must
@@ -4178,13 +4166,6 @@ const AUTO_APPLY_SELECT_IDS = [
 const DIRTY_INPUT_IDS = [
     "filter-date-from",
     "filter-date-to",
-];
-
-// Which filters live in the advanced drawer — used for the count badge.
-const ADVANCED_FILTER_IDS = [
-    "filter-collection",
-    "filter-hynek",
-    "filter-vallee",
 ];
 
 let _autoApplyTimer = null;
@@ -4211,47 +4192,10 @@ function initFilterBarPolish() {
     });
     applyBtn?.addEventListener("click", () => applyBtn.classList.remove("is-dirty"));
 
-    // ----- "More filters" drawer toggle + active-count badge -----
-    const moreBtn = document.getElementById("btn-more-filters");
-    const drawer = document.getElementById("filters-advanced");
-    const moreCount = document.getElementById("more-filter-count");
-
-    function updateMoreCount() {
-        if (!moreCount) return;
-        const n = ADVANCED_FILTER_IDS.reduce((count, id) => {
-            const el = document.getElementById(id);
-            return count + (el && el.value ? 1 : 0);
-        }, 0);
-        if (n > 0) {
-            moreCount.textContent = String(n);
-            moreCount.hidden = false;
-        } else {
-            moreCount.hidden = true;
-        }
-    }
-
-    if (moreBtn && drawer) {
-        moreBtn.addEventListener("click", () => {
-            const willShow = drawer.hidden;
-            drawer.hidden = !willShow;
-            moreBtn.setAttribute("aria-expanded", String(willShow));
-        });
-        // Auto-open the drawer if any advanced filter is active on page load
-        const hasActive = ADVANCED_FILTER_IDS.some(id => {
-            const el = document.getElementById(id);
-            return el && el.value;
-        });
-        if (hasActive) {
-            drawer.hidden = false;
-            moreBtn.setAttribute("aria-expanded", "true");
-        }
-        // Keep the count fresh on every change
-        ADVANCED_FILTER_IDS.forEach(id => {
-            const el = document.getElementById(id);
-            el?.addEventListener("change", updateMoreCount);
-        });
-        updateMoreCount();
-    }
+    // v0.8.7: the "More filters" drawer + badge was removed along
+    // with the filter-collection / filter-hynek / filter-vallee
+    // dropdowns it used to hold. The remaining 6 filters all fit
+    // in the main filter bar.
 
     // ----- Mobile filter bar toggle + active-count badge -----
     const mobileBtn = document.getElementById("btn-mobile-filters");
@@ -4260,12 +4204,15 @@ function initFilterBarPolish() {
 
     function updateMobileCount() {
         if (!mobileCount) return;
-        // Count every FILTER_FIELD that has a value, excluding "coords=all"
-        const n = FILTER_FIELDS.reduce((count, f) => {
-            if (f.key === "coords") return count;
+        // v0.8.7: FILTER_FIELDS was trimmed to the 6 surviving
+        // filters, so we can just count values without any
+        // per-field exclusion logic. Movement cluster counts as
+        // one if any category is checked.
+        let n = FILTER_FIELDS.reduce((count, f) => {
             const el = document.getElementById(f.id);
             return count + (el && el.value ? 1 : 0);
         }, 0);
+        if (_readMovementCats().length) n++;
         if (n > 0) {
             mobileCount.textContent = String(n);
             mobileCount.hidden = false;
@@ -4287,11 +4234,15 @@ function initFilterBarPolish() {
         });
         // Every filter change updates the mobile count
         FILTER_FIELDS.forEach(f => {
-            if (f.key === "coords") return;
             const el = document.getElementById(f.id);
             el?.addEventListener("change", updateMobileCount);
             el?.addEventListener("input", updateMobileCount);
         });
+        // Movement cluster change events also update the count.
+        // The cluster is populated asynchronously from deck.js meta,
+        // so we delegate via the host element.
+        const movHost = document.getElementById("filter-movement-cluster");
+        movHost?.addEventListener("change", updateMobileCount);
         updateMobileCount();
     }
 }
