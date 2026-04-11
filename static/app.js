@@ -767,9 +767,17 @@ async function applyFilters() {
     applyBtn?.classList.remove("is-dirty");
     const restore = disableButtonWhilePending(applyBtn, "Applying…");
     try {
-        if (state.activeTab === "map") {
-            if (state.mapMode === "heatmap") await loadHeatmap();
-            else await loadMapMarkers();
+        if (state.activeTab === "map" || state.activeTab === "observatory") {
+            // v0.8.0: Try the GPU filter path first. When the deck.gl
+            // layer is ready, applyClientFilters() walks the typed
+            // arrays in ~1 ms and we're done. Falls through to the
+            // legacy server fetch on ancient browsers.
+            const gpu = applyClientFilters();
+            if (!gpu) {
+                if (state.mapMode === "heatmap") await loadHeatmap();
+                else if (state.mapMode === "hexbin") await loadHexBins();
+                else await loadMapMarkers();
+            }
         }
         else if (state.activeTab === "timeline") await loadTimeline();
         else if (state.activeTab === "search") await doSearch();
@@ -910,6 +918,21 @@ function initMap() {
         maxZoom: 18,
     }).addTo(state.map);
 
+    // v0.8.0: Try to boot the deck.gl GPU path. If WebGL or deck.gl
+    // itself is unavailable we fall through to the legacy Leaflet
+    // marker-cluster path below, which is the same code that v0.7
+    // shipped. The user gets the right experience for their browser
+    // with zero regression for anyone on ancient hardware.
+    state.useDeckGL = false;
+    if (window.UFODeck && window.UFODeck.hasWebGL()) {
+        bootDeckGL().catch((err) => {
+            console.warn("[v0.8] deck.gl boot failed, using legacy path:", err);
+            state.useDeckGL = false;
+        });
+    } else {
+        console.info("[v0.8] WebGL unavailable or deck.js missing, legacy path");
+    }
+
     state.markerLayer = L.markerClusterGroup({
         chunkedLoading: true,
         maxClusterRadius: 50,
@@ -961,11 +984,17 @@ function initMap() {
     // multiple moveend events in rapid succession; without this each one
     // triggered a full /api/map request and stale responses could arrive
     // out of order, overwriting fresh data with old markers.
+    //
+    // v0.8.0: When state.useDeckGL is true, the deck.gl LeafletLayer
+    // renders every point on the GPU and pan/zoom is a zero-work
+    // operation — no network, no SQL, no marker tree rebuild. The
+    // schedule-reload path below only runs for the legacy fallback.
     let reloadSuppressed = false;
     let mapReloadTimer = null;
     let mapReloadAbort = null;
 
     function scheduleMapReload() {
+        if (state.useDeckGL) return;  // deck.gl handles this for free
         if (reloadSuppressed) return;
         clearTimeout(mapReloadTimer);
         mapReloadTimer = setTimeout(() => {
@@ -986,8 +1015,47 @@ function initMap() {
         scheduleMapReload();
     });
 
-    // Initial load
+    // Initial load. When the deck.gl boot succeeds it mounts its own
+    // layer and takes over rendering; this first legacy fetch returns
+    // a quick sparse sample so the map isn't blank during the bulk
+    // download. Once the bulk data lands, bootDeckGL() clears the
+    // legacy marker layer.
     loadMapMarkers();
+}
+
+// v0.8.0 — Bulk-load the packed geocoded dataset and mount the deck.gl
+// LeafletLayer on top of state.map. On success, the legacy marker /
+// heat / hex layers are hidden and state.useDeckGL flips to true so
+// scheduleMapReload() becomes a no-op. On any failure we leave the
+// legacy path running. Safe to call multiple times.
+async function bootDeckGL() {
+    if (!window.UFODeck) throw new Error("deck.js not loaded");
+    const UFODeck = window.UFODeck;
+
+    // Wait for the deck.gl global to show up (loaded via <script defer>).
+    await UFODeck.waitForDeck(40);
+
+    // Fetch + deserialise in parallel with the legacy initial load.
+    await UFODeck.loadBulkPoints();
+
+    // Mount a LeafletLayer on the existing map. From now on, pan/zoom
+    // is GPU-rendered with no network activity until the user clicks.
+    UFODeck.mountDeckLayer(state.map, state.mapMode || "points");
+
+    // Hide the legacy layers so we don't double-draw. We KEEP them on
+    // the map instance so a browser that runs out of WebGL context
+    // mid-session can reinstate them — but clear their data.
+    if (state.markerLayer) state.markerLayer.clearLayers();
+    if (state.heatLayer && state.heatLayer.setLatLngs) state.heatLayer.setLatLngs([]);
+    if (state.hexLayer) state.hexLayer.clearLayers();
+
+    state.useDeckGL = true;
+
+    // Apply the current filter state immediately so the initial paint
+    // respects any #hash filters already in place.
+    if (typeof applyClientFilters === "function") applyClientFilters();
+
+    console.info("[v0.8] deck.gl layer mounted — GPU path active");
 }
 
 // Build a marker popup with cross-tab pivots. The popup has up to 3
@@ -1250,7 +1318,15 @@ function toggleMapMode(mode) {
         btn.classList.toggle("active", btn.dataset.mode === mode);
     });
 
-    // Remove whichever layer was active, add the new one.
+    // v0.8.0: On the GPU path, swapping modes is a single setProps()
+    // call on the deck.gl LeafletLayer. No layer add/remove, no SQL.
+    if (state.useDeckGL && window.UFODeck && window.UFODeck.isReady()) {
+        window.UFODeck.setDeckMode(mode);
+        return;
+    }
+
+    // Legacy fallback — remove whichever Leaflet layer was active, add
+    // the new one, kick off the matching server query.
     if (prev === "heatmap")  state.map.removeLayer(state.heatLayer);
     else if (prev === "hexbin") state.map.removeLayer(state.hexLayer);
     else                      state.map.removeLayer(state.markerLayer);
@@ -1266,6 +1342,38 @@ function toggleMapMode(mode) {
         state.map.addLayer(state.markerLayer);
         loadMapMarkers();
     }
+}
+
+// v0.8.0 — Client-side filter pipeline. Reads the current filter form
+// values, builds a filter descriptor, calls UFODeck.applyClientFilters
+// to rebuild the visible index, and refreshes the active deck.gl layer.
+// Returns true if the GPU path handled the filter, false if the caller
+// should fall through to the legacy per-endpoint reloads.
+function applyClientFilters() {
+    if (!(state.useDeckGL && window.UFODeck && window.UFODeck.isReady())) {
+        return false;
+    }
+    const filter = {
+        sourceName: document.getElementById("filter-source")?.value || null,
+        shapeName:  document.getElementById("filter-shape")?.value  || null,
+        yearFrom:   _parseYearFilter(document.getElementById("filter-date-from")?.value),
+        yearTo:     _parseYearFilter(document.getElementById("filter-date-to")?.value),
+        bbox: null,  // deck.gl clips by viewport automatically, skip the CPU cull
+    };
+    window.UFODeck.applyClientFilters(filter);
+    window.UFODeck.refreshActiveLayer();
+    return true;
+}
+
+// Pull a year integer out of whatever the user typed into a date-range
+// input. Accepts "2005", "2005-06-14", "" — anything non-parseable
+// returns null so applyClientFilters treats it as "no filter".
+function _parseYearFilter(raw) {
+    if (!raw) return null;
+    const m = String(raw).match(/^(\d{1,4})/);
+    if (!m) return null;
+    const y = parseInt(m[1], 10);
+    return Number.isFinite(y) ? y : null;
 }
 // Legacy alias — the old "clusters" name maps to the new "points" mode.
 function _modeAlias(mode) { return mode === "clusters" ? "points" : mode; }

@@ -15,6 +15,7 @@ import json
 import math
 import time
 import hashlib
+import functools
 import subprocess
 from pathlib import Path
 from flask import Flask, request, jsonify, send_from_directory, Response
@@ -1102,6 +1103,235 @@ def api_hexbin():
         })
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Bulk points endpoint (v0.8.0 — client-side rendering backbone)
+# ---------------------------------------------------------------------------
+#
+# Returns every geocoded sighting as a packed binary buffer (~1.7 MB raw,
+# ~700 KB gzipped at current dataset size). The client downloads this ONCE
+# per session, deserialises into typed arrays, and renders everything on
+# the GPU via deck.gl. Pan, zoom, heat, and hex-bin modes all run off the
+# same in-memory buffer with no further server round-trips — the DB only
+# hears about clicks (via /api/sighting/:id) and landing-page stats.
+#
+# Binary row layout (16 bytes, little-endian):
+#   [0:4]   uint32  id
+#   [4:8]   float32 lat
+#   [8:12]  float32 lng
+#   [12]    uint8   source_idx   (1..N, 0 = unknown)
+#   [13]    uint8   shape_idx    (1..M, 0 = none; capped at 254 distinct)
+#   [14:16] uint16  year         (0 if unknown)
+#
+# The accompanying meta JSON (`?meta=1`) carries the id -> name lookup
+# tables, the schema descriptor, and the ETag.
+#
+# Caching:
+#   - In-process: @lru_cache(maxsize=2) keyed on ETag so every worker
+#     holds at most two packed buffers in memory (~4 MB max).
+#   - HTTP: strong ETag based on schema version + rowcount + max(id).
+#     A 304 is ~180 bytes per request.
+#   - Browser: Cache-Control public, max-age=3600 + IndexedDB mirror
+#     on the client (handled in static/js/bulk.js).
+
+# Bump this whenever the binary layout or meta shape changes. Forces
+# every browser + every in-process lru_cache entry to invalidate even
+# if the row count and max id happen to match.
+_POINTS_BULK_SCHEMA_VERSION = "v080-1"
+_POINTS_BULK_BYTES_PER_ROW = 16
+_POINTS_BULK_STRUCT = "<IffBBH"  # little-endian: uint32 + f32 + f32 + u8 + u8 + u16
+
+
+def _points_bulk_etag() -> str:
+    """Cheap ETag for the bulk points endpoint.
+
+    Derived from the schema version + geocoded row count + max sighting
+    id. Both SQL aggregates are O(1) under the existing indexes
+    (idx_location_coords and the primary key), so this runs in a few
+    milliseconds and is safe to call on every request.
+    """
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT COUNT(*), COALESCE(MAX(s.id), 0)
+            FROM sighting s
+            JOIN location l ON l.id = s.location_id
+            WHERE l.latitude IS NOT NULL
+              AND l.longitude IS NOT NULL
+              AND l.latitude BETWEEN -90 AND 90
+              AND l.longitude BETWEEN -180 AND 180
+            """
+        )
+        cnt, max_id = cur.fetchone()
+    finally:
+        conn.close()
+    return f"{_POINTS_BULK_SCHEMA_VERSION}-{int(cnt)}-{int(max_id)}"
+
+
+@functools.lru_cache(maxsize=2)
+def _points_bulk_build(etag: str) -> tuple[bytes, bytes, dict]:
+    """Build the packed binary buffer + metadata for `etag`.
+
+    Returns (gzipped_buffer, meta_json_bytes, meta_dict). Cached in
+    process memory for the lifetime of the etag — since etags change
+    only when new data lands, the cache holds at most two entries
+    (current + one stale during a deploy).
+    """
+    import gzip
+    import struct
+
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+
+        # Stable source index, alphabetical by name. Index 0 is reserved
+        # for "unknown" so every shipped source gets 1..N.
+        cur.execute("SELECT id, name FROM source_database ORDER BY name")
+        source_rows = cur.fetchall()
+        source_names = [None] + [r[1] for r in source_rows]
+        source_id_to_idx = {r[0]: i + 1 for i, r in enumerate(source_rows)}
+
+        # Stable shape index, case-insensitive alphabetical. uint8 caps us
+        # at 255 values total; slot 0 is "no shape" so we allow up to
+        # 254 distinct non-null shapes. The current dataset has well
+        # under 200; anything beyond the cap buckets into 0.
+        cur.execute(
+            """
+            SELECT DISTINCT shape
+            FROM sighting
+            WHERE shape IS NOT NULL AND shape <> ''
+            ORDER BY LOWER(shape)
+            """
+        )
+        distinct_shapes = [r[0] for r in cur.fetchall()][:254]
+        shape_names = [None] + distinct_shapes
+        shape_to_idx = {s: i + 1 for i, s in enumerate(distinct_shapes)}
+
+        # Stream every geocoded sighting. `server_side_cursor` would be
+        # nice here but psycopg_pool's default pool cursor is in-memory;
+        # at 105k rows × ~70 bytes per tuple the peak RSS bump is ~8 MB,
+        # which is fine on B1.
+        cur.execute(
+            """
+            SELECT s.id, l.latitude, l.longitude,
+                   s.source_db_id, s.shape, s.date_event
+            FROM sighting s
+            JOIN location l ON l.id = s.location_id
+            WHERE l.latitude IS NOT NULL
+              AND l.longitude IS NOT NULL
+              AND l.latitude BETWEEN -90 AND 90
+              AND l.longitude BETWEEN -180 AND 180
+            ORDER BY s.id
+            """
+        )
+
+        pack = struct.Struct(_POINTS_BULK_STRUCT).pack
+        buf = bytearray()
+        count = 0
+        for sid, lat, lng, src_id, shape, date_event in cur:
+            # Parse year out of the ISO-ish date string. Format is
+            # usually "YYYY-MM-DD" but historic rows may have only
+            # "YYYY" or arbitrary free-text. Anything that doesn't
+            # parse → 0.
+            year = 0
+            if date_event:
+                try:
+                    y = int(date_event[:4])
+                    if 0 <= y <= 65535:
+                        year = y
+                except (ValueError, TypeError):
+                    year = 0
+            buf.extend(
+                pack(
+                    int(sid),
+                    float(lat),
+                    float(lng),
+                    source_id_to_idx.get(src_id, 0),
+                    shape_to_idx.get(shape, 0),
+                    year,
+                )
+            )
+            count += 1
+    finally:
+        conn.close()
+
+    raw = bytes(buf)
+    gzipped = gzip.compress(raw, compresslevel=6)
+
+    meta = {
+        "count": count,
+        "etag": etag,
+        "schema_version": _POINTS_BULK_SCHEMA_VERSION,
+        "sources": source_names,
+        "shapes": shape_names,
+        "raw_size": len(raw),
+        "gzip_size": len(gzipped),
+        "schema": {
+            "bytes_per_row": _POINTS_BULK_BYTES_PER_ROW,
+            "endian": "little",
+            "fields": [
+                {"name": "id",         "offset": 0,  "type": "uint32",  "len": 4},
+                {"name": "lat",        "offset": 4,  "type": "float32", "len": 4},
+                {"name": "lng",        "offset": 8,  "type": "float32", "len": 4},
+                {"name": "source_idx", "offset": 12, "type": "uint8",   "len": 1},
+                {"name": "shape_idx",  "offset": 13, "type": "uint8",   "len": 1},
+                {"name": "year",       "offset": 14, "type": "uint16",  "len": 2},
+            ],
+        },
+    }
+    meta_bytes = json.dumps(meta, separators=(",", ":")).encode("utf-8")
+    return gzipped, meta_bytes, meta
+
+
+@app.route("/api/points-bulk")
+def api_points_bulk():
+    """Bulk binary dataset for client-side rendering.
+
+    Three response shapes depending on the request:
+      - `If-None-Match` matches current ETag  → 304 Not Modified
+      - `?meta=1`                              → application/json
+                                                 (count, lookups, schema)
+      - default                                → application/octet-stream
+                                                 (pre-gzipped packed rows)
+
+    The client fetches `?meta=1` first to get lookup tables + schema, then
+    fetches the bare endpoint for the packed buffer. Both requests share
+    the same ETag, so a repeat session that still has a fresh cached
+    buffer sends two cheap 304s.
+    """
+    etag = _points_bulk_etag()
+    quoted_etag = f'"{etag}"'
+
+    # Client already has the right copy. 304 before we touch the buffer.
+    if request.headers.get("If-None-Match") == quoted_etag:
+        resp = Response(status=304)
+        resp.headers["ETag"] = quoted_etag
+        resp.headers["Cache-Control"] = "public, max-age=3600"
+        return resp
+
+    gzipped, meta_bytes, meta = _points_bulk_build(etag)
+
+    if request.args.get("meta") == "1":
+        resp = Response(meta_bytes, mimetype="application/json")
+        resp.headers["ETag"] = quoted_etag
+        resp.headers["Cache-Control"] = "public, max-age=3600"
+        return resp
+
+    resp = Response(gzipped, mimetype="application/octet-stream")
+    resp.headers["ETag"] = quoted_etag
+    resp.headers["Cache-Control"] = "public, max-age=3600"
+    # We pre-gzipped the buffer ourselves; advertise it so the browser
+    # decompresses on receipt. Flask-Compress leaves octet-stream alone
+    # (see COMPRESS_MIMETYPES) so there's no risk of double-gzipping.
+    resp.headers["Content-Encoding"] = "gzip"
+    resp.headers["Vary"] = "Accept-Encoding"
+    # Advertise the uncompressed size so the client can pre-allocate
+    # the ArrayBuffer without waiting for the meta fetch.
+    resp.headers["X-Uncompressed-Size"] = str(meta["raw_size"])
+    return resp
 
 
 @app.route("/api/timeline")

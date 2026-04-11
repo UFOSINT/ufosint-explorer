@@ -24,6 +24,20 @@
     <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
     <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
 
+    <!-- deck.gl (v0.8.0): GPU-accelerated map layers for the Observatory.
+         Loaded async with onload hooks so the rest of the page renders
+         immediately; the bulk-data loader in deck.js waits for window.deck
+         to be available before mounting. If either script 404s or the
+         browser lacks WebGL, app.js falls back to the legacy Leaflet
+         marker path. See docs/V080_PLAN.md for the architecture. -->
+    <script defer src="https://unpkg.com/deck.gl@9.0.38/dist.min.js"></script>
+    <script defer src="https://unpkg.com/@deck.gl/leaflet@9.0.38/dist.min.js"></script>
+
+    <!-- v0.8.0 bulk-points loader + deck.gl wiring. Must come after
+         the Leaflet scripts so window.L exists, and after the deck.gl
+         defer scripts so waitForDeck() succeeds quickly. -->
+    <script defer src="/static/deck.js?v={{ASSET_VERSION}}"></script>
+
     <!-- Pre-paint theme script (v0.7): reads the persisted theme from
          localStorage and applies `body.theme-signal` or `body.theme-declass`
          BEFORE the stylesheet loads, so there's no flash of the default

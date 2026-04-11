@@ -17,6 +17,87 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 Nothing yet.
 
+## [0.8.0] — 2026-04-10 — Bulk client-side rendering (deck.gl)
+
+The Observatory map has been querying the DB on every pan since v0.6.
+At 614k sightings / 105k geocoded / 25k samples per viewport that's a
+lot of wasted gunicorn cycles, a lot of 3–5 MB JSON payloads, and a
+visibly sluggish pan/zoom. v0.8.0 throws the whole per-pan loop away.
+
+The client now downloads **every geocoded sighting** as a packed
+binary buffer **once** (~700 KB gzipped), deserialises it into typed
+arrays, renders it on the GPU via `deck.gl`, and filters it entirely
+in the browser. Pan, zoom, mode switch, and filter change are all
+zero-network operations after the initial load.
+
+See [`docs/V080_PLAN.md`](docs/V080_PLAN.md) for the full architecture
+rationale and the risk register.
+
+### Added
+
+- **`/api/points-bulk`** — new endpoint that returns every geocoded
+  sighting in a 16-byte packed row layout
+  `(uint32 id, float32 lat, float32 lng, uint8 source_idx,
+  uint8 shape_idx, uint16 year)`. Little-endian so the JS `DataView`
+  reads it directly. The endpoint supports three response shapes:
+  - `?meta=1` → JSON sidecar with lookup tables + schema descriptor
+  - default → `application/octet-stream` pre-gzipped packed rows
+  - `If-None-Match` with matching ETag → `304 Not Modified`
+  The packed buffer is `@functools.lru_cache(maxsize=2)`'d on the
+  ETag so every gunicorn worker holds at most ~4 MB of map data
+  across versions. ETag is derived from the schema version + row
+  count + `MAX(id)`, all O(1) under existing indexes.
+- **`static/deck.js`** — client-side module that fetches the bulk
+  dataset, deserialises it into six typed arrays, exposes a
+  `applyClientFilters(filter)` hot loop (~1 ms for 105k rows), and
+  mounts a `deck.gl` `LeafletLayer` on top of the existing Leaflet
+  map with three built-in modes:
+  - Points → `ScatterplotLayer` (GPU, 60 FPS on 100k points)
+  - Hex → `HexagonLayer` (GPU aggregation in screen-space meters,
+    uniform tessellation regardless of latitude — finally closes the
+    hex-geometry saga from v0.7.5 → v0.7.7 by letting the library do
+    the math correctly in the first place)
+  - Heat → `HeatmapLayer` (GPU density estimation)
+- **deck.gl bundle** loaded from unpkg (`deck.gl@9.0.38` +
+  `@deck.gl/leaflet@9.0.38`) as `<script defer>` tags. Same
+  vendor-CDN pattern the existing Leaflet install uses — no npm, no
+  bundler, no build step.
+- **WebGL capability probe + legacy fallback.** Browsers without
+  WebGL (or where either deck.gl script fails to load) stay on the
+  v0.7 `loadMapMarkers()` / `loadHeatmap()` / `loadHexBins()`
+  path without noticing the difference.
+- **`docs/V080_PLAN.md`** — architecture plan, binary layout, cache
+  strategy, filter pipeline, risk register, and explicit list of
+  what we're *not* doing (no PostGIS migration, no pg_tileserv, no
+  Redis, no App Service upgrade).
+- **22 new tests in `tests/test_v080_bulk.py`** covering the
+  endpoint contract, the binary round-trip, ETag 304 handling, the
+  LRU cache behaviour, and the frontend wire-up (fetch, DataView
+  offsets, deck.gl layer types, client-filter pipeline, WebGL
+  probe, index.html bundle loading).
+
+### Changed
+
+- `initMap()` tries to boot the GPU path before falling back to the
+  legacy Leaflet marker cluster layer. When the GPU path succeeds
+  it clears the legacy layers to avoid double-drawing but leaves
+  their DOM nodes in place as an emergency fallback.
+- `toggleMapMode()` short-circuits to `UFODeck.setDeckMode()` when
+  the GPU path is active — mode switches become a single
+  `setProps({ layers: [...] })` call with no server round-trip.
+- `applyFilters()` now tries `applyClientFilters()` first for the
+  Observatory tab. The typed-array filter walk runs in ~1 ms; only
+  the legacy path falls through to `loadMapMarkers()` etc.
+- `scheduleMapReload()` early-returns when `state.useDeckGL` is
+  true — the deck.gl layer handles pan/zoom natively so we don't
+  need the debounced re-fetch loop.
+
+### Kept for one release cycle
+
+`/api/map`, `/api/heatmap`, and `/api/hexbin` stay in place as the
+legacy fallback for browsers without WebGL. They'll be deleted in
+v0.8.1 once the GPU path is proven in production.
+
 ## [0.7.7] — 2026-04-10 — True honeycomb hex tessellation
 
 v0.7.6 fixed the overlapping / random-sized hex bins by inscribing
