@@ -17,6 +17,7 @@ import time
 import hashlib
 import functools
 import subprocess
+import threading
 from pathlib import Path
 from flask import Flask, request, jsonify, send_from_directory, Response
 from flask_caching import Cache
@@ -1321,8 +1322,50 @@ def _duration_log2(sec) -> int:
     return int(lg)
 
 
-@functools.lru_cache(maxsize=2)
+# v0.8.2-cleanup-3: Per-etag lock so concurrent first-requests
+# coalesce into a single build instead of thundering-herding the DB.
+# Without this, N parallel page loads each fired N parallel
+# `loadBulkPoints()` calls, each spawning a fresh full-table scan
+# because @lru_cache only memoises AFTER a build completes.
+# With the lock, only one thread does the build per etag; the others
+# block on the lock and pick up the lru_cache hit when they wake.
+_points_bulk_locks: dict = {}
+_points_bulk_locks_lock = threading.Lock()
+
+
+def _get_points_bulk_lock(etag: str):
+    """Return a per-etag Lock, creating it on demand. The outer lock
+    serialises the dict insert; once the per-etag lock exists, threads
+    contend on IT, not on the dict."""
+    with _points_bulk_locks_lock:
+        lock = _points_bulk_locks.get(etag)
+        if lock is None:
+            lock = threading.Lock()
+            _points_bulk_locks[etag] = lock
+            # Drop locks for old etags so this dict doesn't grow forever.
+            # We keep at most 4 — one current, one stale during deploys,
+            # and a small safety margin.
+            if len(_points_bulk_locks) > 4:
+                # Drop the oldest entry. dict iteration order = insertion
+                # order in 3.7+, so this is FIFO.
+                oldest = next(iter(_points_bulk_locks))
+                if oldest != etag:
+                    _points_bulk_locks.pop(oldest, None)
+        return lock
+
+
 def _points_bulk_build(etag: str) -> tuple[bytes, bytes, dict]:
+    """Coalesced wrapper around the actual build. Multiple threads
+    asking for the same etag share one build; the second thread
+    through finds the result in @lru_cache without re-running the
+    SELECT scan."""
+    lock = _get_points_bulk_lock(etag)
+    with lock:
+        return _points_bulk_build_cached(etag)
+
+
+@functools.lru_cache(maxsize=2)
+def _points_bulk_build_cached(etag: str) -> tuple[bytes, bytes, dict]:
     """Build the packed binary buffer + metadata for `etag`.
 
     Returns (gzipped_buffer, meta_json_bytes, meta_dict). Cached in
@@ -2511,7 +2554,8 @@ def _prewarm_caches():
     ~30 seconds of background work that turns the cold-user experience
     from "20-50 seconds" into "200ms".
     """
-    import threading
+    # threading is imported at module top in v0.8.2-cleanup-3 for the
+    # bulk-build coalescing lock; reuse it here.
 
     def _warm():
         try:
@@ -2523,6 +2567,17 @@ def _prewarm_caches():
                 "/api/timeline",
                 "/api/sentiment/overview",
                 "/api/duplicates?page=0",
+                # v0.8.2-cleanup-3: pre-warm the bulk binary endpoint
+                # FIRST. This is the v0.8.0+ critical-path call —
+                # every Observatory visit fetches it on boot, and a
+                # cold call takes ~20 s on B1ms because the SELECT
+                # scans 396k rows and the Python pack loop is dense.
+                # Once warmed, the @lru_cache holds the gzipped buffer
+                # in memory and subsequent requests serve it in <3 s.
+                # Pre-warming both `?meta=1` and the bare path so the
+                # browser's parallel fetch pair both hit warm cache.
+                "/api/points-bulk?meta=1",
+                "/api/points-bulk",
                 # Whole-world map view (the landing-page default)
                 "/api/map?south=-90&north=90&west=-180&east=180&zoom=2",
                 # A continental and a city viewport so both sample modes warm

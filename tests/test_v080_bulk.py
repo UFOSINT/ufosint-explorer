@@ -74,15 +74,21 @@ def test_points_bulk_etag_function_exists():
 
 def test_points_bulk_build_is_lru_cached():
     src = _read(APP_PY)
-    # Locate the build function and check it has an @functools.lru_cache
-    # decorator just above it.
-    idx = src.find("def _points_bulk_build")
+    # v0.8.2-cleanup-3: the build function was split into a coalescing
+    # wrapper (_points_bulk_build) and the @lru_cache'd implementation
+    # (_points_bulk_build_cached). The wrapper takes a per-etag lock so
+    # concurrent first-requests share one build instead of stampeding
+    # the DB. Either name is acceptable as long as something is
+    # @functools.lru_cache'd on the etag.
+    idx = src.find("def _points_bulk_build_cached")
+    if idx == -1:
+        idx = src.find("def _points_bulk_build")
     assert idx != -1, "build function missing"
-    # Look backwards ~200 chars for the decorator
-    preceding = src[max(0, idx - 200):idx]
+    # Look backwards ~400 chars for the decorator
+    preceding = src[max(0, idx - 400):idx]
     assert "@functools.lru_cache" in preceding, (
-        "_points_bulk_build must be @lru_cache'd on the etag so every "
-        "request after the first is a zero-work cache hit"
+        "_points_bulk_build_cached must be @lru_cache'd on the etag so "
+        "every request after the first is a zero-work cache hit"
     )
 
 
@@ -204,7 +210,12 @@ def _install_fake(monkeypatch, sightings):
     _app.cache.clear()
     # Bust the lru_cache on the build function, otherwise a previous
     # test's sightings might still be cached under a colliding etag.
-    _app._points_bulk_build.cache_clear()
+    # v0.8.2-cleanup-3: the cached function is now
+    # _points_bulk_build_cached (the wrapper _points_bulk_build adds
+    # per-etag locking). Tests need to clear the cached impl, not the
+    # wrapper. Both names exist for back-compat with the prior contract.
+    cache_clear = getattr(_app, "_points_bulk_build_cached", _app._points_bulk_build).cache_clear
+    cache_clear()
     conn = _FakeBulkConn(sightings)
     monkeypatch.setattr(_app, "get_db", lambda: conn)
     return conn, _app
