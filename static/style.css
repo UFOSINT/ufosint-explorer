@@ -284,6 +284,24 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
     color: var(--accent);            /* brand exception — H1 stays accent */
 }
 
+/* v0.8.5 — site-title anchor inside the h1. Strips the browser
+   default underline + blue and reuses the h1 typography, then adds
+   a subtle hover/focus affordance so users realise it's clickable. */
+.site-title-link {
+    color: inherit;
+    text-decoration: none;
+    cursor: pointer;
+    transition: text-shadow var(--t-fast), opacity var(--t-fast);
+}
+.site-title-link:hover {
+    text-shadow: 0 0 12px var(--term-glow, rgba(0, 240, 255, 0.45));
+}
+.site-title-link:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 4px;
+    border-radius: 2px;
+}
+
 .stats-badge {
     font-size: var(--fs-12);
     color: var(--text-muted);

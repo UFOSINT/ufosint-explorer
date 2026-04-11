@@ -117,6 +117,20 @@ document.addEventListener("DOMContentLoaded", async () => {
         btn.addEventListener("click", () => switchTab(btn.dataset.tab));
     });
 
+    // v0.8.5 — site title acts as a "home" link back to the
+    // Observatory landing tab. The `href="#/observatory"` on the
+    // anchor triggers the hashchange listener automatically, but we
+    // also intercept the click so switchTab runs even when the hash
+    // is already `#/observatory` (otherwise clicking from the
+    // Observatory tab would be a no-op and feel broken).
+    const siteTitle = document.getElementById("site-title");
+    if (siteTitle) {
+        siteTitle.addEventListener("click", (e) => {
+            e.preventDefault();
+            switchTab("observatory");
+        });
+    }
+
     // Filter buttons
     document.getElementById("btn-apply-filters").addEventListener("click", applyFilters);
     document.getElementById("btn-clear-filters").addEventListener("click", clearFilters);
@@ -626,22 +640,55 @@ function showStats(data) {
     const geoGN = (data.geocoded_geonames || 0).toLocaleString();
     const dupes = data.duplicate_candidates.toLocaleString();
 
-    // Compact badge — three numbers separated by middle dots, no
-    // parenthetical, no implementation jargon. The full breakdown
-    // (original vs GeoNames, source counts, date range) lives in the
-    // popover that opens on click.
-    badge.innerHTML = `${total} sightings <span class="stats-sep">·</span> ${geo} mapped <span class="stats-sep">·</span> ${dupes} possible duplicates`;
+    // v0.8.5 — new derived counts from the v0.8.3b data layer.
+    // The server returns null on pre-v0.8.2/v0.8.3 schemas; we hide
+    // the corresponding row in both the badge and the popover so
+    // the UI never shows "undefined sightings".
+    const highQ = data.high_quality;
+    const withMovement = data.with_movement;
+    const highQStr = (typeof highQ === "number") ? highQ.toLocaleString() : null;
+    const withMovStr = (typeof withMovement === "number") ? withMovement.toLocaleString() : null;
+
+    // Compact badge — up to five chips separated by middle dots. The
+    // first three (total, mapped, duplicates) always render; the new
+    // "high quality" and "with movement" chips only render once the
+    // v0.8.2/v0.8.3b derived columns are populated. Everything over
+    // ~900px shows all visible chips inline; on narrower viewports
+    // the CSS truncates.
+    const chips = [
+        `${total} sightings`,
+        `${geo} mapped`,
+    ];
+    if (highQStr) chips.push(`${highQStr} high quality`);
+    if (withMovStr) chips.push(`${withMovStr} with movement`);
+    chips.push(`${dupes} possible duplicates`);
+    const sep = ` <span class="stats-sep">·</span> `;
+    badge.innerHTML = chips.join(sep);
 
     if (popover) {
         const sources = (data.by_source || []).map(s =>
             `<tr><td>${escapeHtml(s.name)}</td><td>${s.count.toLocaleString()}</td></tr>`
         ).join("");
+        // v0.8.5 — insert the two new rows between geocoded and
+        // duplicates so the detail popover mirrors the badge order.
+        const derivedRows = [];
+        if (highQStr) {
+            derivedRows.push(
+                `<div class="stats-popover-row"><span>High quality (score ≥ 60)</span><strong>${highQStr}</strong></div>`
+            );
+        }
+        if (withMovStr) {
+            derivedRows.push(
+                `<div class="stats-popover-row"><span>With movement described</span><strong>${withMovStr}</strong></div>`
+            );
+        }
         popover.innerHTML = `
             <div class="stats-popover-section">
                 <div class="stats-popover-row"><span>Total sightings</span><strong>${total}</strong></div>
                 <div class="stats-popover-row"><span>Geocoded locations</span><strong>${geo}</strong></div>
                 <div class="stats-popover-row stats-popover-sub"><span>· from source data</span>${geoOrig}</div>
                 <div class="stats-popover-row stats-popover-sub"><span>· from GeoNames lookup</span>${geoGN}</div>
+                ${derivedRows.join("")}
                 <div class="stats-popover-row"><span>Duplicate candidate pairs</span><strong>${dupes}</strong></div>
             </div>
             ${sources ? `<div class="stats-popover-section">

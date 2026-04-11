@@ -364,12 +364,26 @@ def test_both_theme_css_blocks_present():
 
 def test_h1_is_ufosint_explorer():
     """v0.7.1: the header H1 became 'UFOSINT Explorer' (matches the
-    domain and the repo name). Previously it was just 'UFO Explorer'."""
+    domain and the repo name). Previously it was just 'UFO Explorer'.
+
+    v0.8.5: the h1 text is now wrapped in an anchor that routes back
+    to the Observatory — `<h1><a id="site-title" ...>UFOSINT Explorer
+    </a></h1>`. The regex here allows any element nesting inside the
+    h1 as long as the literal heading text is present and nothing
+    reverted it to 'UFO Explorer'.
+    """
     content = _read(INDEX_HTML)
-    assert "<h1>UFOSINT Explorer</h1>" in content, (
+    import re
+    # h1 may contain an anchor wrap; match any whitespace/tags between
+    # <h1> and the text.
+    assert re.search(r"<h1>(?:\s|<[^>]*>)*UFOSINT Explorer", content), (
         "Header H1 is no longer 'UFOSINT Explorer' — the rename was reverted"
     )
-    assert "<h1>UFO Explorer</h1>" not in content
+    assert "UFO Explorer</h1>" not in content  # old short name
+    # v0.8.5 — also assert the anchor exists so the "click to go home"
+    # affordance can't silently regress.
+    assert 'id="site-title"' in content
+    assert 'href="#/observatory"' in content
 
 
 def test_timeline_tab_is_restored_and_visible():

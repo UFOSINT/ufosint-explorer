@@ -273,6 +273,10 @@ def test_api_stats_mv_happy_path(client, monkeypatch):
 
     # Bust the response cache by using a unique query string per test,
     # since Flask-Caching keys include the query string.
+    #
+    # v0.8.5: _api_stats_from_mv() also calls _api_stats_derived_counts()
+    # which runs two extra SELECTs for quality_score + has_movement.
+    # The fake cursor needs scripted responses for those too.
     responses = [
         # mv_stats_summary single row
         [(614505, "0034-04-01", "2026-02-20", 105836, 61893, 43976, 126730)],
@@ -283,6 +287,9 @@ def test_api_stats_mv_happy_path(client, monkeypatch):
         ],
         # mv_stats_by_collection rows
         [("PUBLIUS", 362646), ("UFOCAT", 197108)],
+        # v0.8.5: derived counts
+        [(118320,)],   # high_quality
+        [(249217,)],   # with_movement
     ]
     conn = _FakeConn(responses)
     monkeypatch.setattr(_app, "get_db", lambda: conn)
@@ -294,6 +301,9 @@ def test_api_stats_mv_happy_path(client, monkeypatch):
     assert data["duplicate_candidates"] == 126730
     assert data["by_source"][0] == {"name": "UFOCAT", "count": 197108, "collection": "UFOCAT"}
     assert data["by_collection"][0] == {"name": "PUBLIUS", "count": 362646}
+    # v0.8.5: derived fields present in response
+    assert data["high_quality"] == 118320
+    assert data["with_movement"] == 249217
 
     # All three MV reads happened, in order
     sqls = [e[0] for e in conn._cursor.executed]
@@ -328,6 +338,9 @@ def test_api_stats_falls_back_when_mv_missing(client, monkeypatch):
     #   COUNT geocoded_original
     #   COUNT geocoded_geonames
     #   COUNT duplicate_candidate
+    # v0.8.5: then _api_stats_derived_counts() runs 2 more:
+    #   COUNT WHERE quality_score >= 60
+    #   COUNT WHERE has_movement_mentioned = 1
     responses = [
         FakeUT(),                                             # MV miss
         [(614505,)],                                          # total
@@ -338,6 +351,8 @@ def test_api_stats_falls_back_when_mv_missing(client, monkeypatch):
         [(61893,)],                                           # geocoded_original
         [(43976,)],                                           # geocoded_geonames
         [(126730,)],                                          # dupes
+        [(118320,)],                                          # v0.8.5 high_quality
+        [(249217,)],                                          # v0.8.5 with_movement
     ]
     conn = _FakeConn(responses)
     monkeypatch.setattr(_app, "get_db", lambda: conn)

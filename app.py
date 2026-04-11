@@ -480,6 +480,44 @@ def health():
         return jsonify({"status": "waiting", "detail": str(e)})
 
 
+def _api_stats_derived_counts(conn):
+    """v0.8.5 — Return (high_quality, with_movement) counts for the
+    stats badge, gracefully degrading on pre-v0.8.2/v0.8.3 schemas.
+
+    Both queries hit btree indexes added by add_v082_derived_columns.sql
+    and add_v083_derived_columns.sql, so they're sub-millisecond once
+    warm and only a few ms cold.
+
+    Returns (None, None) for either count when the column doesn't
+    exist yet — the UI interprets None as "don't show this field".
+    """
+    cur = conn.cursor()
+    high_quality = None
+    with_movement = None
+
+    try:
+        cur.execute(
+            "SELECT COUNT(*)::bigint FROM sighting WHERE quality_score >= 60"
+        )
+        high_quality = cur.fetchone()[0]
+    except psycopg.errors.UndefinedColumn:
+        # Pre-v0.8.2 schema — column doesn't exist yet. Rollback the
+        # failed transaction and continue with a fresh cursor so the
+        # next query doesn't error on the aborted-transaction state.
+        conn.rollback()
+        cur = conn.cursor()
+
+    try:
+        cur.execute(
+            "SELECT COUNT(*)::bigint FROM sighting WHERE has_movement_mentioned = 1"
+        )
+        with_movement = cur.fetchone()[0]
+    except psycopg.errors.UndefinedColumn:
+        conn.rollback()
+
+    return high_quality, with_movement
+
+
 def _api_stats_from_mv(conn):
     """Read /api/stats payload from the v0.7.5 materialized views.
 
@@ -513,6 +551,11 @@ def _api_stats_from_mv(conn):
     """)
     by_collection = [{"name": r[0], "count": r[1]} for r in cur.fetchall()]
 
+    # v0.8.5 — derived counts live outside the v0.7.5 MV (which predates
+    # the quality_score/has_movement columns). Query them inline; each
+    # is a single-index btree scan on a populated column.
+    high_quality, with_movement = _api_stats_derived_counts(conn)
+
     return {
         "total_sightings": total,
         "by_source": by_source,
@@ -522,6 +565,10 @@ def _api_stats_from_mv(conn):
         "geocoded_original": geocoded_original,
         "geocoded_geonames": geocoded_geonames,
         "duplicate_candidates": dupes,
+        # v0.8.5 — None when the column isn't populated yet; the
+        # client hides the corresponding badge row.
+        "high_quality": high_quality,
+        "with_movement": with_movement,
     }
 
 
@@ -582,6 +629,10 @@ def _api_stats_from_live(conn):
     cur.execute("SELECT COUNT(*) FROM duplicate_candidate")
     dupes = cur.fetchone()[0]
 
+    # v0.8.5 — derived counts with graceful fallback for pre-v0.8.x
+    # schemas (fresh clones, local dev with an old DB dump, etc.)
+    high_quality, with_movement = _api_stats_derived_counts(conn)
+
     return {
         "total_sightings": total,
         "by_source": by_source,
@@ -591,6 +642,8 @@ def _api_stats_from_live(conn):
         "geocoded_original": geocoded_original,
         "geocoded_geonames": geocoded_geonames,
         "duplicate_candidates": dupes,
+        "high_quality": high_quality,
+        "with_movement": with_movement,
     }
 
 

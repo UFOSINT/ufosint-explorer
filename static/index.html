@@ -75,7 +75,11 @@
     <!-- Header -->
     <header id="header">
         <div class="header-left">
-            <h1>UFOSINT Explorer</h1>
+            <!-- v0.8.5 — the site title is now a link back to the
+                 Observatory (landing tab). Click from anywhere to
+                 return home. Keeps the h1 for SEO/accessibility; the
+                 anchor inside inherits the heading semantics. -->
+            <h1><a id="site-title" href="#/observatory" class="site-title-link">UFOSINT Explorer</a></h1>
             <div class="stats-badge-wrap">
                 <button id="stats-badge" class="stats-badge" type="button" aria-haspopup="dialog" aria-expanded="false" title="Click for detailed counts"><span class="stats-badge-boot"><span class="term-prompt">&gt;</span> <span class="stats-boot-msg">BOOT SEQUENCE INITIATED</span><span class="term-cursor" aria-hidden="true"></span></span></button>
                 <div id="stats-popover" class="stats-popover" role="dialog" aria-label="Database statistics" hidden></div>
