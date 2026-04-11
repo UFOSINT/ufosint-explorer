@@ -3277,6 +3277,40 @@ select:focus {
     border-style: dashed;
     background: rgba(0, 240, 255, 0.08);
 }
+
+/* v0.8.2-cleanup-2 — PLAY speed selector. Sits between the mode
+   toggle and the time-window readout. Same visual language as the
+   sibling buttons but smaller because it's a select, not a CTA. */
+.brush-speed-label {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 0.15em;
+    color: var(--text-muted);
+    margin-left: var(--s-2);
+}
+.brush-speed-select {
+    background: transparent;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.05em;
+    padding: 4px 6px;
+    cursor: pointer;
+    border-radius: var(--r-sm);
+    margin-left: 4px;
+    transition: background var(--t-fast), color var(--t-fast);
+}
+.brush-speed-select:hover,
+.brush-speed-select:focus {
+    background: var(--accent);
+    color: var(--bg);
+    outline: none;
+}
+.brush-speed-select option {
+    background: var(--bg-panel);
+    color: var(--text);
+}
 .brush-wrap {
     position: relative;
     flex: 1;

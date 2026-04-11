@@ -263,6 +263,20 @@
                          Sliding: the window slides forward at a fixed width.
                          Cumulative: left edge is pinned; only the right edge advances. -->
                     <button id="brush-mode" class="brush-mode-btn" type="button" data-mode="sliding" aria-pressed="false" title="Toggle playback mode: sliding window vs cumulative fill">SLIDING</button>
+                    <!-- v0.8.2-cleanup-2: Playback speed multiplier. The
+                         TimeBrush already accepts a `playSpeed` property
+                         (added in v0.8.1 as a stub); this dropdown wires
+                         it to a UI control. Default 1× = ~4 s sweep
+                         across the full 1900-2026 range. -->
+                    <label class="brush-speed-label" for="brush-speed" title="Playback speed">SPEED</label>
+                    <select id="brush-speed" class="brush-speed-select" aria-label="Playback speed">
+                        <option value="0.25">0.25×</option>
+                        <option value="0.5">0.5×</option>
+                        <option value="1" selected>1×</option>
+                        <option value="2">2×</option>
+                        <option value="4">4×</option>
+                        <option value="8">8×</option>
+                    </select>
                     <div class="brush-readout">
                         TIME WINDOW · <strong id="brush-range-label">1947 — 2026</strong>
                         · <span id="brush-window-count">—</span> in range

@@ -123,7 +123,15 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     // Coords source filter (auto-refresh map on change)
     document.getElementById("coords-filter").addEventListener("change", () => {
-        if (state.activeTab === "map") {
+        if (state.activeTab === "map" || state.activeTab === "observatory") {
+            // v0.8.2-cleanup-2: Route through the GPU filter pipeline
+            // when deck.gl is active. The legacy loadMapMarkers /
+            // loadHeatmap path would silently re-attach the legacy
+            // markerCluster layer over the deck.gl ScatterplotLayer.
+            if (state.useDeckGL || state.deckBoot === "pending") {
+                if (typeof applyClientFilters === "function") applyClientFilters();
+                return;
+            }
             if (state.mapMode === "heatmap") loadHeatmap();
             else loadMapMarkers();
         }
@@ -772,8 +780,17 @@ async function applyFilters() {
             // layer is ready, applyClientFilters() walks the typed
             // arrays in ~1 ms and we're done. Falls through to the
             // legacy server fetch on ancient browsers.
+            //
+            // v0.8.2-cleanup-2: ALSO suppress the fallback during the
+            // deck.gl boot window. Without this guard, an early
+            // applyFilters() (e.g. from clearFilters() at boot, or
+            // from a hash-driven filter restore) would fire the
+            // legacy markerCluster path, which then renders its
+            // numbered bubbles on top of the deck.gl layer once
+            // bootDeckGL() finishes.
             const gpu = applyClientFilters();
-            if (!gpu) {
+            const deckPending = (state.deckBoot === "pending");
+            if (!gpu && !deckPending) {
                 if (state.mapMode === "heatmap") await loadHeatmap();
                 else if (state.mapMode === "hexbin") await loadHexBins();
                 else await loadMapMarkers();
@@ -1080,12 +1097,33 @@ async function bootDeckGL() {
     // is GPU-rendered with no network activity until the user clicks.
     UFODeck.mountDeckLayer(state.map, state.mapMode || "points");
 
-    // Hide the legacy layers so we don't double-draw. We KEEP them on
-    // the map instance so a browser that runs out of WebGL context
-    // mid-session can reinstate them — but clear their data.
-    if (state.markerLayer) state.markerLayer.clearLayers();
-    if (state.heatLayer && state.heatLayer.setLatLngs) state.heatLayer.setLatLngs([]);
-    if (state.hexLayer) state.hexLayer.clearLayers();
+    // v0.8.2-cleanup-2: REMOVE the legacy layers from the map instance
+    // (not just clear their data). v0.8.0 only called clearLayers()
+    // here, so the legacy markerLayer was still attached to the map —
+    // anything that later re-fired loadMapMarkers() (loadObservatory()
+    // on tab switch, the coords-filter change handler, certain
+    // toggleMapMode() paths) would silently re-populate the legacy
+    // layer and the numbered cluster bubbles would appear OVER the
+    // deck.gl ScatterplotLayer dots. Removing the layer entirely
+    // means nothing can render on top of deck.gl.
+    if (state.markerLayer) {
+        state.markerLayer.clearLayers();
+        if (state.map.hasLayer(state.markerLayer)) {
+            state.map.removeLayer(state.markerLayer);
+        }
+    }
+    if (state.heatLayer) {
+        if (state.heatLayer.setLatLngs) state.heatLayer.setLatLngs([]);
+        if (state.map.hasLayer(state.heatLayer)) {
+            state.map.removeLayer(state.heatLayer);
+        }
+    }
+    if (state.hexLayer) {
+        state.hexLayer.clearLayers();
+        if (state.map.hasLayer(state.hexLayer)) {
+            state.map.removeLayer(state.hexLayer);
+        }
+    }
 
     state.useDeckGL = true;
 
@@ -1391,6 +1429,12 @@ function toggleMapMode(mode) {
         return;
     }
 
+    // v0.8.2-cleanup-2: Bail on the legacy add-and-fetch sequence
+    // entirely if deck.gl is in the boot window. The user will see
+    // the cyan dots in a moment; we don't need to flash the legacy
+    // marker cluster bubbles in the meantime.
+    if (state.deckBoot === "pending") return;
+
     // Legacy fallback — remove whichever Leaflet layer was active, add
     // the new one, kick off the matching server query.
     if (prev === "heatmap")  state.map.removeLayer(state.heatLayer);
@@ -1493,10 +1537,24 @@ function loadObservatory() {
         }
     }
 
-    // Trigger the right data load based on current mode.
-    if (state.mapMode === "heatmap") loadHeatmap();
-    else if (state.mapMode === "hexbin") loadHexBins();
-    else loadMapMarkers();
+    // v0.8.2-cleanup-2: Only fire the legacy server-fetch path when
+    // deck.gl is NOT handling rendering. With the GPU path active
+    // (or in the middle of booting), the deck.gl ScatterplotLayer
+    // already shows everything from the in-memory bulk dataset and
+    // the legacy markerCluster layer would just stack numbered
+    // bubbles on top — exactly the bug the user caught after
+    // v0.8.2 shipped.
+    if (state.useDeckGL || state.deckBoot === "pending") {
+        // GPU path is in charge. Just make sure the current filter
+        // state is reflected in the visible index — applyClientFilters
+        // is a no-op when bulk data hasn't loaded yet, so this is safe
+        // to call regardless of boot stage.
+        if (typeof applyClientFilters === "function") applyClientFilters();
+    } else {
+        if (state.mapMode === "heatmap") loadHeatmap();
+        else if (state.mapMode === "hexbin") loadHexBins();
+        else loadMapMarkers();
+    }
 }
 
 function wireObservatoryModeToggle() {
@@ -1517,6 +1575,23 @@ function wireObservatoryModeToggle() {
             const next = state.timeBrush.playMode === "sliding"
                 ? "cumulative" : "sliding";
             state.timeBrush.setPlayMode(next);
+        });
+    }
+
+    // v0.8.2-cleanup-2 — Playback speed selector. The TimeBrush
+    // multiplies its per-frame stepSize by playSpeed inside togglePlay,
+    // so changing this number live takes effect on the very next
+    // playback (and during an in-progress playback if applied while
+    // playing — though changing speed mid-play is jittery, so we
+    // recommend pausing first).
+    const speedSel = document.getElementById("brush-speed");
+    if (speedSel) {
+        speedSel.addEventListener("change", (e) => {
+            if (!state.timeBrush) return;
+            const v = parseFloat(e.target.value);
+            if (Number.isFinite(v) && v > 0) {
+                state.timeBrush.playSpeed = v;
+            }
         });
     }
 }
@@ -2234,14 +2309,24 @@ class TimeBrush {
             this._syncWindow();
         }
 
-        // v0.8.1 — step size scales with playSpeed. Default 0.4% of
-        // span per frame ≈ 8 months at the default 1900-2026 range.
-        const stepSize = span * 0.004 * (this.playSpeed || 1.0);
+        // v0.8.1 — base step size = 0.4% of total span per frame ≈
+        // 8 months at the default 1900-2026 range. Multiplied per
+        // frame by this.playSpeed, which the v0.8.2-cleanup-2 speed
+        // dropdown updates live so the user can speed up or slow
+        // down playback mid-sweep without restarting. The arrow
+        // function below preserves `this` lexically, so re-reading
+        // this.playSpeed every frame "just works" — no captured
+        // snapshot needed.
+        const baseStep = span * 0.004;
         const fastPath = this.deckFastPath;  // snapshot for the hot loop
         const legacyOnChange = this.onChange;
 
         const step = () => {
             if (!this.playing) return;
+
+            // Re-read playSpeed every frame so the speed dropdown
+            // takes effect immediately.
+            const stepSize = baseStep * (this.playSpeed || 1.0);
 
             if (isCumulative) {
                 // Advance only the right edge. Wrap back to the
