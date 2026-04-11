@@ -457,6 +457,83 @@ def test_common_filter_keys_trimmed_to_six():
     )
 
 
+def test_stats_has_mapped_sightings_helper():
+    """v0.8.7.2 — the stats badge was labelling `geocoded_locations`
+    (distinct-place count from mv_stats_summary) as "mapped", which
+    dramatically understated the true mapped count (~106k places vs
+    ~396k sightings). The fix adds `_api_stats_mapped_count(conn)`
+    that counts via `sighting JOIN location` and is wired into both
+    the MV happy path and the live fallback so the response carries
+    a `mapped_sightings` field alongside the legacy
+    `geocoded_locations`.
+    """
+    src = _read(APP_PY)
+    assert "def _api_stats_mapped_count(" in src, (
+        "_api_stats_mapped_count helper missing — v0.8.7.2 needs "
+        "sighting-level mapped count via JOIN"
+    )
+    # Extract the helper body and verify it actually uses the JOIN
+    # (not another COUNT on location).
+    m = re.search(
+        r"def _api_stats_mapped_count\(.*?\n(?=\n\S)",
+        src,
+        re.DOTALL,
+    )
+    assert m, "couldn't locate _api_stats_mapped_count body"
+    body = m.group(0)
+    assert "JOIN location" in body, (
+        "_api_stats_mapped_count must JOIN location — otherwise it's "
+        "just re-computing the wrong distinct-place count"
+    )
+    assert "sighting s" in body or "FROM sighting" in body, (
+        "_api_stats_mapped_count must count FROM sighting so the "
+        "result is per-sighting, not per-location"
+    )
+
+
+def test_stats_response_includes_mapped_sightings():
+    """Both the MV happy path and the live fallback must add
+    `mapped_sightings` to the response dict."""
+    src = _read(APP_PY)
+    # Both return statements live inside _api_stats_from_mv and
+    # _api_stats_from_live. Each must carry the new field.
+    mv_body = re.search(
+        r"def _api_stats_from_mv\(.*?\n(?=\n\S)",
+        src,
+        re.DOTALL,
+    )
+    assert mv_body
+    assert "mapped_sightings" in mv_body.group(0)
+
+    live_body = re.search(
+        r"def _api_stats_from_live\(.*?\n(?=\n\S)",
+        src,
+        re.DOTALL,
+    )
+    assert live_body
+    assert "mapped_sightings" in live_body.group(0)
+
+
+def test_show_stats_renders_mapped_sightings():
+    """The frontend badge should prefer data.mapped_sightings and
+    fall back to data.geocoded_locations. Direct reference to the
+    old field alone without the fallback is a regression."""
+    src = _read(APP_JS)
+    body = _extract_js_function(src, "showStats")
+    assert body, "couldn't locate showStats body"
+    assert "mapped_sightings" in body, (
+        "showStats must read data.mapped_sightings (the sighting-"
+        "level count) instead of data.geocoded_locations which is "
+        "the distinct-place count"
+    )
+    # The chip label should now read "mapped" sourced from the new
+    # field, not the old one.
+    assert "${mapped} mapped" in body, (
+        "badge chip should render `${mapped} mapped` where `mapped` "
+        "resolves from mapped_sightings"
+    )
+
+
 def test_app_js_has_no_orphaned_dead_id_references():
     """Guard against the v0.8.7.1 hotfix bug.
 

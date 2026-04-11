@@ -276,7 +276,8 @@ def test_api_stats_mv_happy_path(client, monkeypatch):
     #
     # v0.8.5: _api_stats_from_mv() also calls _api_stats_derived_counts()
     # which runs two extra SELECTs for quality_score + has_movement.
-    # The fake cursor needs scripted responses for those too.
+    # v0.8.7.2: AND _api_stats_mapped_count() runs one more JOIN query
+    # for the sighting-level mapped count.
     responses = [
         # mv_stats_summary single row
         [(614505, "0034-04-01", "2026-02-20", 105836, 61893, 43976, 126730)],
@@ -290,6 +291,8 @@ def test_api_stats_mv_happy_path(client, monkeypatch):
         # v0.8.5: derived counts
         [(118320,)],   # high_quality
         [(249217,)],   # with_movement
+        # v0.8.7.2: sighting-level mapped count
+        [(396165,)],
     ]
     conn = _FakeConn(responses)
     monkeypatch.setattr(_app, "get_db", lambda: conn)
@@ -304,6 +307,10 @@ def test_api_stats_mv_happy_path(client, monkeypatch):
     # v0.8.5: derived fields present in response
     assert data["high_quality"] == 118320
     assert data["with_movement"] == 249217
+    # v0.8.7.2: sighting-level mapped count is present alongside the
+    # legacy distinct-place count.
+    assert data["mapped_sightings"] == 396165
+    assert data["geocoded_locations"] == 105836
 
     # All three MV reads happened, in order
     sqls = [e[0] for e in conn._cursor.executed]
@@ -341,6 +348,8 @@ def test_api_stats_falls_back_when_mv_missing(client, monkeypatch):
     # v0.8.5: then _api_stats_derived_counts() runs 2 more:
     #   COUNT WHERE quality_score >= 60
     #   COUNT WHERE has_movement_mentioned = 1
+    # v0.8.7.2: then _api_stats_mapped_count() runs 1 more:
+    #   COUNT sighting JOIN location (sighting-level mapped count)
     responses = [
         FakeUT(),                                             # MV miss
         [(614505,)],                                          # total
@@ -353,6 +362,7 @@ def test_api_stats_falls_back_when_mv_missing(client, monkeypatch):
         [(126730,)],                                          # dupes
         [(118320,)],                                          # v0.8.5 high_quality
         [(249217,)],                                          # v0.8.5 with_movement
+        [(396165,)],                                          # v0.8.7.2 mapped_sightings
     ]
     conn = _FakeConn(responses)
     monkeypatch.setattr(_app, "get_db", lambda: conn)

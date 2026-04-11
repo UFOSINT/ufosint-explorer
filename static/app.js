@@ -632,6 +632,19 @@ function showStats(data) {
     const badge = document.getElementById("stats-badge");
     const popover = document.getElementById("stats-popover");
     const total = data.total_sightings.toLocaleString();
+    // v0.8.7.2 — prefer mapped_sightings (the sighting-level count
+    // via `sighting JOIN location`) so the badge shows how many
+    // markers are actually on the map. Fall back to
+    // geocoded_locations (the distinct-place count) when talking to
+    // a pre-v0.8.7.2 server — which is what the frontend ran against
+    // for months without anyone noticing the number was ~4x too low.
+    // The popover still shows the geocoded_locations number in the
+    // detail section because "distinct places" is a legitimate stat,
+    // just differently named.
+    const mappedCount = (typeof data.mapped_sightings === "number")
+        ? data.mapped_sightings
+        : data.geocoded_locations;
+    const mapped = mappedCount.toLocaleString();
     const geo = data.geocoded_locations.toLocaleString();
     const geoOrig = (data.geocoded_original || 0).toLocaleString();
     const geoGN = (data.geocoded_geonames || 0).toLocaleString();
@@ -662,7 +675,7 @@ function showStats(data) {
     // the CSS truncates.
     const chips = [
         `${total} sightings`,
-        `${geo} mapped`,
+        `${mapped} mapped`,
     ];
     if (highQStr) chips.push(`${highQStr} high quality`);
     if (withMovStr) chips.push(`${withMovStr} with movement`);
@@ -690,7 +703,8 @@ function showStats(data) {
         popover.innerHTML = `
             <div class="stats-popover-section">
                 <div class="stats-popover-row"><span>Total sightings</span><strong>${total}</strong></div>
-                <div class="stats-popover-row"><span>Geocoded locations</span><strong>${geo}</strong></div>
+                <div class="stats-popover-row"><span>Sightings on map</span><strong>${mapped}</strong></div>
+                <div class="stats-popover-row"><span>Distinct geocoded places</span><strong>${geo}</strong></div>
                 <div class="stats-popover-row stats-popover-sub"><span>· from source data</span>${geoOrig}</div>
                 <div class="stats-popover-row stats-popover-sub"><span>· from GeoNames lookup</span>${geoGN}</div>
                 ${derivedRows.join("")}

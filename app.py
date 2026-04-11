@@ -441,6 +441,46 @@ def health():
         return jsonify({"status": "waiting", "detail": str(e)})
 
 
+def _api_stats_mapped_count(conn):
+    """v0.8.7.2 — Return the count of SIGHTINGS that have a mappable
+    coordinate.
+
+    The existing `geocoded_locations` field (both in the MV and the
+    live query) counts rows in the `location` table where lat/lng are
+    non-null. That's the number of DISTINCT PLACES, not sightings.
+    Because many sightings share a single location row (Phoenix, AZ
+    is one row but has hundreds of sightings pointing at it), the
+    place count dramatically understates the true number of mapped
+    sightings — ~106k places vs ~396k sightings.
+
+    The stats badge needs the sighting-level count so "X mapped of Y
+    total" matches what the user sees on the map. This helper runs
+    the canonical JOIN query and returns that number.
+
+    Uses the idx_location_coords btree index (added v0.8.2) for the
+    lat/lng predicate, and the location_id FK index on sighting for
+    the JOIN, so it's ~10-20ms warm.
+    """
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT COUNT(*)::bigint
+              FROM sighting s
+              JOIN location l ON l.id = s.location_id
+             WHERE l.latitude IS NOT NULL
+               AND l.longitude IS NOT NULL
+               AND l.latitude BETWEEN -90 AND 90
+               AND l.longitude BETWEEN -180 AND 180
+            """
+        )
+        row = cur.fetchone()
+        return int(row[0]) if row else 0
+    except psycopg.Error:
+        conn.rollback()
+        return 0
+
+
 def _api_stats_derived_counts(conn):
     """v0.8.5 — Return (high_quality, with_movement) counts for the
     stats badge, gracefully degrading on pre-v0.8.2/v0.8.3 schemas.
@@ -517,6 +557,13 @@ def _api_stats_from_mv(conn):
     # is a single-index btree scan on a populated column.
     high_quality, with_movement = _api_stats_derived_counts(conn)
 
+    # v0.8.7.2 — mapped_sightings is the sighting-level count (what
+    # the user actually sees on the map). geocoded_locations above is
+    # the distinct-place count from mv_stats_summary; kept for
+    # backward compat with any MCP client reading it, but the UI now
+    # renders mapped_sightings instead.
+    mapped_sightings = _api_stats_mapped_count(conn)
+
     return {
         "total_sightings": total,
         "by_source": by_source,
@@ -525,6 +572,7 @@ def _api_stats_from_mv(conn):
         "geocoded_locations": geocoded,
         "geocoded_original": geocoded_original,
         "geocoded_geonames": geocoded_geonames,
+        "mapped_sightings": mapped_sightings,  # v0.8.7.2
         "duplicate_candidates": dupes,
         # v0.8.5 — None when the column isn't populated yet; the
         # client hides the corresponding badge row.
@@ -594,6 +642,9 @@ def _api_stats_from_live(conn):
     # schemas (fresh clones, local dev with an old DB dump, etc.)
     high_quality, with_movement = _api_stats_derived_counts(conn)
 
+    # v0.8.7.2 — sighting-level mapped count (see helper docstring).
+    mapped_sightings = _api_stats_mapped_count(conn)
+
     return {
         "total_sightings": total,
         "by_source": by_source,
@@ -602,6 +653,7 @@ def _api_stats_from_live(conn):
         "geocoded_locations": geocoded,
         "geocoded_original": geocoded_original,
         "geocoded_geonames": geocoded_geonames,
+        "mapped_sightings": mapped_sightings,  # v0.8.7.2
         "duplicate_candidates": dupes,
         "high_quality": high_quality,
         "with_movement": with_movement,
