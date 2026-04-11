@@ -1358,12 +1358,21 @@ def _points_bulk_build(etag: str) -> tuple[bytes, bytes, dict]:
         source_id_to_idx = {r[0]: i + 1 for i, r in enumerate(source_rows)}
 
         # v0.8.2 — prefer the canonical standardized_shape when the
-        # column exists and is populated. Otherwise fall back to the
-        # raw `shape` column (same as v0.8.0/0.8.1 behavior). Either
+        # column exists AND has populated rows. Otherwise fall back
+        # to the raw `shape` column (v0.8.0/0.8.1 behaviour). Either
         # way the returned list goes into a single `shapes` lookup
         # so the frontend doesn't need to care which source it came
         # from — it just uses shapes[shape_idx].
+        #
+        # v0.8.2 post-migration bugfix: "column exists" != "column
+        # populated". When the ALTER TABLE has run but the
+        # ufo-dedup pipeline hasn't refreshed the derived values yet,
+        # standardized_shape is NULL on every row and the DISTINCT
+        # query returns zero rows. In that case the map would
+        # silently stop matching any shape filter. We detect the
+        # zero-row case and fall back to raw shape transparently.
         use_std_shape = "standardized_shape" in present_cols
+        distinct_shapes: list = []
         if use_std_shape:
             cur.execute(
                 """
@@ -1374,7 +1383,12 @@ def _points_bulk_build(etag: str) -> tuple[bytes, bytes, dict]:
                 """
             )
             distinct_shapes = [r[0] for r in cur.fetchall()][:254]
-        else:
+            if not distinct_shapes:
+                # Column exists but unpopulated — fall through to
+                # the raw-shape path below.
+                use_std_shape = False
+
+        if not use_std_shape:
             cur.execute(
                 """
                 SELECT DISTINCT shape, LOWER(shape) AS lshape
@@ -1384,6 +1398,7 @@ def _points_bulk_build(etag: str) -> tuple[bytes, bytes, dict]:
                 """
             )
             distinct_shapes = [r[0] for r in cur.fetchall()][:254]
+
         shape_names = [None] + distinct_shapes
         shape_to_idx = {s: i + 1 for i, s in enumerate(distinct_shapes)}
 
