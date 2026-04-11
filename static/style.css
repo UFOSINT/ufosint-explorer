@@ -3483,6 +3483,67 @@ select:focus {
     text-transform: lowercase;
 }
 
+/* =========================================================================
+   v0.8.4 — Top-nav theme pill
+   Compact horizontal SIGNAL / DECLASS toggle that lives directly in the
+   main header nav, next to the tab buttons. Shares the .theme-opt class
+   with the gear-menu version so initThemeToggle() in app.js binds both.
+   ========================================================================= */
+.theme-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0;
+    margin: 0 var(--s-2);
+    padding: 3px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-pill);
+    font-family: var(--font-mono);
+}
+.theme-pill .theme-opt-compact {
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    padding: 4px 10px;
+    cursor: pointer;
+    border-radius: calc(var(--r-pill) - 2px);
+    text-transform: uppercase;
+    transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast);
+}
+.theme-pill .theme-opt-compact:hover {
+    color: var(--accent);
+}
+.theme-pill .theme-opt-compact.active {
+    background: var(--accent-bg);
+    border-color: var(--accent);
+    color: var(--accent);
+}
+.theme-pill .theme-opt-compact:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+.theme-pill .theme-opt-name {
+    display: inline-block;
+}
+
+/* On narrow viewports collapse the SIGNAL / DECLASS labels to just the
+   first letter so the pill still fits next to the tabs. */
+@media (max-width: 900px) {
+    .theme-pill .theme-opt-name {
+        font-size: 0;
+    }
+    .theme-pill .theme-opt-name::first-letter {
+        font-size: 10px;
+    }
+    .theme-pill .theme-opt-compact {
+        min-width: 24px;
+    }
+}
+
 /* --- Hex bin layer color ramp (used by loadHexBins tooltips) --- */
 .hex-tooltip {
     font-family: var(--font-mono);

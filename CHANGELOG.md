@@ -17,6 +17,113 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 Nothing yet.
 
+## [0.8.4] — 2026-04-11 — Signal / Declass theme overhaul
+
+Finishes the theme system v0.7 started. The SIGNAL / DECLASS token
+swap was already plumbed through `body.theme-signal` /
+`body.theme-declass` CSS classes, `localStorage` persistence, and
+a pre-paint script in `index.html`. v0.8.4 closes the remaining
+three gaps: (1) the toggle was buried in the settings menu, (2)
+the base map tiles were hardcoded OSM, and (3) the deck.gl layer
+colors were hardcoded cyan-on-void.
+
+See [`docs/V084_THEME_PLAN.md`](docs/V084_THEME_PLAN.md) for the
+full audit + palette rationale.
+
+### Added
+
+- **Top-nav theme pill.** New `.theme-pill` radio group between the
+  tab buttons and the settings gear icon, visible at all times.
+  Two compact buttons (SIGNAL, DECLASS) with the same
+  `.theme-opt` class as the settings-menu copy, so
+  `initThemeToggle()` binds both instances automatically — clicking
+  either one updates the other via `setTheme()`'s aria-checked
+  mirror. Responsive: labels collapse to just the first letter on
+  viewports narrower than 900 px.
+- **`TILE_URLS` constant in `static/app.js`** with Carto basemap
+  URLs:
+  - SIGNAL → `https://{s}.basemaps.cartocdn.com/dark_all/...`
+    ("Dark Matter": dark slate, white roads)
+  - DECLASS → `https://{s}.basemaps.cartocdn.com/rastertiles/voyager/...`
+    ("Voyager": warm cream paper, desaturated accents)
+  Both are free for public use, retina-aware, CORS-enabled, no API
+  key required. Replaces the hardcoded standard OSM tile URL in
+  both the main Observatory map AND the detail-modal mini-map.
+- **`THEME_PALETTES` constant in `static/deck.js`** with
+  `scatter` and `hexRange` entries per theme. The SIGNAL palette
+  keeps the v0.8.0 cold-plasma → cyan → hot-amber ramp; the DECLASS
+  palette is a new cream → tan → rust → burgundy → deep-wine ramp
+  that matches the `#B8001F` DECLASS accent and reads clearly on
+  Voyager's cream tiles. ScatterplotLayer dots switch from cyan
+  `[0, 240, 255, 180]` on SIGNAL to near-black `[15, 23, 42, 200]`
+  on DECLASS for max contrast.
+- **`UFODeck.setTheme(name)`** public API in `deck.js`. Updates
+  the internal theme pointer and calls `refreshActiveLayer()` so
+  the next layer instance picks up the new palette colors.
+  Layer factories (Scatterplot, Hexagon, Heatmap) all read from
+  `_activePalette()` instead of hardcoded RGB arrays, and their
+  `updateTriggers` include `_theme` so deck.gl's GPU attribute
+  cache invalidates on swap.
+
+### Changed
+
+- **`setTheme()` in `static/app.js`** now wires three live
+  updates:
+  1. CSS class swap + localStorage persist (existing v0.7 path)
+  2. TimeBrush canvas redraw (existing v0.7 path)
+  3. `state.tileLayer.setUrl(TILE_URLS[theme])` — Leaflet
+     re-fetches the visible tile grid in place with no layer
+     remove/re-add (NEW)
+  4. `window.UFODeck.setTheme(theme)` — deck.gl recolors without
+     a page reload (NEW)
+  The effect: toggling SIGNAL ↔ DECLASS is instant and affects
+  every surface simultaneously — UI chrome, map tiles, point
+  colors, hex ramp, heatmap ramp, histogram accents, popup
+  styling, Quality rail, Data Quality bars, etc.
+- **`bootDeckGL()`** now calls `UFODeck.setTheme(_currentTheme())`
+  BEFORE mounting the initial LeafletLayer, so a user loading the
+  page in DECLASS doesn't briefly see cyan dots before the later
+  setTheme() call re-renders with the burgundy palette.
+- **Detail-modal mini-map** tile URL now uses the same
+  `TILE_URLS[_currentTheme()]` helper as the main map so the
+  modal matches the active theme.
+
+### Not changed
+
+- **No CSS audit fixes needed.** Every `.class` added since v0.8.0
+  (`.popup-btn`, `.popup-desc-badge.has-desc`, `.brush-mode-btn`,
+  `.brush-speed-select`, `.rail-quality`, `.rail-toggle-list`,
+  `.quality-bar`, `.result-derived`, `.meta-pill.has-desc`, etc.)
+  already reads from `var(--accent)` / `var(--text)` / `var(--bg)`
+  tokens, so the existing body-class token swap re-skins them for
+  free. A one-time grep of the v0.8.x additions confirmed zero
+  hardcoded colors that would break DECLASS.
+- **Existing `.theme-toggle` in the settings menu stays.** It's a
+  fallback for discoverability; removing it would be a subtraction
+  with no upside.
+- **No prefers-color-scheme autoswitch.** Users pick the theme
+  explicitly; we don't try to guess. The localStorage persist
+  makes the choice sticky across sessions.
+
+### New tests
+
+- `tests/test_v084_theme.py` with 20 assertions covering:
+  - `.theme-pill` exists at the top nav, not inside settings menu
+  - CSS declares both `.theme-pill` and `.theme-opt-compact` rules
+  - `body.theme-signal` / `body.theme-declass` still present
+  - `TILE_URLS` has both signal + declass Carto URLs
+  - `initMap()` stashes `state.tileLayer` and reads from `TILE_URLS`
+  - No `tile.openstreetmap.org` left anywhere in app.js
+  - `setTheme()` calls both `state.tileLayer.setUrl()` AND
+    `UFODeck.setTheme()`
+  - `bootDeckGL()` seeds the theme BEFORE mounting the layer
+  - `THEME_PALETTES` declared in deck.js with both variants +
+    scatter + hexRange fields
+  - Layer factories read from `_activePalette()`, not hardcoded
+    RGB arrays
+  - `UFODeck.setTheme` is in the public API exports
+  - `setDeckTheme()` function exists and calls `refreshActiveLayer`
+
 ## [0.8.3] — 2026-04-11 — Raw text retirement (search + detail rewire)
 
 The preparation step for dropping the raw narrative columns from the

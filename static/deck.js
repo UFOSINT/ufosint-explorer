@@ -645,13 +645,61 @@
     function getShapeSource() { return POINTS.shapeSource || "raw"; }
 
     // -----------------------------------------------------------------
+    // Theme palettes (v0.8.4)
+    // -----------------------------------------------------------------
+    // Each entry defines the colors the three deck.gl layers use for
+    // the named body theme. When app.js calls UFODeck.setTheme(name),
+    // we swap the _theme pointer and refreshActiveLayer() so a freshly
+    // instantiated layer picks up the new palette. Arrays of [r,g,b]
+    // (uint8) or [r,g,b,a] for the scatterplot getFillColor.
+    //
+    //   signal  — cyan-on-void. Cold-plasma → hot-plasma hex range,
+    //             cyan scatterplot dots that pop on Dark Matter tiles.
+    //   declass — ink-on-paper. Cream → burgundy → wine range that
+    //             mirrors the #B8001F DECLASS accent and reads clearly
+    //             on Voyager's warm cream tiles. Dark near-black dots
+    //             for max contrast against the light tile background.
+    const THEME_PALETTES = {
+        signal: {
+            scatter: [0, 240, 255, 180],
+            hexRange: [
+                [0, 59, 92],      // cold plasma
+                [0, 140, 180],
+                [0, 240, 255],    // hot plasma
+                [255, 179, 0],    // amber
+                [255, 78, 0],     // hot
+            ],
+        },
+        declass: {
+            scatter: [15, 23, 42, 200],  // near-black, reads on cream tiles
+            hexRange: [
+                [233, 219, 180],  // pale cream (almost the paper color)
+                [200, 150, 100],  // tan
+                [150, 80, 60],    // rust
+                [120, 20, 30],    // burgundy — matches DECLASS accent
+                [80, 0, 15],      // deep wine
+            ],
+        },
+    };
+
+    let _theme = "signal";  // set by setTheme() below
+
+    function _activePalette() {
+        return THEME_PALETTES[_theme] || THEME_PALETTES.signal;
+    }
+
+    // -----------------------------------------------------------------
     // deck.gl layer factories
     // -----------------------------------------------------------------
     // Each helper returns a fresh deck.gl layer instance given the
-    // current POINTS.visibleIdx. The onClick handler hits the existing
-    // /api/sighting/:id endpoint via window.openDetail.
+    // current POINTS.visibleIdx AND the active theme palette. The
+    // layer is reconstructed from scratch on every refreshActiveLayer
+    // call (cheap — deck.gl's internal GPU buffers only rebuild if
+    // the data reference changes), so swapping themes just needs the
+    // palette to be read fresh each call.
     function makeScatterplotLayer() {
         const d = window.deck;
+        const palette = _activePalette();
         return new d.ScatterplotLayer({
             id: "ufosint-points",
             data: POINTS.visibleIdx,
@@ -661,7 +709,7 @@
             getRadius: 1000,
             radiusMinPixels: 1.2,
             radiusMaxPixels: 5,
-            getFillColor: [0, 240, 255, 180],
+            getFillColor: palette.scatter,
             pickable: true,
             onClick: (info) => {
                 if (info && info.object !== undefined && info.object !== null) {
@@ -674,12 +722,14 @@
             },
             updateTriggers: {
                 getPosition: POINTS.etag,
+                getFillColor: _theme,  // bust GPU attr cache on theme swap
             },
         });
     }
 
     function makeHexagonLayer() {
         const d = window.deck;
+        const palette = _activePalette();
         // HexagonLayer aggregates in screen-space meters, so hex cells
         // tessellate uniformly regardless of latitude. Radius scales
         // with map zoom via the `radius` prop — we pass a fixed value
@@ -703,6 +753,10 @@
         // the domain. Result: the full color ramp is visible and the
         // relative density of cells is legible across 4 orders of
         // magnitude of count.
+        //
+        // v0.8.4: colorRange is now read from THEME_PALETTES so the
+        // hex ramp matches the active theme. Signal keeps the cold-
+        // hot plasma ramp; declass uses cream → rust → burgundy.
         return new d.HexagonLayer({
             id: "ufosint-hex",
             data: POINTS.visibleIdx,
@@ -710,10 +764,7 @@
             radius: 60000,                 // 60 km — tune per taste
             extruded: false,
             coverage: 0.95,
-            colorRange: [
-                [0, 59, 92], [0, 140, 180], [0, 240, 255],
-                [255, 179, 0], [255, 78, 0],
-            ],
+            colorRange: palette.hexRange,
             colorScaleType: "quantile",
             upperPercentile: 99,
             pickable: true,
@@ -723,11 +774,15 @@
                     console.info(`Hex cell: ${info.object.count || 0} sightings`);
                 }
             },
+            updateTriggers: {
+                colorRange: _theme,
+            },
         });
     }
 
     function makeHeatmapLayer() {
         const d = window.deck;
+        const palette = _activePalette();
         return new d.HeatmapLayer({
             id: "ufosint-heat",
             data: POINTS.visibleIdx,
@@ -735,7 +790,25 @@
             radiusPixels: 28,
             intensity: 1,
             threshold: 0.04,
+            // v0.8.4: colorRange mirrors the hex palette so the heatmap
+            // reads coherently with the rest of the map.
+            colorRange: palette.hexRange,
+            updateTriggers: {
+                colorRange: _theme,
+            },
         });
+    }
+
+    // v0.8.4 — public API for the main-thread setTheme() call.
+    // Updates the palette pointer and reconstructs the active layer
+    // so the new colors land without a page reload. Safe to call
+    // before the deck.gl layer is mounted (refreshActiveLayer is a
+    // no-op when leafletLayer is null).
+    function setDeckTheme(name) {
+        if (name !== "signal" && name !== "declass") return;
+        if (name === _theme) return;
+        _theme = name;
+        refreshActiveLayer();
     }
 
     // -----------------------------------------------------------------
@@ -813,5 +886,9 @@
         getEmotions,
         getSources,
         getShapeSource,
+
+        // v0.8.4 — theme API
+        setTheme: setDeckTheme,
+        getTheme: () => _theme,
     };
 })();

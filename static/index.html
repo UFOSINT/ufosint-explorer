@@ -96,6 +96,22 @@
             <button class="tab" data-tab="duplicates">Duplicates</button>
             <button class="tab" data-tab="insights">Insights</button>
             <button class="tab" data-tab="methodology">Methodology</button>
+            <!-- v0.8.4 — top-nav theme pill. The operator asked for the
+                 SIGNAL / DECLASS toggle to be visible without needing
+                 to open the settings menu. The buttons here share the
+                 `.theme-opt` class with the copy inside the settings
+                 menu below, so the existing initThemeToggle() binds
+                 both instances automatically — clicking either one
+                 updates the other via setTheme() mirroring the
+                 aria-checked state. -->
+            <div class="theme-pill" role="radiogroup" aria-label="Interface theme (top nav)">
+                <button class="theme-opt theme-opt-compact active" data-theme="signal" role="radio" aria-checked="true" type="button" title="Cyan on void — dark UI, dark map">
+                    <span class="theme-opt-name">SIGNAL</span>
+                </button>
+                <button class="theme-opt theme-opt-compact" data-theme="declass" role="radio" aria-checked="false" type="button" title="Ink on paper — light UI, light map">
+                    <span class="theme-opt-name">DECLASS</span>
+                </button>
+            </div>
             <div class="tabs-settings">
                 <button id="settings-btn" class="tab tab-icon" title="Settings &amp; AI tools" aria-label="Settings menu" aria-haspopup="menu" aria-expanded="false"><svg class="icon icon-md" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
                 <div id="settings-menu" class="settings-menu" role="menu" hidden>

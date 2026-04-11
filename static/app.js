@@ -923,6 +923,44 @@ function lastDayOfMonth(year, month) {
 // =========================================================================
 // Map
 // =========================================================================
+
+// v0.8.4 — Per-theme base map tile sources. Carto ships dark and
+// light variants of the same cartographic style, so switching between
+// the two gives a visually coherent light/dark map without changing
+// the data geometry. Both are free for public use, CORS-enabled,
+// retina-aware (the {r} → @2x suffix kicks in on hi-DPI), and don't
+// need an API key. Carto attribution covers both.
+//
+//   signal  — "Dark Matter": dark slate background, white roads.
+//             Matches the cyan-on-void palette.
+//   declass — "Voyager": warm cream paper, soft desaturated accents.
+//             Matches the DECLASS ink-on-paper palette.
+//
+// setTheme() below calls state.tileLayer.setUrl() with the right
+// template when the user toggles — no layer remove/re-add needed.
+const TILE_URLS = {
+    signal:  "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+    declass: "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
+};
+const TILE_ATTRIBUTION =
+    '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> ' +
+    '&copy; <a href="https://carto.com/attributions">CARTO</a>';
+
+
+function _currentTheme() {
+    // Read from the body class the pre-paint script set, with a
+    // localStorage fallback for environments where the class hasn't
+    // been applied yet (initMap runs before setTheme in some paths).
+    if (document.body.classList.contains("theme-declass")) return "declass";
+    if (document.body.classList.contains("theme-signal")) return "signal";
+    try {
+        const stored = localStorage.getItem("ufosint-theme");
+        if (stored === "declass" || stored === "signal") return stored;
+    } catch (_) { /* localStorage blocked */ }
+    return "signal";
+}
+
+
 function initMap() {
     state.map = L.map("map", {
         center: [39, -98],
@@ -930,9 +968,13 @@ function initMap() {
         preferCanvas: true,
     });
 
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        attribution: '&copy; OpenStreetMap contributors',
-        maxZoom: 18,
+    // v0.8.4 — stash the tile layer on state so setTheme() can
+    // call state.tileLayer.setUrl() to swap the tile source without
+    // removing and re-adding the layer.
+    state.tileLayer = L.tileLayer(TILE_URLS[_currentTheme()], {
+        attribution: TILE_ATTRIBUTION,
+        maxZoom: 19,
+        detectRetina: true,
     }).addTo(state.map);
 
     // v0.8.0: Try to boot the deck.gl GPU path. If WebGL or deck.gl
@@ -1092,6 +1134,16 @@ async function bootDeckGL() {
 
     // Fetch + deserialise in parallel with the legacy initial load.
     await UFODeck.loadBulkPoints();
+
+    // v0.8.4 — seed deck.gl with the active theme BEFORE mounting the
+    // layer, so the initial ScatterplotLayer instantiates with the
+    // right palette instead of the signal default. Without this, a
+    // user loading the page in DECLASS would briefly see cyan dots
+    // before the setTheme() call later in this function re-renders
+    // with the burgundy palette.
+    if (typeof UFODeck.setTheme === "function") {
+        UFODeck.setTheme(_currentTheme());
+    }
 
     // Mount a LeafletLayer on the existing map. From now on, pan/zoom
     // is GPU-rendered with no network activity until the user clicks.
@@ -2456,6 +2508,18 @@ function setTheme(theme) {
         state.timeBrush._draw();
         state.timeBrush._drawAnnotations();
     }
+    // v0.8.4 — live tile swap. setUrl() triggers Leaflet to re-fetch
+    // the visible tile grid against the new URL template with no layer
+    // add/remove. Pan/zoom position stays exactly where it was.
+    if (state.tileLayer && TILE_URLS[theme]) {
+        state.tileLayer.setUrl(TILE_URLS[theme]);
+    }
+    // v0.8.4 — live deck.gl recolor. UFODeck.setTheme updates its
+    // internal palette pointer and calls refreshActiveLayer() so the
+    // Scatterplot/Hexagon/Heatmap layer picks up the new colors.
+    if (window.UFODeck && typeof window.UFODeck.setTheme === "function") {
+        window.UFODeck.setTheme(theme);
+    }
 }
 
 async function loadHeatmap(signal) {
@@ -3558,8 +3622,13 @@ async function openDetail(id) {
                         dragging: false,
                         scrollWheelZoom: false,
                     });
-                    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-                        maxZoom: 18,
+                    // v0.8.4 — detail mini-map matches the active theme
+                    // so the marker circle has consistent contrast
+                    // whether the user is on SIGNAL or DECLASS.
+                    L.tileLayer(TILE_URLS[_currentTheme()], {
+                        attribution: TILE_ATTRIBUTION,
+                        maxZoom: 19,
+                        detectRetina: true,
                     }).addTo(miniMap);
                     L.circleMarker([r.latitude, r.longitude], {
                         radius: 8,
