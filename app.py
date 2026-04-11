@@ -2562,22 +2562,30 @@ def _prewarm_caches():
             time.sleep(1)  # let the worker finish starting
             _pg_prewarm_relations()
             client = app.test_client()
+            # v0.8.2-cleanup-3: /api/points-bulk MUST be first. It's
+            # the critical-path call for every Observatory visit on
+            # the v0.8.0+ GPU path, and a cold build takes ~20 s on
+            # B1ms because the SELECT scans 396k rows and the Python
+            # pack loop is dense. If we warmed /api/map / /api/stats
+            # first, the connection pool would be tied up and the
+            # points-bulk build would contend for connections, pushing
+            # the first-user experience out to 60-120 s. Warming it
+            # FIRST means the @lru_cache is populated before any
+            # browser lands on the site, so the first request serves
+            # the 4 MB gzipped buffer from memory in <3 s.
+            #
+            # The legacy /api/map and /api/heatmap paths are warmed
+            # LAST because with the v0.8.0 GPU path live, almost no
+            # user hits them — they're only a fallback for browsers
+            # without WebGL, and we accept a slower first request on
+            # that path.
             warm_paths = [
+                "/api/points-bulk?meta=1",
+                "/api/points-bulk",
                 "/api/stats",
                 "/api/timeline",
                 "/api/sentiment/overview",
                 "/api/duplicates?page=0",
-                # v0.8.2-cleanup-3: pre-warm the bulk binary endpoint
-                # FIRST. This is the v0.8.0+ critical-path call —
-                # every Observatory visit fetches it on boot, and a
-                # cold call takes ~20 s on B1ms because the SELECT
-                # scans 396k rows and the Python pack loop is dense.
-                # Once warmed, the @lru_cache holds the gzipped buffer
-                # in memory and subsequent requests serve it in <3 s.
-                # Pre-warming both `?meta=1` and the bare path so the
-                # browser's parallel fetch pair both hit warm cache.
-                "/api/points-bulk?meta=1",
-                "/api/points-bulk",
                 # Whole-world map view (the landing-page default)
                 "/api/map?south=-90&north=90&west=-180&east=180&zoom=2",
                 # A continental and a city viewport so both sample modes warm
