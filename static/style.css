@@ -3780,9 +3780,14 @@ body.is-touch .rail-section.rail-quality.is-collapsed .rail-chevron {
     .stats-badge .stats-chip-optional { display: none; }
 
     .observatory-time-brush {
-        height: 130px;
+        height: auto;
+        min-height: 140px;
         padding: 4px 8px;
     }
+    /* Brush canvas needs an explicit min-height when the
+       container switches to height:auto so flex:1 has
+       something to resolve against. */
+    .brush-wrap { min-height: 50px; }
     .brush-handle { width: 18px; }
 }
 
@@ -3796,7 +3801,8 @@ body.is-touch .rail-section.rail-quality.is-collapsed .rail-chevron {
     .tabs::-webkit-scrollbar { display: none; }
 }
 
-body.is-touch .observatory-time-brush { height: 115px; }
+body.is-touch .observatory-time-brush { height: auto; min-height: 140px; }
+body.is-touch .brush-wrap { min-height: 50px; }
 body.is-touch .brush-handle {
     width: 14px;
     position: relative;
@@ -4790,8 +4796,9 @@ body[data-hide-brush] .observatory-time-brush {
         min-height: 32px;
     }
 
-    /* Brush: still needs room for histogram bars */
-    .observatory-time-brush { height: 120px; }
+    /* Brush: auto-height so histogram bars always visible */
+    .observatory-time-brush { height: auto; min-height: 130px; }
+    .brush-wrap { min-height: 45px; }
 
     /* Filter dropdowns: full width stacking */
     .filter-group { flex: 1 1 100%; min-width: 0; }
