@@ -370,21 +370,24 @@ def test_refresh_insights_computes_coverage():
     )
 
 
-def test_coverage_covers_all_eight_cards():
-    """_mountAllCoverageStrips must mount a strip on each of the 8
-    client-side cards."""
+def test_coverage_covers_all_nine_cards():
+    """v0.11: _mountAllCoverageStrips must mount a strip on each of
+    the 9 client-side cards (5 emotion + 2 quality + 2 movement)."""
     src = _read(APP_JS)
     body = _extract_js_function(src, "_mountAllCoverageStrips")
     assert body
     for canvas_id in (
-        "emotion-radar-chart",
-        "sentiment-timeline-chart",
+        # v0.11 emotion cards
+        "sentiment-group-chart",
+        "emotion-7-chart",
+        "emotion-28-chart",
+        "sentiment-scores-chart",
         "emotion-source-chart",
-        "emotion-shape-chart",
+        # Quality + movement (unchanged)
         "quality-distribution-chart",
+        "hoax-curve-chart",
         "movement-taxonomy-chart",
         "shape-movement-chart",
-        "hoax-curve-chart",
     ):
         assert canvas_id in body, (
             f"_mountAllCoverageStrips must call _renderCoverageStrip "

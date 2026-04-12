@@ -355,9 +355,11 @@ def test_new_insight_cards_use_visible_idx():
         )
 
 
-def test_insights_client_cards_decoupled_from_sentiment():
-    """refreshInsightsClientCards must NOT require sentiment data
-    so it renders even when /api/sentiment/overview returns empty."""
+def test_insights_client_cards_decoupled_from_sentiment_endpoints():
+    """refreshInsightsClientCards must NOT fetch from /api/sentiment/*
+    endpoints — all cards read from the bulk buffer's typed arrays.
+    v0.11 renamed some cards to 'Sentiment*' but they still use
+    POINTS.vaderCompound / emotion28Group, not the old endpoints."""
     src = _read(APP_JS)
     m = re.search(
         r"function refreshInsightsClientCards\(\)[\s\S]*?\n\}\n",
@@ -365,9 +367,9 @@ def test_insights_client_cards_decoupled_from_sentiment():
     )
     assert m, "couldn't locate refreshInsightsClientCards() body"
     body = m.group(0)
-    assert "sentiment" not in body.lower(), (
-        "refreshInsightsClientCards must not depend on sentiment "
-        "endpoints — the new cards work on the bulk buffer alone"
+    # Must NOT fetch from the old sentiment API
+    assert "/api/sentiment" not in body, (
+        "refreshInsightsClientCards must not call /api/sentiment/*"
     )
     assert "POINTS.ready" in body or "POINTS &&" in body, (
         "refreshInsightsClientCards must gate on POINTS.ready"

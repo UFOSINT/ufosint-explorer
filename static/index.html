@@ -466,65 +466,100 @@
              rail filters replace Search; the v0.8.3b science-team
              export ships with zero duplicate_candidate rows. -->
 
-        <!-- Insights Panel -->
+        <!-- Insights Panel — v0.11 redesign: 3 grouped sections,
+             transformer-based emotion cards replacing the legacy
+             8-class keyword classifier. 9 cards total. -->
         <div id="panel-insights" class="panel">
-            <!-- v0.10.0 — cross-filter chip bar for Insights -->
+            <!-- Cross-filter chip bar -->
             <div id="insights-filter-chips" class="cross-filter-chips" hidden></div>
             <div class="insights-header">
-                <span class="insights-title">Sentiment &amp; Emotion Insights</span>
+                <span class="insights-title">Insights</span>
                 <span id="insights-status" class="insights-status" aria-live="polite"></span>
             </div>
-            <div class="insights-grid" id="insights-grid">
-                <div class="insight-card">
-                    <h3>Emotion Distribution</h3>
-                    <div class="insight-chart-wrap">
-                        <canvas id="emotion-radar-chart"></canvas>
+
+            <!-- Mobile jump-nav -->
+            <nav class="insights-jump-nav" aria-label="Jump to section">
+                <a href="#insights-section-emotion" class="jump-pill active">Emotion</a>
+                <a href="#insights-section-quality" class="jump-pill">Quality</a>
+                <a href="#insights-section-movement" class="jump-pill">Movement</a>
+            </nav>
+
+            <!-- Section A: Emotion & Sentiment Analysis -->
+            <div class="insights-section" id="insights-section-emotion">
+                <h2 class="insights-section-title">Emotion &amp; Sentiment Analysis</h2>
+                <div class="insights-grid">
+                    <div class="insight-card">
+                        <h3>Sentiment Polarity</h3>
+                        <div class="insight-chart-wrap">
+                            <canvas id="sentiment-group-chart"></canvas>
+                        </div>
+                    </div>
+                    <div class="insight-card">
+                        <h3>Emotion Distribution (7-Class)</h3>
+                        <div class="insight-chart-wrap">
+                            <canvas id="emotion-7-chart"></canvas>
+                        </div>
+                    </div>
+                    <div class="insight-card insight-card-wide">
+                        <h3>
+                            GoEmotions Detail (28-Class)
+                            <button class="insight-toggle" id="emotion-28-toggle"
+                                    aria-pressed="false" type="button"
+                                    title="Toggle neutral class visibility">+ neutral</button>
+                        </h3>
+                        <div class="insight-chart-wrap">
+                            <canvas id="emotion-28-chart"></canvas>
+                        </div>
+                    </div>
+                    <div class="insight-card insight-card-wide">
+                        <h3>Sentiment Score Distributions</h3>
+                        <div class="insight-chart-wrap">
+                            <canvas id="sentiment-scores-chart"></canvas>
+                        </div>
+                    </div>
+                    <div class="insight-card insight-card-wide">
+                        <h3>Emotion Profile by Source</h3>
+                        <div class="insight-chart-wrap">
+                            <canvas id="emotion-source-chart"></canvas>
+                        </div>
                     </div>
                 </div>
-                <div class="insight-card">
-                    <h3>Sentiment Over Time</h3>
-                    <div class="insight-chart-wrap">
-                        <canvas id="sentiment-timeline-chart"></canvas>
+            </div>
+
+            <!-- Section B: Data Quality & Red Flags -->
+            <div class="insights-section" id="insights-section-quality">
+                <h2 class="insights-section-title">Data Quality &amp; Red Flags</h2>
+                <div class="insights-grid">
+                    <div class="insight-card">
+                        <h3>Quality Score Distribution</h3>
+                        <div class="insight-chart-wrap">
+                            <canvas id="quality-distribution-chart"></canvas>
+                        </div>
+                    </div>
+                    <div class="insight-card">
+                        <h3>Narrative Red Flags (keyword heuristic)</h3>
+                        <div class="insight-chart-wrap">
+                            <canvas id="hoax-curve-chart"></canvas>
+                        </div>
                     </div>
                 </div>
-                <div class="insight-card">
-                    <h3>Emotions by Source</h3>
-                    <div class="insight-chart-wrap">
-                        <canvas id="emotion-source-chart"></canvas>
+            </div>
+
+            <!-- Section C: Movement & Shape -->
+            <div class="insights-section" id="insights-section-movement">
+                <h2 class="insights-section-title">Movement &amp; Shape</h2>
+                <div class="insights-grid">
+                    <div class="insight-card">
+                        <h3>Movement Taxonomy</h3>
+                        <div class="insight-chart-wrap">
+                            <canvas id="movement-taxonomy-chart"></canvas>
+                        </div>
                     </div>
-                </div>
-                <div class="insight-card">
-                    <h3>Emotions by Shape (Top 10)</h3>
-                    <div class="insight-chart-wrap">
-                        <canvas id="emotion-shape-chart"></canvas>
-                    </div>
-                </div>
-                <!-- v0.8.6 — four new cards computed client-side from
-                     the bulk buffer. Each recomputes on filter change
-                     via refreshInsightsClientCards() without hitting
-                     the server. -->
-                <div class="insight-card">
-                    <h3>Quality Score Distribution</h3>
-                    <div class="insight-chart-wrap">
-                        <canvas id="quality-distribution-chart"></canvas>
-                    </div>
-                </div>
-                <div class="insight-card">
-                    <h3>Movement Taxonomy</h3>
-                    <div class="insight-chart-wrap">
-                        <canvas id="movement-taxonomy-chart"></canvas>
-                    </div>
-                </div>
-                <div class="insight-card insight-card-wide">
-                    <h3>Shape &times; Movement Matrix (Top 10 shapes)</h3>
-                    <div class="insight-chart-wrap">
-                        <canvas id="shape-movement-chart"></canvas>
-                    </div>
-                </div>
-                <div class="insight-card">
-                    <h3>Narrative Red Flags (keyword heuristic)</h3>
-                    <div class="insight-chart-wrap">
-                        <canvas id="hoax-curve-chart"></canvas>
+                    <div class="insight-card insight-card-wide">
+                        <h3>Shape &times; Movement Matrix (Top 10 shapes)</h3>
+                        <div class="insight-chart-wrap">
+                            <canvas id="shape-movement-chart"></canvas>
+                        </div>
                     </div>
                 </div>
             </div>

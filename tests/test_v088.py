@@ -91,22 +91,24 @@ def test_load_insights_gates_on_points_ready():
     )
 
 
-def test_refresh_insights_calls_all_eight_renderers():
+def test_refresh_insights_calls_all_nine_renderers():
+    """v0.11: refreshInsightsClientCards calls 9 renderers — 5 new
+    transformer emotion cards + 4 existing quality/movement cards."""
     src = _read(APP_JS)
     body = _extract_js_function(src, "refreshInsightsClientCards")
     assert body, "couldn't locate refreshInsightsClientCards body"
-    # v0.8.8 emotion cards
+    # v0.11 transformer emotion cards
     for fn in (
-        "renderEmotionRadar",
-        "renderEmotionOverTime",
-        "renderEmotionBySource",
-        "renderEmotionByShape",
+        "renderSentimentGroup",
+        "renderEmotion7",
+        "renderGoEmotions28",
+        "renderSentimentScores",
+        "renderEmotionBySourceV11",
     ):
         assert fn in body, (
-            f"refreshInsightsClientCards must call {fn} — all 4 "
-            f"emotion cards are now client-side in v0.8.8"
+            f"refreshInsightsClientCards must call {fn}"
         )
-    # v0.8.6 derived cards still run
+    # Existing derived cards still run
     for fn in (
         "renderQualityDistribution",
         "renderMovementTaxonomy",
@@ -118,80 +120,39 @@ def test_refresh_insights_calls_all_eight_renderers():
         )
 
 
-def test_render_emotion_radar_reads_points_emotion_idx():
-    """The radar chart should walk POINTS.visibleIdx + emotionIdx
-    instead of reading an overview object from the server response."""
+def test_v011_emotion_renderers_exist():
+    """v0.11 replaced the v0.8.8 keyword-classifier emotion cards with
+    5 new transformer-based renderers. The old renderEmotionRadar,
+    renderEmotionOverTime, renderEmotionBySource, renderEmotionByShape,
+    _collectEmotionCounts, and _emotionColor are all deleted."""
     src = _read(APP_JS)
-    body = _extract_js_function(src, "renderEmotionRadar")
-    assert body, "couldn't locate renderEmotionRadar body"
-    assert "POINTS" in body, "renderEmotionRadar must read POINTS"
-    assert "emotionIdx" in body or "_collectEmotionCounts" in body, (
-        "renderEmotionRadar must use POINTS.emotionIdx (or its helper)"
-    )
-    # The function now takes no arguments — it reads state directly.
-    m = re.search(r"function renderEmotionRadar\s*\(([^)]*)\)", src)
-    assert m, "couldn't find renderEmotionRadar signature"
-    assert m.group(1).strip() == "", (
-        "renderEmotionRadar should take no arguments in v0.8.8 "
-        f"(got {m.group(1)!r})"
-    )
+    # New renderers must exist
+    for fn in (
+        "function renderSentimentGroup(",
+        "function renderEmotion7(",
+        "function renderGoEmotions28(",
+        "function renderSentimentScores(",
+        "function renderEmotionBySourceV11(",
+    ):
+        assert fn in src, f"v0.11 must define {fn}"
+
+    # Old renderers must be gone
+    for fn in (
+        "function renderEmotionRadar(",
+        "function renderEmotionOverTime(",
+        "function renderEmotionByShape(",
+        "function _collectEmotionCounts(",
+        "function _emotionColor(",
+    ):
+        assert fn not in src, f"v0.11 deleted {fn}"
 
 
-def test_render_emotion_over_time_exists():
-    """v0.8.8 renamed renderSentimentTimeline → renderEmotionOverTime
-    because we no longer have a VADER compound score — just emotion
-    distributions stacked by year."""
+def test_v011_emotion_color_constants():
+    """v0.11 uses _SENTI_GROUP_COLORS and _EMO7_COLORS instead of
+    the old EMOTION_COLORS/EMOTION_NAMES from the keyword classifier."""
     src = _read(APP_JS)
-    assert "function renderEmotionOverTime(" in src, (
-        "v0.8.8 must define renderEmotionOverTime (replacing "
-        "renderSentimentTimeline which depended on compound scores)"
-    )
-    body = _extract_js_function(src, "renderEmotionOverTime")
-    # Must read dateDays + emotionIdx to build the stacked series
-    assert "dateDays" in body
-    assert "emotionIdx" in body
-
-
-def test_render_emotion_by_source_client_side():
-    src = _read(APP_JS)
-    body = _extract_js_function(src, "renderEmotionBySource")
-    assert body
-    assert "POINTS" in body
-    assert "sourceIdx" in body
-    assert "emotionIdx" in body
-    # Should take no arguments (client-side, reads POINTS)
-    m = re.search(r"function renderEmotionBySource\s*\(([^)]*)\)", src)
-    assert m and m.group(1).strip() == ""
-
-
-def test_render_emotion_by_shape_client_side():
-    src = _read(APP_JS)
-    body = _extract_js_function(src, "renderEmotionByShape")
-    assert body
-    assert "POINTS" in body
-    assert "shapeIdx" in body
-    assert "emotionIdx" in body
-    m = re.search(r"function renderEmotionByShape\s*\(([^)]*)\)", src)
-    assert m and m.group(1).strip() == ""
-
-
-def test_emotion_renderers_have_collect_helper():
-    """_collectEmotionCounts + _emotionColor should exist as helpers
-    shared across the 4 emotion cards."""
-    src = _read(APP_JS)
-    assert "function _collectEmotionCounts(" in src
-    assert "function _emotionColor(" in src
-
-
-def test_old_render_sentiment_timeline_is_gone():
-    """The v0.8.6 renderSentimentTimeline took a server response
-    object. v0.8.8 replaces it with renderEmotionOverTime. The old
-    name should no longer be defined."""
-    src = _read(APP_JS)
-    assert "function renderSentimentTimeline(" not in src, (
-        "renderSentimentTimeline should be gone in v0.8.8 "
-        "(replaced by renderEmotionOverTime)"
-    )
+    assert "_SENTI_GROUP_COLORS" in src
+    assert "_EMO7_COLORS" in src
 
 
 # =============================================================================

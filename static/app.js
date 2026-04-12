@@ -3852,10 +3852,6 @@ function _getCrossFilteredIndices() {
             if (mf[iter[k]] & mask) out[j++] = iter[k];
         }
     } else if (dim === "quality") {
-        // Quality bucket label is "0-9", "10-19", ..., "90-100".
-        // Parse the lower bound from the label and filter to rows
-        // whose quality_score falls in [lo, lo+9]. The 255 sentinel
-        // (unknown) is excluded.
         const qs = P.qualityScore;
         const lo = parseInt(String(val), 10);
         if (isNaN(lo)) return iter;
@@ -3863,6 +3859,33 @@ function _getCrossFilteredIndices() {
         for (let k = 0; k < iter.length; k++) {
             const q = qs[iter[k]];
             if (q !== 255 && q >= lo && q <= hi) out[j++] = iter[k];
+        }
+    // v0.11 — new emotion cross-filter dimensions
+    } else if (dim === "emotion_group") {
+        const grp = P.emotion28Group;
+        const idx = P.emotion28Idx;
+        const groups = P.emotions28Groups || _SENTI_GROUP_NAMES;
+        const targetGrp = groups.indexOf(val);
+        if (targetGrp < 0) return iter;
+        for (let k = 0; k < iter.length; k++) {
+            const i = iter[k];
+            if (idx[i] > 0 && grp[i] === targetGrp) out[j++] = i;
+        }
+    } else if (dim === "emotion_7") {
+        const ei = P.emotion7Idx;
+        const names = P.emotions7 || [];
+        const targetIdx = names.indexOf(val);
+        if (targetIdx < 0) return iter;
+        for (let k = 0; k < iter.length; k++) {
+            if (ei[iter[k]] === targetIdx) out[j++] = iter[k];
+        }
+    } else if (dim === "emotion_28") {
+        const ei = P.emotion28Idx;
+        const names = P.emotions28 || [];
+        const targetIdx = names.indexOf(val);
+        if (targetIdx < 0) return iter;
+        for (let k = 0; k < iter.length; k++) {
+            if (ei[iter[k]] === targetIdx) out[j++] = iter[k];
         }
     }
     return out.subarray(0, j);
@@ -4718,21 +4741,23 @@ function refreshInsightsClientCards() {
         return;
     }
 
-    // v0.8.8 emotion cards (client-side)
-    renderEmotionRadar();
-    renderEmotionOverTime();
-    renderEmotionBySource();
-    renderEmotionByShape();
-    // v0.8.6 derived cards
+    // v0.11 — Section A: Emotion & Sentiment Analysis (5 cards)
+    renderSentimentGroup();
+    renderEmotion7();
+    renderGoEmotions28();
+    renderSentimentScores();
+    renderEmotionBySourceV11();
+    // Section B: Data Quality (2 cards, unchanged)
     renderQualityDistribution();
+    renderHoaxCurve();
+    // Section C: Movement & Shape (2 cards, unchanged)
     renderMovementTaxonomy();
     renderShapeMovementMatrix();
-    renderHoaxCurve();
 
     // Restore original visibleIdx.
     P.visibleIdx = origIdx;
 
-    // v0.9.1 — mount coverage strips on all 8 client-side cards
+    // v0.9.1 — mount coverage strips on all 9 client-side cards
     // AFTER all Chart.js instances have rendered.
     _mountAllCoverageStrips();
 }
@@ -4743,30 +4768,68 @@ function refreshInsightsClientCards() {
 function _mountAllCoverageStrips() {
     const cov = state.insightsCoverage;
     if (!cov) return;
-    // Emotion cards all depend on dominant_emotion classification
-    _renderCoverageStrip("emotion-radar-chart", cov.emotion,
-        "Emotion classifier populated");
-    _renderCoverageStrip("sentiment-timeline-chart", cov.emotion,
-        "Emotion classifier populated");
-    _renderCoverageStrip("emotion-source-chart", cov.emotion,
-        "Emotion classifier populated");
-    _renderCoverageStrip("emotion-shape-chart", cov.emotion,
-        "Emotion classifier populated");
-    // v0.8.6 derived-column cards
+
+    // v0.11 — compute coverage for the new emotion columns.
+    // emotion28 and emotion7 use their idx arrays; vader and
+    // roberta use the score arrays (128 = default neutral for
+    // unclassified rows, but we actually check the idx for
+    // classified-or-not since scores are always filled).
+    // For simplicity: use the emotion28 coverage as the emotion
+    // coverage proxy since all 5 columns have identical coverage
+    // (502,985 classified rows).
+    const emo28Cov = _computeColumnCoverage("emotion28Idx");
+    const emo7Cov = _computeColumnCoverage("emotion7Idx");
+
+    // Section A: Emotion cards
+    _renderCoverageStrip("sentiment-group-chart", emo28Cov,
+        "GoEmotions classifier populated");
+    _renderCoverageStrip("emotion-7-chart", emo7Cov,
+        "7-class RoBERTa populated");
+    _renderCoverageStrip("emotion-28-chart", emo28Cov,
+        "GoEmotions classifier populated");
+    _renderCoverageStrip("sentiment-scores-chart", emo28Cov,
+        "Sentiment scores populated");
+    _renderCoverageStrip("emotion-source-chart", emo7Cov,
+        "7-class RoBERTa populated");
+
+    // Section B: Quality cards
     _renderCoverageStrip("quality-distribution-chart", cov.quality,
         "Quality score populated");
+    _renderCoverageStrip("hoax-curve-chart", cov.hoax,
+        "Red flag score populated");
+
+    // Section C: Movement cards
     _renderCoverageStrip("movement-taxonomy-chart", cov.movementFlags,
         "Movement-tagged rows");
-    // Shape × Movement needs BOTH shape and movement populated;
-    // use the minimum of the two.
     const shapeMov = (cov.shape && cov.movementFlags)
         ? { n: Math.min(cov.shape.n, cov.movementFlags.n),
             pct: Math.min(cov.shape.pct, cov.movementFlags.pct) }
         : null;
     _renderCoverageStrip("shape-movement-chart", shapeMov,
         "Shape + movement both populated");
-    _renderCoverageStrip("hoax-curve-chart", cov.hoax,
-        "Red flag score populated");
+}
+
+// v0.11 — compute coverage for a specific POINTS typed array.
+// Returns { n, pct } where n = count of rows with value > 0
+// in the current visibleIdx.
+function _computeColumnCoverage(arrayName) {
+    const P = window.UFODeck?.POINTS;
+    if (!P || !P.ready) return { n: 0, pct: 0 };
+    const arr = P[arrayName];
+    if (!arr) return { n: 0, pct: 0 };
+    const iter = P.visibleIdx;
+    const N = iter ? iter.length : P.count;
+    let n = 0;
+    if (iter) {
+        for (let k = 0; k < N; k++) {
+            if (arr[iter[k]] > 0) n++;
+        }
+    } else {
+        for (let i = 0; i < N; i++) {
+            if (arr[i] > 0) n++;
+        }
+    }
+    return { n, pct: N > 0 ? (n / N) * 100 : 0 };
 }
 
 // v0.9.1 — walk POINTS.visibleIdx once and count, for each
@@ -5220,263 +5283,375 @@ function renderHoaxCurve() {
 }
 
 // =========================================================================
-// v0.8.8 — Emotion cards (client-side, from POINTS.emotionIdx)
+// v0.11 — Emotion & Sentiment cards (transformer-based)
 // =========================================================================
-// The /api/sentiment/* endpoints return empty data after the v0.8.5
-// reload (sentiment_analysis table truncated, ufo_public.db doesn't
-// ship sentiment rows). dominant_emotion IS populated in the bulk
-// buffer at offset 22 (149,607 of 396,158 rows), so we compute the
-// 4 cards client-side with the same walk-POINTS.visibleIdx pattern
-// the v0.8.6 derived cards use.
+// Replaces the v0.8.8 legacy 8-class keyword emotion cards with 5
+// new cards built from the transformer classifier outputs:
+//   1. Sentiment Group donut (emotion28Group — 4 slices)
+//   2. 7-class RoBERTa emotion bar (emotion7Idx — 7 bars)
+//   3. GoEmotions 28-class detail bar (emotion28Idx — 27/28 bars,
+//      "± neutral" toggle)
+//   4. Sentiment score dual histogram (vaderCompound + robertaSentiment)
+//   5. Emotion by source (emotion7Idx × sourceIdx, stacked 100%)
 //
-// Note: these renderers now take NO arguments — they read directly
-// from POINTS inside the function body. That's consistent with the
-// v0.8.6 renderQualityDistribution / renderMovementTaxonomy / etc.
+// All 5 walk POINTS.visibleIdx once per render (~5ms for 396k rows)
+// and feed Chart.js directly. Cross-filterable: clicking a bar/slice
+// sets state.crossFilter via setCrossFilter().
 
-// Helper: collect counts of each emotion across visibleIdx.
-// Returns { names: [...], counts: Uint32Array, total: int }
-function _collectEmotionCounts(P) {
-    const iter = P.visibleIdx || null;
-    const ei = P.emotionIdx;
-    const names = P.emotions || [];
-    const counts = new Uint32Array(names.length);
-    let total = 0;
-    if (iter) {
-        for (let k = 0; k < iter.length; k++) {
-            const idx = ei[iter[k]];
-            if (idx > 0) { counts[idx]++; total++; }
-        }
-    } else {
-        for (let i = 0; i < P.count; i++) {
-            const idx = ei[i];
-            if (idx > 0) { counts[idx]++; total++; }
-        }
-    }
-    return { names, counts, total };
-}
+// Sentiment group colors (shared across multiple cards)
+const _SENTI_GROUP_COLORS = ["#6b7280", "#22c55e", "#ef4444", "#f59e0b"];
+const _SENTI_GROUP_NAMES = ["neutral", "positive", "negative", "ambiguous"];
 
-// Look up the EMOTION_COLORS entry for a name, falling back to a
-// neutral pair if the name isn't in the palette (POINTS.emotions is
-// from the server and could in principle include a name EMOTION_COLORS
-// doesn't know about).
-function _emotionColor(name) {
-    return EMOTION_COLORS[name] || { bg: "rgba(139,148,158,0.6)", border: "#8b949e" };
-}
+// 7-class emotion colors
+const _EMO7_COLORS = {
+    anger: "#ef4444", disgust: "#a855f7", fear: "#f97316",
+    joy: "#22c55e", neutral: "#6b7280", sadness: "#3b82f6",
+    surprise: "#eab308",
+};
 
-function renderEmotionRadar() {
-    const canvas = document.getElementById("emotion-radar-chart");
+// ---- Card 1: Sentiment Group donut ----
+function renderSentimentGroup() {
+    const canvas = document.getElementById("sentiment-group-chart");
     if (!canvas) return;
     const P = window.UFODeck.POINTS;
-    const { names, counts, total } = _collectEmotionCounts(P);
-
-    // Build a stable label+data pair skipping the index-0 null slot.
-    const labels = [];
-    const values = [];
-    const borderColors = [];
-    for (let i = 1; i < names.length; i++) {
-        labels.push(names[i].charAt(0).toUpperCase() + names[i].slice(1));
-        values.push(counts[i]);
-        borderColors.push(_emotionColor(names[i]).border);
+    const iter = P.visibleIdx || null;
+    const grp = P.emotion28Group;
+    const idx = P.emotion28Idx;
+    const counts = [0, 0, 0, 0];  // neutral, positive, negative, ambiguous
+    const N = iter ? iter.length : P.count;
+    for (let k = 0; k < N; k++) {
+        const i = iter ? iter[k] : k;
+        if (idx[i] === 0) continue;  // unclassified
+        counts[grp[i]]++;
     }
-    // Normalise to the [0, 1] range so the radar doesn't scale to a
-    // single dominant emotion. Guard against divide-by-zero when the
-    // current filter set has no emotion-classified rows.
-    const maxCount = values.reduce((m, v) => Math.max(m, v), 1);
-    const normalized = values.map(v => v / maxCount);
+    const total = counts.reduce((a, b) => a + b, 0);
+    const labels = _SENTI_GROUP_NAMES.map((n, i) => {
+        const pct = total > 0 ? ((counts[i] / total) * 100).toFixed(1) : "0";
+        return `${n.charAt(0).toUpperCase() + n.slice(1)} (${pct}%)`;
+    });
 
-    if (state.insightsCharts.radar) {
-        const c = state.insightsCharts.radar;
+    if (state.insightsCharts.sentimentGroup) {
+        const c = state.insightsCharts.sentimentGroup;
+        c.data.datasets[0].data = counts;
         c.data.labels = labels;
-        c.data.datasets[0].data = normalized;
-        c.data.datasets[0].pointBackgroundColor = borderColors;
-        c._rawValues = values;  // stash for tooltip callback
-        c._total = total;
         c.update("none");
         return;
     }
-
-    const ctx = canvas.getContext("2d");
-    state.insightsCharts.radar = new Chart(ctx, {
-        type: "radar",
+    state.insightsCharts.sentimentGroup = new Chart(canvas.getContext("2d"), {
+        type: "doughnut",
         data: {
             labels,
             datasets: [{
-                label: "Emotion Distribution",
-                data: normalized,
-                backgroundColor: "rgba(0, 240, 255, 0.18)",
-                borderColor: "rgba(0, 240, 255, 0.85)",
+                data: counts,
+                backgroundColor: _SENTI_GROUP_COLORS,
+                borderColor: "#1f2937",
                 borderWidth: 2,
-                pointBackgroundColor: borderColors,
-                pointBorderColor: "#fff",
-                pointRadius: 5,
             }],
         },
         options: {
             responsive: true,
             maintainAspectRatio: false,
             animation: { duration: 300 },
-            scales: {
-                r: {
-                    beginAtZero: true,
-                    grid: { color: "rgba(139, 148, 158, 0.3)" },
-                    angleLines: { color: "rgba(139, 148, 158, 0.3)" },
-                    pointLabels: { font: { size: 12 } },
-                    ticks: { display: false },
-                },
-            },
             plugins: {
-                legend: { display: false },
+                legend: { position: "right", labels: { boxWidth: 12 } },
                 tooltip: {
                     callbacks: {
                         label: (ctx) => {
-                            const c = state.insightsCharts.radar;
-                            const raw = c._rawValues ? c._rawValues[ctx.dataIndex] : 0;
-                            const tot = c._total || 1;
-                            const pct = ((raw / tot) * 100).toFixed(1);
-                            return `${raw.toLocaleString()} sightings (${pct}%)`;
-                        }
-                    }
-                }
-            },
-        },
-    });
-    // Stash after creation for the first tooltip invocation.
-    state.insightsCharts.radar._rawValues = values;
-    state.insightsCharts.radar._total = total;
-}
-
-// Stacked-area chart: emotion counts per year. Walks POINTS.dateDays
-// + emotionIdx once, bins by year, emits 8 series (one per emotion).
-function renderEmotionOverTime() {
-    const canvas = document.getElementById("sentiment-timeline-chart");
-    if (!canvas) return;
-    if (!window.UFODeck.computeMedianByYear) return;  // old deck.js
-
-    const P = window.UFODeck.POINTS;
-    const iter = P.visibleIdx || null;
-    const dd = P.dateDays;
-    const ei = P.emotionIdx;
-    const names = P.emotions || [];
-    const nEmo = names.length;
-
-    // Build yearStarts via the same binary-search pattern deck.js
-    // getYearHistogram uses. We inline a small version here because
-    // the cross-product (year × emotion) isn't shaped like any of
-    // the existing helpers.
-    const yearRange = window.UFODeck.getYearRange();
-    if (!yearRange || yearRange.min == null) return;
-    const yMin = yearRange.min, yMax = yearRange.max;
-    const span = yMax - yMin + 1;
-    const yearStarts = new Uint32Array(span + 1);
-    for (let y = 0; y <= span; y++) {
-        yearStarts[y] = Math.floor(
-            (Date.UTC(yMin + y, 0, 1) - Date.UTC(1900, 0, 1)) / 86400000,
-        );
-    }
-    const dayToBin = (d) => {
-        let lo = 0, hi = span;
-        while (lo < hi) {
-            const mid = (lo + hi + 1) >>> 1;
-            if (yearStarts[mid] <= d) lo = mid;
-            else hi = mid - 1;
-        }
-        return lo;
-    };
-
-    const grid = new Uint32Array(span * nEmo);  // row-major: year * nEmo + emo
-    const totals = new Uint32Array(span);
-    const N = iter ? iter.length : P.count;
-    for (let k = 0; k < N; k++) {
-        const i = iter ? iter[k] : k;
-        const e = ei[i];
-        if (e === 0) continue;
-        const d = dd[i];
-        if (d === 0) continue;
-        const bin = dayToBin(d);
-        if (bin < 0 || bin >= span) continue;
-        grid[bin * nEmo + e]++;
-        totals[bin]++;
-    }
-
-    // Trim leading/trailing zero years so the chart doesn't span the
-    // full 1900-2026 range when most of it is empty.
-    let start = 0, end = span - 1;
-    while (start < span && totals[start] === 0) start++;
-    while (end >= 0 && totals[end] === 0) end--;
-    if (start > end) { start = 0; end = span - 1; }
-
-    const labels = [];
-    for (let y = start; y <= end; y++) labels.push(yMin + y);
-
-    const datasets = [];
-    for (let e = 1; e < nEmo; e++) {
-        const color = _emotionColor(names[e]);
-        const data = new Array(labels.length);
-        for (let y = 0; y < labels.length; y++) {
-            data[y] = grid[(start + y) * nEmo + e];
-        }
-        datasets.push({
-            label: names[e].charAt(0).toUpperCase() + names[e].slice(1),
-            data,
-            backgroundColor: color.bg,
-            borderColor: color.border,
-            borderWidth: 1,
-            fill: true,
-            pointRadius: 0,
-            tension: 0.2,
-        });
-    }
-
-    if (state.insightsCharts.timeline) {
-        const c = state.insightsCharts.timeline;
-        c.data.labels = labels;
-        c.data.datasets = datasets;
-        c.update("none");
-        return;
-    }
-
-    const ctx = canvas.getContext("2d");
-    state.insightsCharts.timeline = new Chart(ctx, {
-        type: "line",
-        data: { labels, datasets },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            interaction: { mode: "index", intersect: false },
-            animation: { duration: 300 },
-            plugins: {
-                legend: { position: "top", labels: { boxWidth: 10 } },
-                tooltip: {
-                    callbacks: {
-                        footer: (items) => {
-                            const total = items.reduce((s, i) => s + i.parsed.y, 0);
-                            return `Total: ${total.toLocaleString()}`;
+                            const v = ctx.parsed;
+                            const pct = total > 0 ? ((v / total) * 100).toFixed(1) : "0";
+                            return `${v.toLocaleString()} sightings (${pct}%)`;
                         },
                     },
                 },
             },
-            scales: {
-                x: { stacked: true, ticks: { maxTicksLimit: 16 } },
-                y: { stacked: true, beginAtZero: true },
+            onClick: (_evt, elements) => {
+                if (!elements.length) return;
+                const idx = elements[0].index;
+                setCrossFilter("emotion_group", _SENTI_GROUP_NAMES[idx], "insights");
             },
         },
     });
 }
 
-// Stacked bar chart: per source (x-axis), show the share of each
-// emotion (stacked, sum-to-100%). Reads POINTS.sourceIdx + emotionIdx.
-function renderEmotionBySource() {
+// ---- Card 2: 7-class RoBERTa emotion bar ----
+function renderEmotion7() {
+    const canvas = document.getElementById("emotion-7-chart");
+    if (!canvas) return;
+    const P = window.UFODeck.POINTS;
+    const iter = P.visibleIdx || null;
+    const ei = P.emotion7Idx;
+    const names = P.emotions7 || [];
+    const counts = new Uint32Array(names.length);
+    const N = iter ? iter.length : P.count;
+    for (let k = 0; k < N; k++) {
+        const i = iter ? iter[k] : k;
+        if (ei[i] > 0) counts[ei[i]]++;
+    }
+    // Sort descending by count, skip index 0 (null)
+    const rows = [];
+    for (let i = 1; i < names.length; i++) {
+        rows.push({ name: names[i], count: counts[i] });
+    }
+    rows.sort((a, b) => b.count - a.count);
+    const labels = rows.map(r => r.name.charAt(0).toUpperCase() + r.name.slice(1));
+    const data = rows.map(r => r.count);
+    const colors = rows.map(r => _EMO7_COLORS[r.name] || "#6b7280");
+
+    if (state.insightsCharts.emotion7) {
+        const c = state.insightsCharts.emotion7;
+        c.data.labels = labels;
+        c.data.datasets[0].data = data;
+        c.data.datasets[0].backgroundColor = colors;
+        c.update("none");
+        return;
+    }
+    state.insightsCharts.emotion7 = new Chart(canvas.getContext("2d"), {
+        type: "bar",
+        data: {
+            labels,
+            datasets: [{
+                label: "Sightings",
+                data,
+                backgroundColor: colors,
+                borderWidth: 0,
+            }],
+        },
+        options: {
+            indexAxis: "y",
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: { duration: 300 },
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: (item) => `${item.parsed.x.toLocaleString()} sightings`,
+                    },
+                },
+            },
+            scales: { x: { beginAtZero: true } },
+            onClick: (_evt, elements) => {
+                if (!elements.length) return;
+                const label = labels[elements[0].index];
+                setCrossFilter("emotion_7", label.toLowerCase(), "insights");
+            },
+            onHover: (evt, elements) => {
+                evt.native.target.style.cursor = elements.length ? "pointer" : "";
+            },
+        },
+    });
+}
+
+// ---- Card 3: GoEmotions 28-class detail bar ----
+function renderGoEmotions28() {
+    const canvas = document.getElementById("emotion-28-chart");
+    if (!canvas) return;
+    const P = window.UFODeck.POINTS;
+    const iter = P.visibleIdx || null;
+    const ei = P.emotion28Idx;
+    const grp = P.emotion28Group;
+    const names = P.emotions28 || [];
+    const counts = new Uint32Array(names.length);
+    const N = iter ? iter.length : P.count;
+    for (let k = 0; k < N; k++) {
+        const i = iter ? iter[k] : k;
+        if (ei[i] > 0) counts[ei[i]]++;
+    }
+    // Build rows, optionally hiding neutral
+    const showNeutral = state.showNeutral28 || false;
+    const rows = [];
+    for (let i = 1; i < names.length; i++) {
+        if (!showNeutral && names[i] === "neutral") continue;
+        rows.push({
+            name: names[i],
+            count: counts[i],
+            groupIdx: grp ? undefined : 0,  // will be looked up below
+        });
+    }
+    rows.sort((a, b) => b.count - a.count);
+
+    const labels = rows.map(r => r.name);
+    const data = rows.map(r => r.count);
+    // Color by sentiment group
+    const groupLookup = {};
+    if (P.emotions28) {
+        // Build a name → group mapping by walking a sample
+        for (let i = 1; i < names.length; i++) {
+            // Find one row with this emotion to get its group
+            for (let k = 0; k < Math.min(N, 50000); k++) {
+                const ri = iter ? iter[k] : k;
+                if (ei[ri] === i) {
+                    groupLookup[names[i]] = grp[ri];
+                    break;
+                }
+            }
+        }
+    }
+    const colors = rows.map(r => _SENTI_GROUP_COLORS[groupLookup[r.name] || 0]);
+
+    if (state.insightsCharts.goEmotions28) {
+        const c = state.insightsCharts.goEmotions28;
+        c.data.labels = labels;
+        c.data.datasets[0].data = data;
+        c.data.datasets[0].backgroundColor = colors;
+        c.update("none");
+        return;
+    }
+    state.insightsCharts.goEmotions28 = new Chart(canvas.getContext("2d"), {
+        type: "bar",
+        data: {
+            labels,
+            datasets: [{
+                label: "Sightings",
+                data,
+                backgroundColor: colors,
+                borderWidth: 0,
+            }],
+        },
+        options: {
+            indexAxis: "y",
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: { duration: 300 },
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: (item) => `${item.parsed.x.toLocaleString()} sightings`,
+                    },
+                },
+            },
+            scales: { x: { beginAtZero: true } },
+            onClick: (_evt, elements) => {
+                if (!elements.length) return;
+                const label = labels[elements[0].index];
+                setCrossFilter("emotion_28", label, "insights");
+            },
+            onHover: (evt, elements) => {
+                evt.native.target.style.cursor = elements.length ? "pointer" : "";
+            },
+        },
+    });
+}
+
+// Wire the "± neutral" toggle button
+document.addEventListener("DOMContentLoaded", () => {
+    const btn = document.getElementById("emotion-28-toggle");
+    if (btn) {
+        btn.addEventListener("click", () => {
+            state.showNeutral28 = !state.showNeutral28;
+            btn.textContent = state.showNeutral28 ? "- neutral" : "+ neutral";
+            btn.setAttribute("aria-pressed", String(state.showNeutral28));
+            if (state.insightsCharts.goEmotions28) {
+                state.insightsCharts.goEmotions28.destroy();
+                state.insightsCharts.goEmotions28 = null;
+            }
+            if (typeof refreshInsightsClientCards === "function") {
+                refreshInsightsClientCards();
+            }
+        });
+    }
+});
+
+// ---- Card 4: Sentiment score dual histogram ----
+function renderSentimentScores() {
+    const canvas = document.getElementById("sentiment-scores-chart");
+    if (!canvas) return;
+    const P = window.UFODeck.POINTS;
+    const iter = P.visibleIdx || null;
+    const vader = P.vaderCompound;
+    const roberta = P.robertaSentiment;
+    const eidx = P.emotion28Idx;
+    const BINS = 20;
+    const vBins = new Uint32Array(BINS);
+    const rBins = new Uint32Array(BINS);
+    const N = iter ? iter.length : P.count;
+    for (let k = 0; k < N; k++) {
+        const i = iter ? iter[k] : k;
+        if (eidx[i] === 0) continue;  // unclassified
+        // Scale 0-255 → -1..+1 → bin 0..BINS-1
+        const vScore = (vader[i] / 255) * 2 - 1;
+        const rScore = (roberta[i] / 255) * 2 - 1;
+        const vBin = Math.min(BINS - 1, Math.max(0, Math.floor((vScore + 1) / 2 * BINS)));
+        const rBin = Math.min(BINS - 1, Math.max(0, Math.floor((rScore + 1) / 2 * BINS)));
+        vBins[vBin]++;
+        rBins[rBin]++;
+    }
+    const labels = [];
+    for (let i = 0; i < BINS; i++) {
+        const lo = (-1 + i * (2 / BINS)).toFixed(1);
+        labels.push(lo);
+    }
+
+    if (state.insightsCharts.sentimentScores) {
+        const c = state.insightsCharts.sentimentScores;
+        c.data.datasets[0].data = Array.from(vBins);
+        c.data.datasets[1].data = Array.from(rBins);
+        c.update("none");
+        return;
+    }
+    state.insightsCharts.sentimentScores = new Chart(canvas.getContext("2d"), {
+        type: "bar",
+        data: {
+            labels,
+            datasets: [
+                {
+                    label: "VADER compound",
+                    data: Array.from(vBins),
+                    backgroundColor: "rgba(78, 121, 167, 0.55)",
+                    borderColor: "#4e79a7",
+                    borderWidth: 1,
+                    barPercentage: 1.0,
+                    categoryPercentage: 1.0,
+                },
+                {
+                    label: "RoBERTa sentiment",
+                    data: Array.from(rBins),
+                    backgroundColor: "rgba(242, 142, 43, 0.55)",
+                    borderColor: "#f28e2b",
+                    borderWidth: 1,
+                    barPercentage: 1.0,
+                    categoryPercentage: 1.0,
+                },
+            ],
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: { duration: 300 },
+            plugins: {
+                legend: { position: "top", labels: { boxWidth: 12 } },
+                tooltip: {
+                    callbacks: {
+                        title: (items) => {
+                            const lo = parseFloat(items[0].label);
+                            const hi = (lo + 2 / BINS).toFixed(1);
+                            return `Score ${lo} to ${hi}`;
+                        },
+                        label: (item) => `${item.dataset.label}: ${item.parsed.y.toLocaleString()}`,
+                    },
+                },
+            },
+            scales: {
+                x: { title: { display: true, text: "Score (-1 negative ... +1 positive)" } },
+                y: { beginAtZero: true },
+            },
+        },
+    });
+}
+
+// ---- Card 5: Emotion by Source (7-class × source, stacked 100%) ----
+function renderEmotionBySourceV11() {
     const canvas = document.getElementById("emotion-source-chart");
     if (!canvas) return;
     const P = window.UFODeck.POINTS;
     const iter = P.visibleIdx || null;
     const si = P.sourceIdx;
-    const ei = P.emotionIdx;
+    const ei = P.emotion7Idx;
     const sources = P.sources || [];
-    const emotions = P.emotions || [];
+    const emotions = P.emotions7 || [];
     const nSrc = sources.length;
     const nEmo = emotions.length;
-
     const grid = new Uint32Array(nSrc * nEmo);
     const srcTotals = new Uint32Array(nSrc);
     const N = iter ? iter.length : P.count;
@@ -5489,26 +5664,24 @@ function renderEmotionBySource() {
         grid[s * nEmo + e]++;
         srcTotals[s]++;
     }
-
-    // Collect non-empty sources, skipping index 0.
     const srcIdxes = [];
     for (let s = 1; s < nSrc; s++) {
         if (srcTotals[s] > 0) srcIdxes.push(s);
     }
     const labels = srcIdxes.map(s => sources[s] || "Unknown");
-
     const datasets = [];
     for (let e = 1; e < nEmo; e++) {
-        const color = _emotionColor(emotions[e]);
+        const emoName = emotions[e] || "";
+        const color = _EMO7_COLORS[emoName] || "#6b7280";
         const data = srcIdxes.map(s => {
             const tot = srcTotals[s];
             return tot > 0 ? (grid[s * nEmo + e] / tot) * 100 : 0;
         });
         datasets.push({
-            label: emotions[e].charAt(0).toUpperCase() + emotions[e].slice(1),
+            label: emoName.charAt(0).toUpperCase() + emoName.slice(1),
             data,
-            backgroundColor: color.bg,
-            borderColor: color.border,
+            backgroundColor: color + "CC",
+            borderColor: color,
             borderWidth: 1,
         });
     }
@@ -5520,9 +5693,7 @@ function renderEmotionBySource() {
         c.update("none");
         return;
     }
-
-    const ctx = canvas.getContext("2d");
-    state.insightsCharts.source = new Chart(ctx, {
+    state.insightsCharts.source = new Chart(canvas.getContext("2d"), {
         type: "bar",
         data: { labels, datasets },
         options: {
@@ -5546,14 +5717,10 @@ function renderEmotionBySource() {
                     ticks: { callback: (v) => v + "%" },
                 },
             },
-            // v0.10.0 — click a source bar → cross-filter
             onClick: (_evt, elements) => {
                 if (!elements.length) return;
-                const idx = elements[0].index;
-                const srcName = labels[idx];
-                if (srcName) {
-                    setCrossFilter("source", srcName, "insights");
-                }
+                const srcName = labels[elements[0].index];
+                if (srcName) setCrossFilter("source", srcName, "insights");
             },
             onHover: (evt, elements) => {
                 evt.native.target.style.cursor = elements.length ? "pointer" : "";
@@ -5562,110 +5729,18 @@ function renderEmotionBySource() {
     });
 }
 
-// Horizontal stacked bar chart: top-10 shapes by emotion-classified
-// count, each bar split into 8 emotion segments. Reads
-// POINTS.shapeIdx + emotionIdx.
-function renderEmotionByShape() {
-    const canvas = document.getElementById("emotion-shape-chart");
-    if (!canvas) return;
-    const P = window.UFODeck.POINTS;
-    const iter = P.visibleIdx || null;
-    const sh = P.shapeIdx;
-    const ei = P.emotionIdx;
-    const shapes = P.shapes || [];
-    const emotions = P.emotions || [];
-    const nShp = shapes.length;
-    const nEmo = emotions.length;
+// v0.11: the old v0.8.8 emotion renderers (renderEmotionRadar,
+// renderEmotionOverTime, renderEmotionBySource, renderEmotionByShape,
+// _collectEmotionCounts, _emotionColor) were deleted. They used the
+// legacy dominant_emotion 8-class keyword classifier with 37.8%
+// coverage. The 5 new renderers above use the transformer outputs
+// with 81.9% coverage and richer models.
 
-    const grid = new Uint32Array(nShp * nEmo);
-    const shpTotals = new Uint32Array(nShp);
-    const N = iter ? iter.length : P.count;
-    for (let k = 0; k < N; k++) {
-        const i = iter ? iter[k] : k;
-        const s = sh[i];
-        if (s === 0) continue;
-        const e = ei[i];
-        if (e === 0) continue;
-        grid[s * nEmo + e]++;
-        shpTotals[s]++;
-    }
-
-    // Top 10 shapes by emotion-classified count.
-    const ranked = [];
-    for (let s = 1; s < nShp; s++) {
-        if (shpTotals[s] > 0) ranked.push({ idx: s, total: shpTotals[s] });
-    }
-    ranked.sort((a, b) => b.total - a.total);
-    const top = ranked.slice(0, 10);
-    const labels = top.map(r => shapes[r.idx] || `shape ${r.idx}`);
-
-    const datasets = [];
-    for (let e = 1; e < nEmo; e++) {
-        const color = _emotionColor(emotions[e]);
-        const data = top.map(r => {
-            const tot = r.total;
-            return tot > 0 ? (grid[r.idx * nEmo + e] / tot) * 100 : 0;
-        });
-        datasets.push({
-            label: emotions[e].charAt(0).toUpperCase() + emotions[e].slice(1),
-            data,
-            backgroundColor: color.bg,
-            borderColor: color.border,
-            borderWidth: 1,
-        });
-    }
-
-    if (state.insightsCharts.shape) {
-        const c = state.insightsCharts.shape;
-        c.data.labels = labels;
-        c.data.datasets = datasets;
-        c.update("none");
-        return;
-    }
-
-    const ctx = canvas.getContext("2d");
-    state.insightsCharts.shape = new Chart(ctx, {
-        type: "bar",
-        data: { labels, datasets },
-        options: {
-            indexAxis: "y",
-            responsive: true,
-            maintainAspectRatio: false,
-            animation: { duration: 300 },
-            interaction: { mode: "index", intersect: false },
-            plugins: {
-                legend: { display: false },
-                tooltip: {
-                    callbacks: {
-                        label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.x.toFixed(1)}%`,
-                    },
-                },
-            },
-            scales: {
-                x: {
-                    stacked: true,
-                    beginAtZero: true,
-                    max: 100,
-                    ticks: { callback: (v) => v + "%" },
-                },
-                y: { stacked: true },
-            },
-            // v0.10.0 — click a shape bar → cross-filter
-            onClick: (_evt, elements) => {
-                if (!elements.length) return;
-                const idx = elements[0].index;
-                const shapeName = labels[idx];
-                if (shapeName) {
-                    setCrossFilter("shape", shapeName, "insights");
-                }
-            },
-            onHover: (evt, elements) => {
-                evt.native.target.style.cursor = elements.length ? "pointer" : "";
-            },
-        },
-    });
-}
-
+// OLD CODE DELETED — see the comment block above for the mapping.
+// Everything between here and the Detail Modal section is the old
+// v0.8.8 code that was replaced by the v0.11 renderers above.
+// KEEP NOTHING — the old functions were here. All deleted in v0.11.
+// Jump straight to the Detail Modal section below.
 // =========================================================================
 // Detail Modal
 // =========================================================================
