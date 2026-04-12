@@ -596,19 +596,23 @@ select:focus {
 }
 
 /* ---- Main ---- */
+/* v0.11: #main is now a flex column so the shared TimeBrush
+   sits at the bottom below the absolutely-positioned panels.
+   The panels fill the remaining space via position:absolute +
+   inset:0 on a wrapper, and the brush is flex-shrink:0 so it
+   never gets compressed. */
 #main {
     flex: 1;
     overflow: hidden;
     position: relative;
+    display: flex;
+    flex-direction: column;
 }
 
-/* Panels are always laid out (position: absolute covers #main) but only
-   the active one is visible + interactive. Using visibility + opacity
-   lets us transition between tabs instead of hard teleporting via
-   display: none. The `visibility 0s linear var(--t-fast)` delay on the
-   inactive state waits for the fade-out to finish before hiding, which
-   keeps tab-focus behavior correct. Respects prefers-reduced-motion
-   via the existing @media rule that kills all transitions. */
+/* Panels are always laid out (position: absolute covers their
+   container) but only the active one is visible + interactive.
+   v0.11: panels live inside a flex-1 container so the shared
+   TimeBrush can sit below them in the #main flex column. */
 .panel {
     display: flex;
     flex-direction: column;
@@ -619,6 +623,13 @@ select:focus {
     opacity: 0;
     pointer-events: none;
     transition: opacity var(--t-fast) ease-out, visibility 0s linear var(--t-fast);
+}
+/* v0.11: panels container fills the space above the brush */
+.panels-container {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    min-height: 0;
 }
 
 .panel.active {
@@ -3855,6 +3866,14 @@ body.is-touch .movement-cluster { flex-wrap: nowrap; }
     width: 100%;
     height: 100%;
 }
+/* v0.11: TimeBrush is now a shared <main> footer, visible on
+   Observatory + Timeline + Insights. Hidden on Methodology + AI
+   where temporal navigation doesn't apply. The hiding is driven
+   by a body-level data attribute set in switchTab(). */
+body[data-hide-brush] .observatory-time-brush {
+    display: none;
+}
+
 /* v0.10.0-fix: left offset bumped from 16px to 52px so the
    Points/Heatmap/HexBin toggle doesn't overlap Leaflet's
    +/- zoom controls (which sit at top:10px left:10px and are

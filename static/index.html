@@ -212,6 +212,7 @@
 
     <!-- Main Content Panels -->
     <main id="main">
+        <div class="panels-container">
         <!-- Observatory panel (v0.7): unified dashboard replacing the
              legacy Map + Timeline tabs. Layout is rail | canvas | brush.
              The Leaflet #map node lives inside this panel. -->
@@ -320,101 +321,7 @@
                     </div>
                 </div>
             </div>
-            <div class="observatory-time-brush" aria-label="Time window brush">
-                <div class="brush-header">
-                    <button id="brush-play" class="brush-play-btn" type="button" aria-pressed="false">▶ PLAY</button>
-                    <!-- v0.8.1 — Sliding vs Cumulative playback mode.
-                         Sliding: the window slides forward at a fixed width.
-                         Cumulative: left edge is pinned; only the right edge advances. -->
-                    <button id="brush-mode" class="brush-mode-btn" type="button" data-mode="sliding" aria-pressed="false" title="Toggle playback mode: sliding window vs cumulative fill">SLIDING</button>
-                    <!-- v0.9.3: Playback speed is now ABSOLUTE (time
-                         of timeline per wall-second) instead of a
-                         multiplier. The old "0.25x" was still too
-                         fast at narrow-window zoom levels because
-                         the multiplier was relative to the full
-                         span. These options work the same at any
-                         zoom level: "1 week/sec" always advances
-                         the selection by exactly 7 days per wall
-                         second regardless of whether the user is
-                         playing a 7-day or a 20-year window.
-                         Value is in days of timeline per wall-
-                         second. Default "1 year/sec" gives a
-                         ~126-second sweep over the 1900-2026
-                         full range with the auto-narrow 5-year
-                         window. -->
-                    <label class="brush-speed-label" for="brush-speed" title="Playback speed (time of timeline per wall-second)">SPEED</label>
-                    <select id="brush-speed" class="brush-speed-select" aria-label="Playback speed">
-                        <option value="0.5">0.5 day / sec</option>
-                        <option value="1">1 day / sec</option>
-                        <option value="3.5">0.5 week / sec</option>
-                        <option value="7">1 week / sec</option>
-                        <option value="15">0.5 month / sec</option>
-                        <option value="30">1 month / sec</option>
-                        <option value="183">0.5 year / sec</option>
-                        <option value="365" selected>1 year / sec</option>
-                        <option value="1825">5 year / sec</option>
-                        <option value="3650">10 year / sec</option>
-                    </select>
-                    <div class="brush-readout">
-                        TIME WINDOW · <strong id="brush-range-label">1947 — 2026</strong>
-                        · <span id="brush-window-count">—</span> in range
-                    </div>
-                    <!-- v0.9.0 — Reset View button. Hidden by default;
-                         shown only when the user has zoomed into a
-                         narrow range via scroll wheel or drag-pan.
-                         Click or double-click the canvas to restore
-                         the full 1900—2026 view. -->
-                    <button id="brush-reset-view" class="brush-reset-btn" type="button"
-                            title="Zoom out to full range (or double-click the timeline)" hidden>RESET VIEW</button>
-                    <!-- v0.9.2 — explicit Apply button. Brush drag
-                         now commits the filter live via deck.gl's
-                         setTimeWindow on every pointermove, so the
-                         pointerup commit is effectively redundant
-                         for the common case. But users can arrive
-                         at the brush via URL hash, programmatic
-                         calls, or edge cases where the live commit
-                         didn't run — the Apply button force-
-                         applies the current window to the form
-                         inputs + hash + full filter pipeline. -->
-                    <button id="brush-apply" class="brush-reset-btn" type="button"
-                            title="Force-apply the current window (re-runs the full filter pipeline)">APPLY</button>
-                    <button id="brush-reset" class="brush-reset-btn" type="button">RESET</button>
-                </div>
-                <div class="brush-wrap">
-                    <canvas id="brush-canvas" width="2000" height="80" aria-hidden="true"></canvas>
-                    <div id="brush-annotations" class="brush-annotations" aria-hidden="true"></div>
-                    <div id="brush-window" class="brush-window" role="slider" aria-label="Time window"
-                         tabindex="0" aria-valuemin="1947" aria-valuemax="2026">
-                        <span class="brush-handle brush-handle-l" data-handle="l"></span>
-                        <span class="brush-handle brush-handle-r" data-handle="r"></span>
-                    </div>
-                </div>
-                <!-- v0.10.0 — Overview mini-map. Always shows the
-                     full dataset range (34 AD → 2026) with a bilinear
-                     scale (15% pre-1900, 85% post-1900). Displays:
-                     - Event tick marks for the full histogram
-                     - A cyan "view box" showing what the main brush
-                       is currently zoomed to (draggable to pan,
-                       edges draggable to resize the zoom)
-                     - A gold "selection box" inside the view box
-                       showing the playback window
-                     Click anywhere to re-center the view. Drag
-                     edges to change the date range / zoom. -->
-                <div class="overview-wrap">
-                    <canvas id="overview-canvas" aria-hidden="true"></canvas>
-                    <div id="overview-view-box" class="overview-box overview-view-box">
-                        <span class="overview-handle overview-handle-l"></span>
-                        <span class="overview-handle overview-handle-r"></span>
-                    </div>
-                    <div id="overview-selection-box" class="overview-box overview-selection-box"></div>
-                    <div class="overview-labels">
-                        <span class="overview-label-left">34 AD</span>
-                        <span class="overview-break">⫽ 1900</span>
-                        <span class="overview-label-right">2026</span>
-                    </div>
-                </div>
-            </div>
-        </div>
+</div>
 
         <!-- Legacy Map panel: kept in the DOM as an empty shell so v0.6
              deep links like #/map?q=... still resolve through
@@ -1265,7 +1172,108 @@ DATABASE_URL="postgresql://..." python mcp_server.py</code></pre>
 
             </div>
         </div>
-    </main>
+    
+                </div>
+
+<!-- v0.11: TimeBrush shared across Observatory, Timeline, and
+             Insights tabs. Moved out of #panel-observatory so it renders
+             at the bottom of <main> regardless of which tab is active.
+             Hidden on Methodology + AI tabs via CSS. -->
+        <div class="observatory-time-brush" aria-label="Time window brush">
+                <div class="brush-header">
+                    <button id="brush-play" class="brush-play-btn" type="button" aria-pressed="false">▶ PLAY</button>
+                    <!-- v0.8.1 — Sliding vs Cumulative playback mode.
+                         Sliding: the window slides forward at a fixed width.
+                         Cumulative: left edge is pinned; only the right edge advances. -->
+                    <button id="brush-mode" class="brush-mode-btn" type="button" data-mode="sliding" aria-pressed="false" title="Toggle playback mode: sliding window vs cumulative fill">SLIDING</button>
+                    <!-- v0.9.3: Playback speed is now ABSOLUTE (time
+                         of timeline per wall-second) instead of a
+                         multiplier. The old "0.25x" was still too
+                         fast at narrow-window zoom levels because
+                         the multiplier was relative to the full
+                         span. These options work the same at any
+                         zoom level: "1 week/sec" always advances
+                         the selection by exactly 7 days per wall
+                         second regardless of whether the user is
+                         playing a 7-day or a 20-year window.
+                         Value is in days of timeline per wall-
+                         second. Default "1 year/sec" gives a
+                         ~126-second sweep over the 1900-2026
+                         full range with the auto-narrow 5-year
+                         window. -->
+                    <label class="brush-speed-label" for="brush-speed" title="Playback speed (time of timeline per wall-second)">SPEED</label>
+                    <select id="brush-speed" class="brush-speed-select" aria-label="Playback speed">
+                        <option value="0.5">0.5 day / sec</option>
+                        <option value="1">1 day / sec</option>
+                        <option value="3.5">0.5 week / sec</option>
+                        <option value="7">1 week / sec</option>
+                        <option value="15">0.5 month / sec</option>
+                        <option value="30">1 month / sec</option>
+                        <option value="183">0.5 year / sec</option>
+                        <option value="365" selected>1 year / sec</option>
+                        <option value="1825">5 year / sec</option>
+                        <option value="3650">10 year / sec</option>
+                    </select>
+                    <div class="brush-readout">
+                        TIME WINDOW · <strong id="brush-range-label">1947 — 2026</strong>
+                        · <span id="brush-window-count">—</span> in range
+                    </div>
+                    <!-- v0.9.0 — Reset View button. Hidden by default;
+                         shown only when the user has zoomed into a
+                         narrow range via scroll wheel or drag-pan.
+                         Click or double-click the canvas to restore
+                         the full 1900—2026 view. -->
+                    <button id="brush-reset-view" class="brush-reset-btn" type="button"
+                            title="Zoom out to full range (or double-click the timeline)" hidden>RESET VIEW</button>
+                    <!-- v0.9.2 — explicit Apply button. Brush drag
+                         now commits the filter live via deck.gl's
+                         setTimeWindow on every pointermove, so the
+                         pointerup commit is effectively redundant
+                         for the common case. But users can arrive
+                         at the brush via URL hash, programmatic
+                         calls, or edge cases where the live commit
+                         didn't run — the Apply button force-
+                         applies the current window to the form
+                         inputs + hash + full filter pipeline. -->
+                    <button id="brush-apply" class="brush-reset-btn" type="button"
+                            title="Force-apply the current window (re-runs the full filter pipeline)">APPLY</button>
+                    <button id="brush-reset" class="brush-reset-btn" type="button">RESET</button>
+                </div>
+                <div class="brush-wrap">
+                    <canvas id="brush-canvas" width="2000" height="80" aria-hidden="true"></canvas>
+                    <div id="brush-annotations" class="brush-annotations" aria-hidden="true"></div>
+                    <div id="brush-window" class="brush-window" role="slider" aria-label="Time window"
+                         tabindex="0" aria-valuemin="1947" aria-valuemax="2026">
+                        <span class="brush-handle brush-handle-l" data-handle="l"></span>
+                        <span class="brush-handle brush-handle-r" data-handle="r"></span>
+                    </div>
+                </div>
+                <!-- v0.10.0 — Overview mini-map. Always shows the
+                     full dataset range (34 AD → 2026) with a bilinear
+                     scale (15% pre-1900, 85% post-1900). Displays:
+                     - Event tick marks for the full histogram
+                     - A cyan "view box" showing what the main brush
+                       is currently zoomed to (draggable to pan,
+                       edges draggable to resize the zoom)
+                     - A gold "selection box" inside the view box
+                       showing the playback window
+                     Click anywhere to re-center the view. Drag
+                     edges to change the date range / zoom. -->
+                <div class="overview-wrap">
+                    <canvas id="overview-canvas" aria-hidden="true"></canvas>
+                    <div id="overview-view-box" class="overview-box overview-view-box">
+                        <span class="overview-handle overview-handle-l"></span>
+                        <span class="overview-handle overview-handle-r"></span>
+                    </div>
+                    <div id="overview-selection-box" class="overview-box overview-selection-box"></div>
+                    <div class="overview-labels">
+                        <span class="overview-label-left">34 AD</span>
+                        <span class="overview-break">⫽ 1900</span>
+                        <span class="overview-label-right">2026</span>
+                    </div>
+                </div>
+            </div>
+</main>
 
     <!-- Detail Modal -->
     <div id="modal-overlay" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-title">

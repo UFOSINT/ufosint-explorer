@@ -852,6 +852,14 @@ function switchTab(tab) {
     // Hide filters bar on the AI / Connect / Methodology tabs (no global filters)
     const fb = document.getElementById("filters-bar");
     if (fb) fb.style.display = (tab === "methodology" || tab === "ai" || tab === "connect") ? "none" : "flex";
+    // v0.11: hide the shared TimeBrush on tabs where temporal
+    // navigation doesn't apply (Methodology, AI, Connect).
+    const hideBrush = (tab === "methodology" || tab === "ai" || tab === "connect");
+    if (hideBrush) {
+        document.body.setAttribute("data-hide-brush", "");
+    } else {
+        document.body.removeAttribute("data-hide-brush");
+    }
     writeHash();
 }
 
@@ -2713,10 +2721,20 @@ class TimeBrush {
         // year-level even when the brush is zoomed to a 3-month
         // window. Debounced at 200ms so scroll-wheel zoom doesn't
         // thrash Chart.js redraws at 60fps.
+        // v0.11: debounced refresh for both Timeline AND Insights
+        // tabs. When the brush zoom or playback changes, the
+        // charts on whichever tab is active should update. The
+        // 200ms debounce prevents Chart.js thrashing at 60fps.
         if (state.activeTab === "timeline" && typeof refreshTimelineCards === "function") {
             clearTimeout(this._timelineRefreshTimer);
             this._timelineRefreshTimer = setTimeout(() => {
                 refreshTimelineCards();
+            }, 200);
+        }
+        if (state.activeTab === "insights" && typeof refreshInsightsClientCards === "function") {
+            clearTimeout(this._insightsRefreshTimer);
+            this._insightsRefreshTimer = setTimeout(() => {
+                refreshInsightsClientCards();
             }, 200);
         }
     }
