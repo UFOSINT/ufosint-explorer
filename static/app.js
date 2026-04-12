@@ -4197,6 +4197,19 @@ function renderTimelineMainChartAdaptive(bins, gran) {
     const canvas = document.getElementById("timeline-main-chart");
     if (!canvas || !bins || bins.length === 0) return;
 
+    // Trim leading/trailing zero-count bins so the chart doesn't
+    // render a wall of empty space around the actual data. At day
+    // level with a 4-year date filter, the histogram has ~1,460
+    // non-zero bins scattered across ~46,000 total bins — without
+    // trimming, 97% of the chart is blank and the visible bars are
+    // scrunched into a tiny sliver.
+    let start = 0;
+    let end = bins.length - 1;
+    while (start < bins.length && bins[start].count === 0) start++;
+    while (end >= 0 && bins[end].count === 0) end--;
+    if (start > end) return;  // all-zero
+    bins = bins.slice(start, end + 1);
+
     const accent = getComputedStyle(document.body).getPropertyValue("--accent").trim() || "#00F0FF";
     const pad = (n) => String(n).padStart(2, "0");
 
