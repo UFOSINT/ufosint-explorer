@@ -1290,7 +1290,13 @@
                     console.info(`Hex cell: ${info.object.count || 0} sightings`);
                 }
             },
+            // v0.11.2: _layerDataVersion tells deck.gl to re-aggregate
+            // the hex cells when the filtered data changes. Because the
+            // layer ID stays "ufosint-hex", deck.gl diffs the props
+            // instead of recomputing the grid origin from scratch —
+            // this prevents the visible grid-shift during playback.
             updateTriggers: {
+                getPosition: _layerDataVersion,
                 colorRange: _theme,
             },
         });
@@ -1310,6 +1316,7 @@
             // reads coherently with the rest of the map.
             colorRange: palette.hexRange,
             updateTriggers: {
+                getPosition: _layerDataVersion,
                 colorRange: _theme,
             },
         });
@@ -1336,6 +1343,15 @@
     // add/remove.
     let leafletLayer = null;
     let activeMode = "points";
+
+    // v0.11.2: layer version counter. During playback, creating a
+    // brand-new HexagonLayer every frame causes the hex grid to
+    // shift because deck.gl recomputes the grid origin from the
+    // data bounds each time. Instead, we pass the same layer
+    // constructor with an incrementing data version in
+    // updateTriggers so deck.gl diffs the props and re-aggregates
+    // without recomputing the grid origin.
+    let _layerDataVersion = 0;
 
     function modeToLayer(mode) {
         if (mode === "heatmap") return makeHeatmapLayer();
@@ -1368,6 +1384,7 @@
 
     function refreshActiveLayer() {
         if (!leafletLayer) return;
+        _layerDataVersion++;
         leafletLayer.setProps({ layers: [modeToLayer(activeMode)] });
     }
 
