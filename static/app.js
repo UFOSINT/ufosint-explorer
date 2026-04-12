@@ -1670,8 +1670,18 @@ function applyClientFilters() {
         return false;
     }
     const q = state.qualityFilter || {};
+    // v0.10.0-fix: the source dropdown stores numeric source_db_id
+    // as its value (e.g. "1" for MUFON), but _rebuildVisible does
+    // POINTS.sources.indexOf(f.sourceName) which needs the NAME
+    // string ("MUFON"). Read the selected option's TEXT instead
+    // of its value. When "All sources" is selected (value=""),
+    // sourceName correctly becomes null (no filter).
+    const srcEl = document.getElementById("filter-source");
+    const srcVal = srcEl?.value;
+    const srcName = srcVal ? (srcEl.selectedOptions?.[0]?.text || null) : null;
+
     const filter = {
-        sourceName: document.getElementById("filter-source")?.value || null,
+        sourceName: srcName,
         shapeName:  document.getElementById("filter-shape")?.value  || null,
         colorName:  document.getElementById("filter-color")?.value  || null,
         emotionName: document.getElementById("filter-emotion")?.value || null,
