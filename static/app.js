@@ -3526,6 +3526,24 @@ class TimeBrush {
                 );
             }
 
+            // v0.11: during playback, debounce-refresh the
+            // Timeline or Insights cards so they animate along
+            // with the map. The 250ms debounce keeps Chart.js
+            // from thrashing at 60fps — the charts update ~4
+            // times per second which is visually smooth.
+            if (state.activeTab === "timeline" && typeof refreshTimelineCards === "function") {
+                clearTimeout(this._playTimelineTimer);
+                this._playTimelineTimer = setTimeout(() => {
+                    refreshTimelineCards();
+                }, 250);
+            }
+            if (state.activeTab === "insights" && typeof refreshInsightsClientCards === "function") {
+                clearTimeout(this._playInsightsTimer);
+                this._playInsightsTimer = setTimeout(() => {
+                    refreshInsightsClientCards();
+                }, 250);
+            }
+
             this.playRaf = requestAnimationFrame(step);
         };
         step();

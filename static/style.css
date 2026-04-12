@@ -1914,30 +1914,37 @@ select:focus {
     color: var(--text-muted);
 }
 
+/* v0.11: gap reduced from 16px to 10px, padding tightened,
+   so more cards fit on screen. The 3-column layout at wide
+   viewports is a stretch goal — 2 columns works for 9 cards. */
 .insights-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 16px;
-    padding: 0 16px 16px;
+    gap: 10px;
+    padding: 0 12px 12px;
     flex: 1;
     overflow-y: auto;
     min-height: 0;
 }
 
+/* v0.11: cards shrunk from 280px min-height to 180px so more
+   fit on screen without scrolling. The wide cards (Shape x
+   Movement, 28-class) keep a taller 220px since they have
+   more labels to display. Padding reduced from 14px to 10px. */
 .insight-card {
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: var(--r-md);
-    padding: 14px;
+    padding: 10px;
     display: flex;
     flex-direction: column;
     box-shadow: var(--shadow-sm);
 }
 
 .insight-card h3 {
-    font-size: 12px;
-    color: var(--text-muted);      /* de-emphasized from accent; uppercase + tracking carries the hierarchy */
-    margin-bottom: 10px;
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-bottom: 6px;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     font-weight: 600;
@@ -1946,7 +1953,11 @@ select:focus {
 .insight-chart-wrap {
     flex: 1;
     position: relative;
-    min-height: 280px;
+    min-height: 180px;
+}
+
+.insight-card-wide .insight-chart-wrap {
+    min-height: 220px;
 }
 
 .insights-empty {
