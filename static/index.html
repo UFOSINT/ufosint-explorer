@@ -215,27 +215,68 @@
                 <aside class="observatory-rail" aria-label="Observatory filters">
                     <!-- v0.8.2 — Data Quality rail. mountQualityRail()
                          renders four toggles and greys out any whose
-                         derived column isn't populated yet. -->
+                         derived column isn't populated yet.
+                         v0.9.0 — each .rail-section now has a
+                         clickable header so the body collapses into
+                         an accordion on touch / narrow viewports.
+                         On desktop the buttons are still there but
+                         the chevron is hidden and sections are
+                         always expanded. -->
                     <section class="rail-section rail-quality">
-                        <div class="rail-label">Data Quality</div>
-                        <ul id="rail-quality-list" class="rail-list rail-toggle-list"></ul>
+                        <button class="rail-collapse-btn" aria-expanded="true" type="button">
+                            <span>Data Quality</span>
+                            <svg class="rail-chevron" width="10" height="10" viewBox="0 0 12 12" aria-hidden="true">
+                                <path d="M3 4 L6 8 L9 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                            </svg>
+                        </button>
+                        <div class="rail-body">
+                            <ul id="rail-quality-list" class="rail-list rail-toggle-list"></ul>
+                        </div>
                     </section>
                     <section class="rail-section">
-                        <div class="rail-label">Sources</div>
-                        <ul id="rail-source-list" class="rail-list"></ul>
+                        <button class="rail-collapse-btn" aria-expanded="true" type="button">
+                            <span>Sources</span>
+                            <svg class="rail-chevron" width="10" height="10" viewBox="0 0 12 12" aria-hidden="true">
+                                <path d="M3 4 L6 8 L9 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                            </svg>
+                        </button>
+                        <div class="rail-body">
+                            <ul id="rail-source-list" class="rail-list"></ul>
+                        </div>
                     </section>
                     <section class="rail-section">
-                        <div class="rail-label">Shapes</div>
-                        <ul id="rail-shape-list" class="rail-list"></ul>
+                        <button class="rail-collapse-btn" aria-expanded="true" type="button">
+                            <span>Shapes</span>
+                            <svg class="rail-chevron" width="10" height="10" viewBox="0 0 12 12" aria-hidden="true">
+                                <path d="M3 4 L6 8 L9 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                            </svg>
+                        </button>
+                        <div class="rail-body">
+                            <ul id="rail-shape-list" class="rail-list"></ul>
+                        </div>
                     </section>
                     <section class="rail-section rail-meta">
-                        <div class="rail-label">Visible</div>
-                        <div id="rail-visible-count" class="rail-big-count">—</div>
-                        <div class="rail-sub">of <span id="rail-total-count">614,505</span> in view</div>
+                        <button class="rail-collapse-btn" aria-expanded="true" type="button">
+                            <span>Visible</span>
+                            <svg class="rail-chevron" width="10" height="10" viewBox="0 0 12 12" aria-hidden="true">
+                                <path d="M3 4 L6 8 L9 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                            </svg>
+                        </button>
+                        <div class="rail-body">
+                            <div id="rail-visible-count" class="rail-big-count">—</div>
+                            <div class="rail-sub">of <span id="rail-total-count">614,505</span> in view</div>
+                        </div>
                     </section>
                     <section class="rail-section rail-meta">
-                        <div class="rail-label">Time window</div>
-                        <div id="rail-time-label" class="rail-time-label">1947 — 2026</div>
+                        <button class="rail-collapse-btn" aria-expanded="true" type="button">
+                            <span>Time window</span>
+                            <svg class="rail-chevron" width="10" height="10" viewBox="0 0 12 12" aria-hidden="true">
+                                <path d="M3 4 L6 8 L9 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                            </svg>
+                        </button>
+                        <div class="rail-body">
+                            <div id="rail-time-label" class="rail-time-label">1947 — 2026</div>
+                        </div>
                     </section>
                 </aside>
                 <div class="observatory-canvas-wrap">
@@ -299,6 +340,13 @@
                         TIME WINDOW · <strong id="brush-range-label">1947 — 2026</strong>
                         · <span id="brush-window-count">—</span> in range
                     </div>
+                    <!-- v0.9.0 — Reset View button. Hidden by default;
+                         shown only when the user has zoomed into a
+                         narrow range via scroll wheel or drag-pan.
+                         Click or double-click the canvas to restore
+                         the full 1900—2026 view. -->
+                    <button id="brush-reset-view" class="brush-reset-btn" type="button"
+                            title="Zoom out to full range (or double-click the timeline)" hidden>RESET VIEW</button>
                     <button id="brush-reset" class="brush-reset-btn" type="button">RESET</button>
                 </div>
                 <div class="brush-wrap">

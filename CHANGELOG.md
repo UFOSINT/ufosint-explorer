@@ -17,6 +17,134 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 Nothing yet.
 
+## [0.9.0] — 2026-04-11 — TimeBrush zoom/pan + mobile responsive layout
+
+Two big UX improvements:
+
+1. **The Observatory TimeBrush now zooms.** Scroll wheel over the
+   brush zooms centered on the cursor (classic Google Maps
+   pattern); click and drag on empty canvas pans the view; the
+   Reset View button (plus double-click on the canvas) restores
+   the full 1900—2026 range. The selection window and playback
+   are **orthogonal to zoom**: you can zoom in, place a 3-month
+   window with pixel-level precision, zoom back out, and Play
+   still animates the same 3-month window.
+
+   When zoomed to a narrow range, the window readout switches
+   from year-only ("1997 — 1998") to year-month ("1997-06 —
+   1997-08") to year-month-day ("1997-06-15 — 1997-08-14")
+   depending on the span. Tells you at a glance when your
+   selection has sub-year precision.
+
+2. **The site is now mobile-responsive.** Two parallel triggers
+   flip the Observatory to a one-column layout with the rail as
+   a collapsible accordion above the map: `body.is-touch` from
+   a `matchMedia("(hover: none) and (pointer: coarse)")` feature
+   detect (catches real phones, foldables, iPads-in-landscape),
+   AND `@media (max-width: 700px)` for desktop users resizing
+   their browser narrow. Both branches are intentional — touch
+   detection catches wide-viewport touch devices, width catches
+   narrow-viewport desktops.
+
+   On mobile the rail sections become clickable headers: Data
+   Quality stays expanded by default (it's the primary filter
+   path), Sources/Shapes/Visible/Time Window start collapsed.
+   Tap a chevron header to expand. The filter bar wraps onto
+   2-3 rows, the movement cluster scrolls horizontally, the
+   stats badge drops optional chips, and the TimeBrush grows
+   to 115px tall with wider handle hit areas for touch.
+
+### Added
+
+- **`TimeBrush` zoom state** — new `viewMinT` / `viewMaxT` on
+  the class, distinct from `this.window[0]`/`[1]` (the playback
+  selection). `_minViewSpanMs = 7 * 86400000` caps max zoom-in
+  at 1 week of real time. Three view-aware helpers:
+  `_viewSpan()`, `_pxToViewTime(px)`, `_viewTimeToPx(t)`.
+- **Scroll-wheel zoom handler** on the brush canvas wrap.
+  Uses cursor-centered zoom math so the time value under the
+  cursor stays stationary as the view shrinks or grows around
+  it. Factor 0.8 zoom-in per wheel tick, 1.25 zoom-out.
+- **Drag-to-pan on empty canvas** — a new `"pan"` mode in the
+  existing pointer-drag state machine. Click empty canvas area
+  (not the selection window, not a handle) and drag to translate
+  the view. Clamped to dataset bounds.
+- **`resetView()` method** on `TimeBrush` plus `_updateResetViewBtn()`
+  helper. The Reset View button in the brush header is hidden
+  by default and shown whenever the view span is < 98% of the
+  full range. Also wired to `dblclick` on the canvas.
+- **`_formatWindowLabel(d0, d1)` helper** picks year-only /
+  year-month / year-month-day formatting based on span.
+- **Touch-primary feature detect** in DOMContentLoaded. Uses
+  `matchMedia("(hover: none) and (pointer: coarse)")` and
+  toggles `body.is-touch`. Listens for media query changes so
+  orientation flips and foldable unfolds update the layout live.
+- **`hydrateRailCollapsibles()`** — wires click handlers on the
+  new rail collapse buttons. Uses a dual-class model
+  (`.is-collapsed` for user-collapsed default-expanded sections;
+  `.is-expanded` for user-expanded default-collapsed sections)
+  so the CSS can encode the correct visible state regardless of
+  which media query is active.
+- **Stats badge `.stats-chip-optional` class** — wraps the
+  high-quality / with-movement / possible-duplicates chips so
+  mobile CSS can hide them without losing them from the popover.
+- **`#brush-reset-view` button** in the brush header.
+- **5× `.rail-collapse-btn` + `.rail-chevron` + `.rail-body`**
+  wrappers on the Observatory rail sections. SVG count jumped
+  7 → 12.
+- **`tests/test_v090.py`** — 24 tests locking zoom state, view-
+  aware draw math, wheel/pan/dblclick bindings, `resetView`
+  method, feature detect, accordion handler, rail HTML, and
+  responsive CSS.
+
+### Changed
+
+- **`TimeBrush._draw`** iterates view range only. Bars outside
+  `[viewMinYear, viewMaxYear]` are skipped. Bar x-coords come
+  from `_viewTimeToPx(Date.UTC(b.year, 0, 1))` instead of a
+  hardcoded `(b.year - BRUSH_MIN_YEAR) / yearSpan` ratio, so
+  the math works at any zoom level. Ghost (unfiltered) +
+  foreground layers share a single `drawLayer()` closure.
+- **`TimeBrush._syncWindow`** clips the selection rectangle to
+  the current view range. When the window extends beyond the
+  view on one side, the rectangle gets `extends-left` /
+  `extends-right` classes. When entirely outside the view,
+  the rectangle hides (selection data preserved). The readout
+  label uses `_formatWindowLabel` for variable precision.
+- **`TimeBrush._drawAnnotations`** skips annotations outside
+  the current view. Key sighting markers (Roswell, Rendlesham,
+  Phoenix Lights, etc.) only render when their year is in view.
+- **Selection drag (`move`/`l`/`r` modes in `onPointerMove`)**
+  now uses `_viewSpan()` instead of `(this.maxT - this.minT)`
+  for the pixel-to-ms conversion. When zoomed in, dragging
+  100px moves the selection by 100 view-pixels of time, not
+  100 full-dataset-pixels. Users perceive this as "more
+  precise at narrow zoom", which is exactly what you want.
+- **`TimeBrush.reset()`** now also resets the zoom view so
+  "Reset" truly means "back to starting state".
+- **`mountObservatoryRail()`** calls `hydrateRailCollapsibles()`
+  after the existing population code so the rail sections
+  have working accordion handlers.
+- **`showStats()`** wraps derived-count chips in
+  `.stats-chip-optional` spans.
+- **Observatory rail HTML** — every `.rail-section`
+  (`rail-quality`, sources, shapes, visible, time window) gets
+  a `.rail-collapse-btn` header with SVG chevron, and its
+  content is wrapped in a `.rail-body` div.
+
+### Fixed
+
+- **`TimeBrush` 1900—2026 range was essentially unusable for
+  narrow windows.** Dragging a 6-pixel handle across a
+  ~1900-pixel canvas to isolate a 3-month window was visually
+  impossible. v0.9.0's scroll-wheel zoom + view-aware drag
+  precision makes sub-year window placement a non-issue.
+- **Site was desktop-only.** No `@media (max-width: ...)` rules
+  on the Observatory layout; on any viewport < 600px the 230px
+  rail squeezed the map to ~270px. Now has dual-trigger mobile
+  rules under both `body.is-touch` and
+  `@media (max-width: 700px)`.
+
 ## [0.8.8] — 2026-04-11 — Emotion cards client-side + methodology expansion
 
 Two tracks:

@@ -70,6 +70,25 @@ const EMOTION_NAMES = ["joy", "fear", "anger", "sadness", "surprise", "disgust",
 // Init
 // =========================================================================
 document.addEventListener("DOMContentLoaded", async () => {
+    // v0.9.0 — touch-primary feature detect. Adds body.is-touch when
+    // the device's primary input is a coarse pointer with no hover
+    // capability. More robust than width-based breakpoints for real
+    // phones, foldables, and iPads-in-landscape (wide viewport,
+    // coarse pointer). Desktop users resizing their browser narrow
+    // ALSO get the mobile layout via a parallel @media (max-width:
+    // 700px) rule in CSS, so both input classes are covered.
+    const _touchMQ = window.matchMedia("(hover: none) and (pointer: coarse)");
+    const applyTouchClass = () => {
+        document.body.classList.toggle("is-touch", _touchMQ.matches);
+    };
+    applyTouchClass();
+    if (_touchMQ.addEventListener) {
+        _touchMQ.addEventListener("change", applyTouchClass);
+    } else if (_touchMQ.addListener) {
+        // Older Safari/Edge fallback
+        _touchMQ.addListener(applyTouchClass);
+    }
+
     // Start the stats-badge boot sequence immediately so the user sees
     // something moving while /api/filters + /api/stats fetch in parallel.
     const _stopBadgeBoot = startStatsBadgeBoot();
@@ -667,19 +686,24 @@ function showStats(data) {
     const withMovStr = (typeof withMovement === "number" && withMovement > 0)
         ? withMovement.toLocaleString() : null;
 
-    // Compact badge — up to five chips separated by middle dots. The
-    // first three (total, mapped, duplicates) always render; the new
-    // "high quality" and "with movement" chips only render once the
-    // v0.8.2/v0.8.3b derived columns are populated. Everything over
-    // ~900px shows all visible chips inline; on narrower viewports
-    // the CSS truncates.
+    // Compact badge — up to five chips separated by middle dots.
+    // The first two (total, mapped) always render without the
+    // .stats-chip-optional class — they're the headline numbers.
+    // The derived chips (high-quality, with-movement) only render
+    // once the v0.8.2/v0.8.3b columns are populated, AND carry the
+    // .stats-chip-optional class so v0.9.0 CSS can hide them on
+    // narrow viewports. The popover still shows everything.
     const chips = [
         `${total} sightings`,
         `${mapped} mapped`,
     ];
-    if (highQStr) chips.push(`${highQStr} high quality`);
-    if (withMovStr) chips.push(`${withMovStr} with movement`);
-    chips.push(`${dupes} possible duplicates`);
+    if (highQStr) {
+        chips.push(`<span class="stats-chip-optional">${highQStr} high quality</span>`);
+    }
+    if (withMovStr) {
+        chips.push(`<span class="stats-chip-optional">${withMovStr} with movement</span>`);
+    }
+    chips.push(`<span class="stats-chip-optional">${dupes} possible duplicates</span>`);
     const sep = ` <span class="stats-sep">·</span> `;
     badge.innerHTML = chips.join(sep);
 
@@ -1885,6 +1909,51 @@ function mountObservatoryRail() {
     // v0.8.2 — mount the Data Quality rail. Safe to call multiple
     // times; idempotent by element id.
     mountQualityRail();
+
+    // v0.9.0 — wire accordion collapse buttons on the rail. Safe
+    // to call multiple times; bound buttons are marked with
+    // data-rail-wired="1" so re-mounts don't double-bind.
+    hydrateRailCollapsibles();
+}
+
+// v0.9.0 — rail accordion hydration. On desktop the buttons are
+// decorative (sections always expanded via CSS); on touch / narrow
+// viewports the click toggles the body visibility using two
+// complementary classes:
+//   .is-collapsed — user explicitly collapsed a
+//                   default-expanded section (only rail-quality)
+//   .is-expanded — user explicitly expanded a default-collapsed
+//                  section (everything except rail-quality)
+// The CSS :not() rules read both classes to figure out what
+// should be visible. This is simpler than tracking a single
+// is-user-toggled class because we don't need to know the
+// default state at read time.
+function hydrateRailCollapsibles() {
+    document.querySelectorAll(".rail-collapse-btn").forEach(btn => {
+        if (btn.dataset.railWired === "1") return;
+        btn.dataset.railWired = "1";
+        btn.addEventListener("click", () => {
+            const section = btn.closest(".rail-section");
+            if (!section) return;
+            // Only flip visual state on touch / narrow viewports.
+            // On desktop the click is effectively a no-op (sections
+            // stay expanded).
+            const isTouch = document.body.classList.contains("is-touch")
+                || window.matchMedia("(max-width: 700px)").matches;
+            if (!isTouch) return;
+            if (section.classList.contains("rail-quality")) {
+                // Default: expanded. Toggle collapse.
+                section.classList.toggle("is-collapsed");
+                btn.setAttribute("aria-expanded",
+                    section.classList.contains("is-collapsed") ? "false" : "true");
+            } else {
+                // Default: collapsed. Toggle expand.
+                section.classList.toggle("is-expanded");
+                btn.setAttribute("aria-expanded",
+                    section.classList.contains("is-expanded") ? "true" : "false");
+            }
+        });
+    });
 }
 
 // v0.8.2 — Data Quality rail with "High quality only", "Hide likely
@@ -2230,6 +2299,23 @@ class TimeBrush {
         // Default window covers the entire range so nothing's filtered
         // until the user drags.
         this.window = [this.minT, this.maxT];
+
+        // v0.9.0 — zoom state. viewMinT/viewMaxT is the currently
+        // VISIBLE time range (what the histogram bars span). Starts
+        // at the full dataset range and shrinks on wheel zoom.
+        // ORTHOGONAL to this.window[0]/[1] which is the PLAYBACK
+        // SELECTION. A user can zoom in to place a narrow window
+        // precisely, then zoom back out — the window stays put and
+        // Play still runs the same selection.
+        //
+        // Invariant: minT <= viewMinT < viewMaxT <= maxT
+        this.viewMinT = this.minT;
+        this.viewMaxT = this.maxT;
+        // Minimum view span — 7 days of real time. Prevents zooming
+        // in past sub-week precision where the year-binned data
+        // would collapse into a solid wall of bars.
+        this._minViewSpanMs = 7 * 86400000;
+
         this.bins = null;
         // v0.8.6: filtered overlay bins set by retally() after
         // applyClientFilters. When non-null, _draw() prefers this
@@ -2315,6 +2401,7 @@ class TimeBrush {
         this._draw();
         this._drawAnnotations();
         this._syncWindow();
+        this._updateResetViewBtn();
     }
 
     // /api/timeline's default shape groups by year across sources. For
@@ -2370,37 +2457,46 @@ class TimeBrush {
             return;
         }
 
-        const yearSpan = BRUSH_MAX_YEAR - BRUSH_MIN_YEAR;
-        // Scale against the unfiltered max so filtered bars shrink
-        // visibly rather than renormalising to fill the pane.
+        // v0.9.0 — iterate only bins whose year falls in the current
+        // view range (viewMinT..viewMaxT). Bars outside the view are
+        // skipped entirely. The view IS the visible histogram, so
+        // zoom levels narrower than a decade still show bars at the
+        // correct x-positions.
+        const viewMinYear = new Date(this.viewMinT).getUTCFullYear();
+        const viewMaxYear = new Date(this.viewMaxT).getUTCFullYear();
+
+        // Scale against the in-view unfiltered max so filtered bars
+        // shrink visibly rather than renormalising to fill the pane.
         let max = 1;
         const scaleBins = this.bins || fgBins;
-        for (const b of scaleBins) if (b.count > max) max = b.count;
+        for (const b of scaleBins) {
+            if (b.year < viewMinYear || b.year > viewMaxYear) continue;
+            if (b.count > max) max = b.count;
+        }
 
-        const barW = Math.max(1, w / yearSpan);
+        // Bar width = canvas width / visible years. Minimum 1 px so
+        // extreme zoom-out still renders something.
+        const visibleYears = Math.max(1, viewMaxYear - viewMinYear + 1);
+        const barW = Math.max(1, w / visibleYears);
 
-        // Ghost (unfiltered) layer
-        if (ghostBins) {
-            ctx.fillStyle = accentDim;
-            ctx.globalAlpha = 0.25;
-            for (const b of ghostBins) {
-                if (b.year < BRUSH_MIN_YEAR || b.year > BRUSH_MAX_YEAR) continue;
-                const x = ((b.year - BRUSH_MIN_YEAR) / yearSpan) * w;
+        // Shared draw routine for ghost + foreground layers. Each
+        // bar's x-coord is computed via _viewTimeToPx so the math
+        // respects the current zoom level.
+        const drawLayer = (bins, alpha, fill) => {
+            if (!bins) return;
+            ctx.fillStyle = fill;
+            ctx.globalAlpha = alpha;
+            for (const b of bins) {
+                if (b.year < viewMinYear || b.year > viewMaxYear) continue;
+                const tMs = Date.UTC(b.year, 0, 1);
+                const x = this._viewTimeToPx(tMs);
                 const hBar = (b.count / max) * (h - 14);
                 ctx.fillRect(x, h - hBar - 2, Math.max(0.6, barW - 0.4), hBar);
             }
-        }
-
-        // Foreground (filtered or full) layer
-        ctx.fillStyle = accent;
-        ctx.globalAlpha = 0.85;
-        for (const b of fgBins) {
-            if (b.year < BRUSH_MIN_YEAR || b.year > BRUSH_MAX_YEAR) continue;
-            const x = ((b.year - BRUSH_MIN_YEAR) / yearSpan) * w;
-            const hBar = (b.count / max) * (h - 14);
-            ctx.fillRect(x, h - hBar - 2, Math.max(0.6, barW - 0.4), hBar);
-        }
-        ctx.globalAlpha = 1;
+            ctx.globalAlpha = 1;
+        };
+        drawLayer(ghostBins, 0.25, accentDim);
+        drawLayer(fgBins, 0.85, accent);
 
         // Baseline
         ctx.strokeStyle = line;
@@ -2422,10 +2518,18 @@ class TimeBrush {
     _drawAnnotations() {
         if (!this.annEl || !this.annotations) return;
         this.annEl.innerHTML = "";
-        const yearSpan = BRUSH_MAX_YEAR - BRUSH_MIN_YEAR;
+        // v0.9.0 — annotations are positioned as percent across the
+        // current VIEW range, not the full dataset. Annotations
+        // outside the view are skipped entirely.
+        const viewL = this.viewMinT;
+        const viewR = this.viewMaxT;
+        const vSpan = viewR - viewL;
+        if (vSpan <= 0) return;
         for (const a of this.annotations) {
             if (!a.year) continue;
-            const x = ((a.year - BRUSH_MIN_YEAR) / yearSpan) * 100; // percent
+            const tMs = Date.UTC(a.year, 0, 1);
+            if (tMs < viewL || tMs > viewR) continue;
+            const x = ((tMs - viewL) / vSpan) * 100;
             const line = document.createElement("div");
             line.className = "brush-ann";
             line.style.left = x + "%";
@@ -2441,31 +2545,87 @@ class TimeBrush {
 
     _syncWindow() {
         if (!this.windowEl || !this.w) return;
-        const span = this.maxT - this.minT;
-        const leftPct = ((this.window[0] - this.minT) / span) * 100;
-        const rightPct = ((this.window[1] - this.minT) / span) * 100;
-        this.windowEl.style.left = leftPct + "%";
-        this.windowEl.style.width = (rightPct - leftPct) + "%";
-        // Update readout
-        const y0 = new Date(this.window[0]).getUTCFullYear();
-        const y1 = new Date(this.window[1]).getUTCFullYear();
+        // v0.9.0 — clip the selection rectangle to the current view.
+        // If the window extends beyond the view on either side, add
+        // extends-left/extends-right classes so CSS can render a
+        // visual cue. If the window is entirely outside the view,
+        // hide the rectangle (the selection data is preserved, just
+        // not visible until the user pans or zooms out).
+        const viewL = this.viewMinT;
+        const viewR = this.viewMaxT;
+        const vSpan = viewR - viewL;
+        if (vSpan <= 0) return;
+        const winL = this.window[0];
+        const winR = this.window[1];
+
+        const clippedL = Math.max(winL, viewL);
+        const clippedR = Math.min(winR, viewR);
+
+        if (clippedR <= viewL || clippedL >= viewR) {
+            this.windowEl.style.display = "none";
+        } else {
+            this.windowEl.style.display = "";
+            const leftPct = ((clippedL - viewL) / vSpan) * 100;
+            const rightPct = ((clippedR - viewL) / vSpan) * 100;
+            this.windowEl.style.left = leftPct + "%";
+            this.windowEl.style.width = (rightPct - leftPct) + "%";
+            this.windowEl.classList.toggle("extends-left", winL < viewL);
+            this.windowEl.classList.toggle("extends-right", winR > viewR);
+        }
+
+        // Readout uses ACTUAL window bounds, not clipped ones. The
+        // user should always see the real selection values even if
+        // they've zoomed past them.
+        const text = this._formatWindowLabel(new Date(winL), new Date(winR));
         const rangeLabel = document.getElementById("brush-range-label");
         const railLabel = document.getElementById("rail-time-label");
-        const text = `${y0} — ${y1}`;
         if (rangeLabel) rangeLabel.textContent = text;
         if (railLabel) railLabel.textContent = text;
     }
 
+    // v0.9.0 — format the selection-window readout based on its
+    // span. Wide windows show year-only; medium show year-month;
+    // narrow (< ~40 days) show year-month-day. Tells the user
+    // visually when their selection has sub-year precision.
+    _formatWindowLabel(d0, d1) {
+        const spanDays = (d1 - d0) / 86400000;
+        const pad = (n) => String(n).padStart(2, "0");
+        if (spanDays > 365 * 2) {
+            return `${d0.getUTCFullYear()} — ${d1.getUTCFullYear()}`;
+        }
+        if (spanDays > 40) {
+            return `${d0.getUTCFullYear()}-${pad(d0.getUTCMonth() + 1)} — ${d1.getUTCFullYear()}-${pad(d1.getUTCMonth() + 1)}`;
+        }
+        return `${d0.getUTCFullYear()}-${pad(d0.getUTCMonth() + 1)}-${pad(d0.getUTCDate())} — ${d1.getUTCFullYear()}-${pad(d1.getUTCMonth() + 1)}-${pad(d1.getUTCDate())}`;
+    }
+
+    // v0.9.0 — px coordinate <-> ms in the CURRENT VIEW (not the
+    // full dataset range). All drawing and event math routes
+    // through these helpers so zoom is honoured uniformly.
+    _viewSpan() {
+        return this.viewMaxT - this.viewMinT;
+    }
+    _pxToViewTime(px) {
+        return this.viewMinT + (px / this.w) * this._viewSpan();
+    }
+    _viewTimeToPx(t) {
+        return ((t - this.viewMinT) / this._viewSpan()) * this.w;
+    }
+    // Legacy alias kept so existing callers don't break during the
+    // v0.9.0 cutover. Prefer _pxToViewTime in new code.
     _pxToTime(px) {
-        const span = this.maxT - this.minT;
-        return this.minT + (px / this.w) * span;
+        return this._pxToViewTime(px);
     }
 
     _bindEvents() {
         if (!this.windowEl || !this.canvas) return;
 
         const wrap = this.canvas.parentElement;
-        let dragging = null;  // { mode: "move" | "l" | "r", startX, startL, startR }
+        // v0.9.0: dragging modes are now:
+        //   "move" — selection window drag (existing)
+        //   "l" / "r" — selection handle drag (existing)
+        //   "pan" — NEW: view pan (click empty canvas, drag)
+        let dragging = null;
 
         const onPointerDown = (e) => {
             if (e.target.classList.contains("brush-handle")) {
@@ -2491,23 +2651,68 @@ class TimeBrush {
                 e.preventDefault();
                 return;
             }
+            // v0.9.0 — click on the canvas itself (or the wrap)
+            // initiates view pan. Distinguished from selection-drag
+            // by target — the selection window has pointer-events
+            // on, so clicking it routes through the .windowEl branch
+            // above. Only empty canvas area falls through here.
+            if (e.target === this.canvas || e.target === wrap) {
+                dragging = {
+                    mode: "pan",
+                    startX: e.clientX,
+                    startViewL: this.viewMinT,
+                    startViewR: this.viewMaxT,
+                };
+                wrap.classList.add("panning");
+                e.preventDefault();
+                return;
+            }
         };
 
         // v0.8.6: split drag handlers. During drag we only update
-        // the visual window position — no filter pipeline, no debounced
-        // onChange, no deck.gl setProps. On pointerup we commit once
-        // via the RAW (un-debounced) callback so the map updates
-        // within one frame of release.
+        // the visual window position — no filter pipeline, no
+        // debounced onChange, no deck.gl setProps. On pointerup we
+        // commit once via the RAW (un-debounced) callback so the
+        // map updates within one frame of release.
         //
-        // Prior behaviour queued a debounced onChange on EVERY
-        // pointermove, which meant a 300ms dead zone at the start
-        // of each drag plus cascading setProps calls if the user
-        // held the pointer down and swept quickly.
+        // v0.9.0: the selection-drag math now uses this._viewSpan()
+        // instead of (this.maxT - this.minT) so a 100px drag moves
+        // the selection by 100/w*viewSpan ms, not
+        // 100/w*fullSpan ms. When zoomed in, this means selection
+        // dragging feels proportionally precise.
         const onPointerMove = (e) => {
             if (!dragging) return;
             const wrapRect = wrap.getBoundingClientRect();
             const dx = e.clientX - dragging.startX;
-            const span = this.maxT - this.minT;
+
+            // v0.9.0 pan mode: translate the view range by the drag
+            // distance, clamped to the dataset bounds.
+            if (dragging.mode === "pan") {
+                const vSpan = dragging.startViewR - dragging.startViewL;
+                // Drag-right → view moves left (time slides right
+                // under the cursor), same feel as grabbing a map.
+                const dtMs = -(dx / wrapRect.width) * vSpan;
+                let newL = dragging.startViewL + dtMs;
+                let newR = dragging.startViewR + dtMs;
+                if (newL < this.minT) {
+                    const over = this.minT - newL;
+                    newL += over; newR += over;
+                }
+                if (newR > this.maxT) {
+                    const over = newR - this.maxT;
+                    newL -= over; newR -= over;
+                }
+                this.viewMinT = newL;
+                this.viewMaxT = newR;
+                this._draw();
+                this._drawAnnotations();
+                this._syncWindow();
+                return;
+            }
+
+            // Selection drag (move / l / r) — dt now scales with
+            // view span, not full span.
+            const span = this._viewSpan();
             const dt = (dx / wrapRect.width) * span;
 
             let newL = dragging.startL;
@@ -2515,7 +2720,10 @@ class TimeBrush {
             if (dragging.mode === "move") {
                 newL = dragging.startL + dt;
                 newR = dragging.startR + dt;
-                // Clamp within bounds
+                // Clamp within dataset bounds (not view bounds — the
+                // user can drag the selection outside the current
+                // view, which then gets clipped visually by
+                // _syncWindow).
                 if (newL < this.minT) { newR += (this.minT - newL); newL = this.minT; }
                 if (newR > this.maxT) { newL -= (newR - this.maxT); newR = this.maxT; }
             } else if (dragging.mode === "l") {
@@ -2532,21 +2740,64 @@ class TimeBrush {
         const onPointerUp = () => {
             if (!dragging) return;
             const wasDragging = dragging;
+            const wasPan = wasDragging.mode === "pan";
             dragging = null;
             this.windowEl.classList.remove("dragging");
-            // v0.8.6: commit the final window directly, bypassing the
-            // debounce. Also cancel any stale debounced call so we don't
-            // re-apply the mid-drag window 300 ms later.
+            wrap.classList.remove("panning");
+            // v0.9.0 — pan mode doesn't modify the selection, so
+            // skip the onChange commit in that case. The
+            // _updateResetViewBtn call keeps the reset button in
+            // sync.
+            if (wasPan) {
+                this._updateResetViewBtn();
+                return;
+            }
+            // v0.8.6: commit the final window directly, bypassing
+            // the debounce. Also cancel any stale debounced call
+            // so we don't re-apply the mid-drag window 300ms later.
             this.onChange.cancel?.();
             const [L, R] = this.window;
-            if (this._onChangeRaw && wasDragging) {
+            if (this._onChangeRaw) {
                 this._onChangeRaw(this._isoDate(L), this._isoDate(R));
             }
+        };
+
+        // v0.9.0 — scroll wheel zoom. Classic Google Maps pattern:
+        // the time value under the cursor stays stationary while
+        // the view shrinks (zoom in) or grows (zoom out) around it.
+        const onWheel = (e) => {
+            e.preventDefault();
+            const wrapRect = wrap.getBoundingClientRect();
+            const mouseX = e.clientX - wrapRect.left;
+            const cursorMs = this._pxToViewTime(mouseX);
+            const factor = e.deltaY < 0 ? 0.8 : 1.25;
+            const newL = cursorMs - (cursorMs - this.viewMinT) * factor;
+            const newR = cursorMs + (this.viewMaxT - cursorMs) * factor;
+            let clampedL = Math.max(this.minT, newL);
+            let clampedR = Math.min(this.maxT, newR);
+            // Enforce minimum view span. At max zoom-in, re-center
+            // on the cursor without further shrinking.
+            if (clampedR - clampedL < this._minViewSpanMs) {
+                const half = this._minViewSpanMs / 2;
+                clampedL = Math.max(this.minT, cursorMs - half);
+                clampedR = Math.min(this.maxT, clampedL + this._minViewSpanMs);
+            }
+            this.viewMinT = clampedL;
+            this.viewMaxT = clampedR;
+            this._draw();
+            this._drawAnnotations();
+            this._syncWindow();
+            this._updateResetViewBtn();
         };
 
         wrap.addEventListener("pointerdown", onPointerDown);
         window.addEventListener("pointermove", onPointerMove);
         window.addEventListener("pointerup", onPointerUp);
+        wrap.addEventListener("wheel", onWheel, { passive: false });
+
+        // v0.9.0 — double-click on the canvas resets the view to
+        // the full range. Classic "zoom out to fit" pattern.
+        this.canvas.addEventListener("dblclick", () => this.resetView());
 
         // Resize observer so the histogram redraws on viewport changes.
         const ro = new ResizeObserver(() => {
@@ -2556,11 +2807,34 @@ class TimeBrush {
         });
         ro.observe(this.canvas);
 
-        // Play / reset buttons
+        // Play / reset / reset-view buttons
         const playBtn = document.getElementById("brush-play");
         const resetBtn = document.getElementById("brush-reset");
+        const resetViewBtn = document.getElementById("brush-reset-view");
         if (playBtn) playBtn.addEventListener("click", () => this.togglePlay());
         if (resetBtn) resetBtn.addEventListener("click", () => this.reset());
+        if (resetViewBtn) resetViewBtn.addEventListener("click", () => this.resetView());
+    }
+
+    // v0.9.0 — restore the full-range view (full dataset bounds).
+    // Called by the Reset View button, dblclick on the canvas, and
+    // reset() (which also clears the selection window).
+    resetView() {
+        this.viewMinT = this.minT;
+        this.viewMaxT = this.maxT;
+        this._draw();
+        this._drawAnnotations();
+        this._syncWindow();
+        this._updateResetViewBtn();
+    }
+
+    // Show/hide the Reset View button based on whether we're zoomed.
+    _updateResetViewBtn() {
+        const btn = document.getElementById("brush-reset-view");
+        if (!btn) return;
+        const fullSpan = this.maxT - this.minT;
+        const vSpan = this._viewSpan();
+        btn.hidden = (vSpan >= fullSpan * 0.98);
     }
 
     _isoDate(ms) {
@@ -2687,7 +2961,15 @@ class TimeBrush {
         if (this.playing) this.togglePlay();
         this.window = [this.minT, this.maxT];
         this._cumulativeLeft = null;
+        // v0.9.0 — also reset the zoom view so "Reset" is truly
+        // "back to the starting state", not just "selection cleared
+        // but still zoomed in".
+        this.viewMinT = this.minT;
+        this.viewMaxT = this.maxT;
+        this._draw();
+        this._drawAnnotations();
         this._syncWindow();
+        this._updateResetViewBtn();
         // v0.8.1 — clear any active time window on the GPU path so
         // points from every year come back immediately, not after
         // the 300 ms debounce on onChange.

@@ -69,14 +69,18 @@ def test_index_html_has_expected_svg_count():
 
     v0.8.6: dropped from 10 → 7 because the Search panel's CSV /
     JSON download buttons and the Copy-link button were deleted.
+    v0.9.0: jumped 7 → 12 because the Observatory rail gained 5
+    new SVG chevrons (one per .rail-section) for the mobile
+    accordion affordance.
     Remaining: settings gear, Ask AI, Connect, Near me, AI empty UFO,
-    chat fab, chat popover UFO.
+    chat fab, chat popover UFO, 5× rail-chevron.
     """
     content = _read(INDEX_HTML)
-    assert len(_SVG_OPEN_RE.findall(content)) == 7, (
-        "Expected 7 inline SVGs in index.html (settings gear, Ask AI, "
-        "Connect, Near me, AI empty UFO, chat fab, chat popover UFO). "
-        "If this changed intentionally, update the expected count."
+    assert len(_SVG_OPEN_RE.findall(content)) == 12, (
+        "Expected 12 inline SVGs in index.html (settings gear, Ask AI, "
+        "Connect, Near me, AI empty UFO, chat fab, chat popover UFO, "
+        "and 5x rail-chevron added in v0.9.0). If this changed "
+        "intentionally, update the expected count."
     )
 
 

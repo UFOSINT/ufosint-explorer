@@ -3254,6 +3254,39 @@ select:focus {
     padding-bottom: var(--s-1);
     border-bottom: 1px solid var(--border);
 }
+/* v0.9.0 — rail collapse button. Visually identical to .rail-label
+   on desktop (sections always expanded; button is decorative). On
+   touch / narrow viewports the chevron appears and clicking
+   toggles the body visibility. */
+.rail-collapse-btn {
+    all: unset;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: var(--s-1);
+    border-bottom: 1px solid var(--border);
+    font-size: 9px;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    cursor: default;
+    box-sizing: border-box;
+}
+.rail-collapse-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+.rail-chevron {
+    display: none;  /* hidden on desktop — sections always expanded */
+    transition: transform 150ms ease;
+    opacity: 0.6;
+    color: var(--text-muted);
+}
+.rail-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+}
 .rail-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
 .rail-list li {
     display: flex;
@@ -3291,6 +3324,138 @@ select:focus {
     font-variant-numeric: tabular-nums;
     letter-spacing: 0.02em;
 }
+
+/* v0.9.0 — Mobile / touch layout for the Observatory.
+
+   Two parallel triggers:
+   (1) body.is-touch from matchMedia feature detect — catches real
+       phones, foldables, iPads-in-landscape (wide viewport, coarse
+       pointer).
+   (2) @media (max-width: 700px) — catches desktop users resizing
+       their browser window narrow.
+
+   The rules are duplicated across the two triggers because CSS
+   can't OR a class selector with a media query in the same rule.
+   Edit both branches when changing mobile behaviour. */
+
+@media (max-width: 700px) {
+    .observatory-stage {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto 1fr;
+    }
+    .observatory-rail {
+        max-height: 55vh;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+        padding: var(--s-3);
+        gap: var(--s-3);
+    }
+    .rail-chevron { display: block; cursor: pointer; }
+    .rail-collapse-btn { cursor: pointer; }
+    .rail-collapse-btn:hover { color: var(--text-strong); }
+    /* Default: everything except Data Quality starts collapsed. */
+    .rail-section:not(.rail-quality):not(.is-expanded) .rail-body {
+        display: none;
+    }
+    .rail-section:not(.rail-quality):not(.is-expanded) .rail-chevron {
+        transform: rotate(-90deg);
+    }
+    /* Explicit user-toggled expand beats the default-collapsed
+       rule (selector specificity equal; order wins). */
+    .rail-section.is-expanded .rail-body { display: flex; }
+    .rail-section.is-expanded .rail-chevron { transform: rotate(0); }
+    /* Rail Quality is default-expanded; user-toggled collapse. */
+    .rail-section.rail-quality.is-collapsed .rail-body { display: none; }
+    .rail-section.rail-quality.is-collapsed .rail-chevron {
+        transform: rotate(-90deg);
+    }
+}
+
+body.is-touch .observatory-stage {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+}
+body.is-touch .observatory-rail {
+    max-height: 55vh;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+}
+body.is-touch .rail-chevron { display: block; cursor: pointer; }
+body.is-touch .rail-collapse-btn { cursor: pointer; }
+body.is-touch .rail-collapse-btn:hover { color: var(--text-strong); }
+body.is-touch .rail-section:not(.rail-quality):not(.is-expanded) .rail-body {
+    display: none;
+}
+body.is-touch .rail-section:not(.rail-quality):not(.is-expanded) .rail-chevron {
+    transform: rotate(-90deg);
+}
+body.is-touch .rail-section.is-expanded .rail-body { display: flex; }
+body.is-touch .rail-section.is-expanded .rail-chevron { transform: rotate(0); }
+body.is-touch .rail-section.rail-quality.is-collapsed .rail-body { display: none; }
+body.is-touch .rail-section.rail-quality.is-collapsed .rail-chevron {
+    transform: rotate(-90deg);
+}
+
+/* v0.9.0 — Responsive polish for the filter bar, stats badge,
+   movement cluster, and timeline brush. Same dual-trigger pattern
+   as the Observatory rail: @media (max-width: 700px) for narrow
+   viewports + body.is-touch for coarse-pointer devices. */
+
+@media (max-width: 700px) {
+    #filters-bar {
+        padding: var(--s-2) var(--s-3);
+        gap: var(--s-2);
+    }
+    .filter-group { flex: 1 1 45%; min-width: 140px; }
+    .filter-group-date { flex: 1 1 100%; }
+    .filter-movement-row {
+        padding: 6px 12px;
+        overflow-x: auto;
+        scrollbar-width: none;
+        -webkit-overflow-scrolling: touch;
+    }
+    .filter-movement-row::-webkit-scrollbar { display: none; }
+    .movement-cluster { flex-wrap: nowrap; }
+
+    .stats-badge { font-size: 10px; line-height: 1.5; }
+    .stats-badge .stats-chip-optional { display: none; }
+
+    .observatory-time-brush { height: 105px; }
+    .brush-handle { width: 14px; }
+}
+
+@media (max-width: 500px) {
+    .tabs-nav, .tabs {
+        overflow-x: auto;
+        scrollbar-width: none;
+        -webkit-overflow-scrolling: touch;
+    }
+    .tabs-nav::-webkit-scrollbar,
+    .tabs::-webkit-scrollbar { display: none; }
+}
+
+body.is-touch .observatory-time-brush { height: 115px; }
+body.is-touch .brush-handle {
+    width: 14px;
+    position: relative;
+}
+/* Expand the hit area without changing the visual — a
+   pseudo-element stretches beyond the visible handle so taps
+   near-but-not-exactly-on-it still register. */
+body.is-touch .brush-handle::before {
+    content: "";
+    position: absolute;
+    inset: -12px -8px;
+}
+body.is-touch .stats-badge .stats-chip-optional { display: none; }
+body.is-touch .filter-movement-row {
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+}
+body.is-touch .filter-movement-row::-webkit-scrollbar { display: none; }
+body.is-touch .movement-cluster { flex-wrap: nowrap; }
+
 
 /* v0.8.2 — Data Quality rail. Each toggle has a primary label and a
    small sub-label with the threshold / description. Disabled toggles
