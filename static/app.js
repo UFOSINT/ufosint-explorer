@@ -862,6 +862,15 @@ async function applyFilters() {
     // brush drag commit, and the Reset link). The btn-apply-filters
     // element no longer exists in the DOM, so the disableButtonWhile-
     // Pending call gracefully no-ops (returns a no-op restore).
+    //
+    // Clear any tab-local cross-filter when a global filter changes.
+    // The cross-filter was computed against the OLD visibleIdx; the
+    // new filter state makes it stale. The user can re-apply it
+    // after the global filter settles.
+    if (state.crossFilter) {
+        state.crossFilter = null;
+        _renderCrossFilterChips();
+    }
     const applyBtn = document.getElementById("btn-apply-filters");
     const restore = disableButtonWhilePending(applyBtn, "Applying…");
     try {
@@ -3699,13 +3708,187 @@ async function loadTimeline() {
     refreshTimelineCards();
 }
 
+// =================================================================
+// v0.10.0 — Cross-filtering infrastructure
+// =================================================================
+// Shared state for both Timeline and Insights tabs. A cross-filter
+// is a LOCAL drill-down within the current visible set — it doesn't
+// modify the top filter bar or the Observatory map. Clicking a bar
+// segment on any chart sets a cross-filter; clicking it again or
+// clicking the x chip clears it.
+//
+// Cross-filter state:
+//   state.crossFilter = null | { dim, value, tab }
+//
+// dim = "year" | "source" | "shape" | "emotion" | "movement" | "quality" | "color"
+// value = the clicked value (string for categorical, number for year)
+// tab = "timeline" | "insights" (which tab owns this cross-filter)
+//
+// When a cross-filter is active, the chart renderers further filter
+// POINTS.visibleIdx to only rows matching the cross-filter. This
+// is done via _applyCrossFilter() which returns a sub-array of
+// visibleIdx. The cross-filtered sub-array is passed to each
+// renderer's data computation.
+
+// Apply the current cross-filter to POINTS.visibleIdx and return
+// the sub-set. Returns visibleIdx unchanged when no cross-filter
+// is active. This is the single entry point for cross-filtering
+// on both tabs.
+function _getCrossFilteredIndices() {
+    const P = window.UFODeck?.POINTS;
+    if (!P || !P.ready) return null;
+    const iter = P.visibleIdx;
+    if (!iter) return null;
+    const cf = state.crossFilter;
+    if (!cf) return iter;  // no cross-filter active
+
+    // Walk visibleIdx and keep only rows matching the cross-filter.
+    const out = new Uint32Array(iter.length);
+    let j = 0;
+    const dim = cf.dim;
+    const val = cf.value;
+
+    if (dim === "year") {
+        const dd = P.dateDays;
+        const targetYear = Number(val);
+        for (let k = 0; k < iter.length; k++) {
+            const i = iter[k];
+            const d = dd[i];
+            if (d === 0) continue;
+            const year = new Date(Date.UTC(1900, 0, 1) + d * 86400000).getUTCFullYear();
+            if (year === targetYear) out[j++] = i;
+        }
+    } else if (dim === "source") {
+        const si = P.sourceIdx;
+        const sources = P.sources || [];
+        const targetIdx = sources.indexOf(val);
+        if (targetIdx < 0) return iter;  // unknown source → no filter
+        for (let k = 0; k < iter.length; k++) {
+            if (si[iter[k]] === targetIdx) out[j++] = iter[k];
+        }
+    } else if (dim === "shape") {
+        const sh = P.shapeIdx;
+        const shapes = P.shapes || [];
+        const targetIdx = shapes.indexOf(val);
+        if (targetIdx < 0) return iter;
+        for (let k = 0; k < iter.length; k++) {
+            if (sh[iter[k]] === targetIdx) out[j++] = iter[k];
+        }
+    } else if (dim === "emotion") {
+        const ei = P.emotionIdx;
+        const emotions = P.emotions || [];
+        const targetIdx = emotions.indexOf(val);
+        if (targetIdx < 0) return iter;
+        for (let k = 0; k < iter.length; k++) {
+            if (ei[iter[k]] === targetIdx) out[j++] = iter[k];
+        }
+    } else if (dim === "color") {
+        const ci = P.colorIdx;
+        const colors = P.colors || [];
+        const targetIdx = colors.indexOf(val);
+        if (targetIdx < 0) return iter;
+        for (let k = 0; k < iter.length; k++) {
+            if (ci[iter[k]] === targetIdx) out[j++] = iter[k];
+        }
+    } else if (dim === "movement") {
+        const mf = P.movementFlags;
+        const movements = P.movements || [];
+        const bit = movements.indexOf(val);
+        if (bit < 0) return iter;
+        const mask = 1 << bit;
+        for (let k = 0; k < iter.length; k++) {
+            if (mf[iter[k]] & mask) out[j++] = iter[k];
+        }
+    } else if (dim === "quality") {
+        // Quality bucket label is "0-9", "10-19", ..., "90-100".
+        // Parse the lower bound from the label and filter to rows
+        // whose quality_score falls in [lo, lo+9]. The 255 sentinel
+        // (unknown) is excluded.
+        const qs = P.qualityScore;
+        const lo = parseInt(String(val), 10);
+        if (isNaN(lo)) return iter;
+        const hi = lo + 9;
+        for (let k = 0; k < iter.length; k++) {
+            const q = qs[iter[k]];
+            if (q !== 255 && q >= lo && q <= hi) out[j++] = iter[k];
+        }
+    }
+    return out.subarray(0, j);
+}
+
+// Set or clear a cross-filter and refresh the active tab.
+function setCrossFilter(dim, value, tab) {
+    // Toggle: clicking the same bar again clears the filter.
+    if (state.crossFilter &&
+        state.crossFilter.dim === dim &&
+        state.crossFilter.value === value) {
+        state.crossFilter = null;
+    } else {
+        state.crossFilter = { dim, value, tab };
+    }
+    _renderCrossFilterChips();
+    if (tab === "timeline") refreshTimelineCards();
+    else if (tab === "insights") {
+        refreshInsightsClientCards();
+    }
+}
+
+function clearCrossFilter() {
+    if (!state.crossFilter) return;
+    const tab = state.crossFilter.tab;
+    state.crossFilter = null;
+    _renderCrossFilterChips();
+    if (tab === "timeline") refreshTimelineCards();
+    else if (tab === "insights") refreshInsightsClientCards();
+}
+
+// Render the "Filtered by: X x" chip bar at the top of the active
+// tab. Appends to #timeline-filter-chips or #insights-filter-chips.
+function _renderCrossFilterChips() {
+    for (const id of ["timeline-filter-chips", "insights-filter-chips"]) {
+        const el = document.getElementById(id);
+        if (!el) continue;
+        if (!state.crossFilter) {
+            el.innerHTML = "";
+            el.hidden = true;
+            continue;
+        }
+        const cf = state.crossFilter;
+        el.hidden = false;
+        el.innerHTML = `
+            <span class="cross-filter-chip">
+                Filtered by: <strong>${escapeHtml(String(cf.value))}</strong>
+                <button class="cross-filter-clear" type="button"
+                        title="Clear cross-filter"
+                        onclick="clearCrossFilter()">&times;</button>
+            </span>
+        `;
+    }
+}
+window.clearCrossFilter = clearCrossFilter;
+
 function refreshTimelineCards() {
     if (!window.UFODeck || !window.UFODeck.POINTS || !window.UFODeck.POINTS.ready) return;
 
+    // v0.10.0: if a cross-filter is active on the Timeline tab,
+    // temporarily swap POINTS.visibleIdx to the cross-filtered
+    // sub-set so the deck.js aggregate helpers read the right
+    // data. Restore after rendering.
+    const P = window.UFODeck.POINTS;
+    const origIdx = P.visibleIdx;
+    const cf = state.crossFilter;
+    if (cf && cf.tab === "timeline") {
+        P.visibleIdx = _getCrossFilteredIndices();
+    }
+
     const stacked = window.UFODeck.getYearHistogramBySource(true);
-    const quality = window.UFODeck.computeMedianByYear(window.UFODeck.POINTS.qualityScore);
+    const quality = window.UFODeck.computeMedianByYear(P.qualityScore);
     const movement = window.UFODeck.computeMovementShareByYear();
-    const visible = window.UFODeck.countVisible();
+    const visible = P.visibleIdx ? P.visibleIdx.length : P.count;
+
+    // Restore original visibleIdx so the Observatory map isn't
+    // affected by the cross-filter.
+    P.visibleIdx = origIdx;
 
     renderTimelineMainChart(stacked);
     renderTimelineQualityChart(quality);
@@ -3770,7 +3953,7 @@ function renderTimelineMainChart(stacked) {
                     callbacks: {
                         footer: (items) => {
                             const total = items.reduce((s, i) => s + i.parsed.y, 0);
-                            return `Total: ${total.toLocaleString()}`;
+                            return `Total: ${total.toLocaleString()}\nClick to filter`;
                         },
                     },
                 },
@@ -3778,6 +3961,19 @@ function renderTimelineMainChart(stacked) {
             scales: {
                 x: { stacked: true, ticks: { maxTicksLimit: 16 } },
                 y: { stacked: true, beginAtZero: true },
+            },
+            // v0.10.0 — click a year bar → cross-filter the other
+            // two Timeline cards to that year. Click again to clear.
+            onClick: (_evt, elements) => {
+                if (!elements.length) return;
+                const idx = elements[0].index;
+                const year = labels[idx];
+                if (year != null) {
+                    setCrossFilter("year", year, "timeline");
+                }
+            },
+            onHover: (evt, elements) => {
+                evt.native.target.style.cursor = elements.length ? "pointer" : "";
             },
         },
     });
@@ -3992,12 +4188,40 @@ async function loadInsights() {
 // /api/sentiment/* endpoints. All 8 cards are now purely client-side.
 function refreshInsightsClientCards() {
     if (!window.UFODeck || !window.UFODeck.POINTS || !window.UFODeck.POINTS.ready) return;
+
+    // v0.10.0: if a cross-filter is active on the Insights tab,
+    // temporarily swap POINTS.visibleIdx to the cross-filtered
+    // sub-set so every renderer reads the right data. Restore
+    // after rendering so the Observatory map isn't affected.
+    const P = window.UFODeck.POINTS;
+    const origIdx = P.visibleIdx;
+    const cf = state.crossFilter;
+    if (cf && cf.tab === "insights") {
+        P.visibleIdx = _getCrossFilteredIndices();
+    }
+
     // v0.9.1 — compute coverage for each derived column over the
-    // current visible set BEFORE rendering any card. Every card
-    // gets a coverage strip at the bottom via
-    // _mountAllCoverageStrips() after all renderers run. Coverage
-    // drives the low-coverage greying-out too.
-    state.insightsCoverage = _computeInsightsCoverage(window.UFODeck.POINTS);
+    // (possibly cross-filtered) visible set.
+    state.insightsCoverage = _computeInsightsCoverage(P);
+
+    // v0.10.0: check the cross-filtered N. Science reviewer's
+    // guardrail: N < 30 → show a warning instead of rendering.
+    const cfN = P.visibleIdx ? P.visibleIdx.length : P.count;
+    if (cf && cf.tab === "insights" && cfN < 30) {
+        // Too few rows — show a warning in the chip bar and
+        // restore visibleIdx without rendering charts.
+        P.visibleIdx = origIdx;
+        _renderCrossFilterChips();
+        const chipsEl = document.getElementById("insights-filter-chips");
+        if (chipsEl) {
+            chipsEl.innerHTML += `
+                <span class="cross-filter-warning">
+                    Only ${cfN} sightings match — too few to chart reliably
+                </span>
+            `;
+        }
+        return;
+    }
 
     // v0.8.8 emotion cards (client-side)
     renderEmotionRadar();
@@ -4010,10 +4234,11 @@ function refreshInsightsClientCards() {
     renderShapeMovementMatrix();
     renderHoaxCurve();
 
+    // Restore original visibleIdx.
+    P.visibleIdx = origIdx;
+
     // v0.9.1 — mount coverage strips on all 8 client-side cards
-    // AFTER all Chart.js instances have rendered. This runs from a
-    // single place so the early-return-on-chart-update pattern in
-    // each renderer doesn't cause the strip to get skipped.
+    // AFTER all Chart.js instances have rendered.
     _mountAllCoverageStrips();
 }
 
@@ -4235,6 +4460,20 @@ function renderQualityDistribution() {
                 x: { title: { display: true, text: "Quality Score bucket" } },
                 y: { beginAtZero: true },
             },
+            // v0.10.0 — click a quality bucket → cross-filter.
+            // Science reviewer rated this the SAFEST filter source
+            // (100% coverage, no bias introduced).
+            onClick: (_evt, elements) => {
+                if (!elements.length) return;
+                const idx = elements[0].index;
+                const bucketLabel = labels[idx];
+                if (bucketLabel) {
+                    setCrossFilter("quality", bucketLabel, "insights");
+                }
+            },
+            onHover: (evt, elements) => {
+                evt.native.target.style.cursor = elements.length ? "pointer" : "";
+            },
         },
     });
 }
@@ -4306,6 +4545,18 @@ function renderMovementTaxonomy() {
             },
             scales: {
                 x: { beginAtZero: true },
+            },
+            // v0.10.0 — click a movement bar → cross-filter
+            onClick: (_evt, elements) => {
+                if (!elements.length) return;
+                const idx = elements[0].index;
+                const movName = labels[idx];
+                if (movName) {
+                    setCrossFilter("movement", movName.toLowerCase(), "insights");
+                }
+            },
+            onHover: (evt, elements) => {
+                evt.native.target.style.cursor = elements.length ? "pointer" : "";
             },
         },
     });
@@ -4800,6 +5051,18 @@ function renderEmotionBySource() {
                     ticks: { callback: (v) => v + "%" },
                 },
             },
+            // v0.10.0 — click a source bar → cross-filter
+            onClick: (_evt, elements) => {
+                if (!elements.length) return;
+                const idx = elements[0].index;
+                const srcName = labels[idx];
+                if (srcName) {
+                    setCrossFilter("source", srcName, "insights");
+                }
+            },
+            onHover: (evt, elements) => {
+                evt.native.target.style.cursor = elements.length ? "pointer" : "";
+            },
         },
     });
 }
@@ -4891,6 +5154,18 @@ function renderEmotionByShape() {
                     ticks: { callback: (v) => v + "%" },
                 },
                 y: { stacked: true },
+            },
+            // v0.10.0 — click a shape bar → cross-filter
+            onClick: (_evt, elements) => {
+                if (!elements.length) return;
+                const idx = elements[0].index;
+                const shapeName = labels[idx];
+                if (shapeName) {
+                    setCrossFilter("shape", shapeName, "insights");
+                }
+            },
+            onHover: (evt, elements) => {
+                evt.native.target.style.cursor = elements.length ? "pointer" : "";
             },
         },
     });

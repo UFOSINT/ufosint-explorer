@@ -3049,6 +3049,49 @@ select:focus {
 /* v0.10.0 — Reset link replaces the old Apply + Clear buttons.
    Subtle underlined link, not a button, so it doesn't compete
    visually with the filter dropdowns. */
+/* v0.10.0 — Cross-filter chip bar. Sits at the top of the
+   Timeline and Insights tabs showing "Filtered by: X ✕" when
+   a cross-filter is active. */
+.cross-filter-chips {
+    padding: 8px 16px;
+    background: color-mix(in oklab, var(--bg-panel) 85%, var(--accent) 15%);
+    border-bottom: 1px solid var(--accent);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+.cross-filter-chips[hidden] { display: none; }
+.cross-filter-chip {
+    font-size: 12px;
+    color: var(--fg);
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px;
+    background: var(--bg-card);
+    border: 1px solid var(--accent);
+    border-radius: 999px;
+}
+.cross-filter-chip strong {
+    color: var(--accent);
+}
+.cross-filter-clear {
+    background: none;
+    border: none;
+    color: var(--fg-dim);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 0 2px;
+    line-height: 1;
+}
+.cross-filter-clear:hover { color: var(--accent); }
+.cross-filter-warning {
+    font-size: 11px;
+    color: #e15759;
+    font-weight: 600;
+}
+
 .filter-reset-link {
     font-size: 11px;
     color: var(--fg-dim, #8A94AD);
