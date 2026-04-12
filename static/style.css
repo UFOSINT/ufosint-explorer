@@ -9,6 +9,8 @@
     --bg-card:    #1a2130;
     --bg-card-h:  #222a3c;       /* card hover */
     --bg-input:   #1f2738;
+    --surface-1:  #1e2636;       /* popup/modal backgrounds — raised above bg-panel */
+    --surface-2:  #283044;       /* hover state on popups */
     --border:     #2a3346;
     --border-strong: #3a455e;
     --text:       #e8edf5;
@@ -129,6 +131,8 @@ body.theme-signal {
     --bg-card:       #13203A;
     --bg-card-h:     #1E4870;
     --bg-input:      #0F1828;
+    --surface-1:     #152040;
+    --surface-2:     #1E3060;
     --border:        #13203A;
     --border-strong: #1E4870;
     --text:          #E6EAF2;
@@ -149,6 +153,8 @@ body.theme-declass {
     --bg-card:       #E6DEC0;
     --bg-card-h:     #DAD2A8;
     --bg-input:      #F5F0DE;
+    --surface-1:     #F8F4E6;
+    --surface-2:     #EDE8D4;
     --border:        #9C8B60;
     --border-strong: #6A5B3A;
     --text:          #1A1A1A;
@@ -361,7 +367,7 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
     right: 0;
     z-index: 9000;
     min-width: 260px;
-    background: var(--bg-panel);
+    background: var(--surface-1);
     border: 1px solid var(--border-strong);
     border-radius: var(--r-md);
     box-shadow: var(--shadow-lg);
@@ -2970,7 +2976,7 @@ select:focus {
     z-index: 9000;
     min-width: 320px;
     max-width: 400px;
-    background: var(--bg-panel);
+    background: var(--surface-1);
     border: 1px solid var(--border-strong);
     border-radius: var(--r-md);
     box-shadow: var(--shadow-lg);
