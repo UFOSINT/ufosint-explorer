@@ -384,6 +384,30 @@
                         <span class="brush-handle brush-handle-r" data-handle="r"></span>
                     </div>
                 </div>
+                <!-- v0.10.0 — Overview mini-map. Always shows the
+                     full dataset range (34 AD → 2026) with a bilinear
+                     scale (15% pre-1900, 85% post-1900). Displays:
+                     - Event tick marks for the full histogram
+                     - A cyan "view box" showing what the main brush
+                       is currently zoomed to (draggable to pan,
+                       edges draggable to resize the zoom)
+                     - A gold "selection box" inside the view box
+                       showing the playback window
+                     Click anywhere to re-center the view. Drag
+                     edges to change the date range / zoom. -->
+                <div class="overview-wrap">
+                    <canvas id="overview-canvas" aria-hidden="true"></canvas>
+                    <div id="overview-view-box" class="overview-box overview-view-box">
+                        <span class="overview-handle overview-handle-l"></span>
+                        <span class="overview-handle overview-handle-r"></span>
+                    </div>
+                    <div id="overview-selection-box" class="overview-box overview-selection-box"></div>
+                    <div class="overview-labels">
+                        <span class="overview-label-left">34 AD</span>
+                        <span class="overview-break">⫽ 1900</span>
+                        <span class="overview-label-right">2026</span>
+                    </div>
+                </div>
             </div>
         </div>
 

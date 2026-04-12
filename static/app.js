@@ -2672,6 +2672,12 @@ class TimeBrush {
         ctx.moveTo(0, h - 0.5);
         ctx.lineTo(w, h - 0.5);
         ctx.stroke();
+
+        // v0.10.0 — redraw the overview mini-map whenever the main
+        // brush redraws. The overview's histogram bars don't change
+        // with zoom (they're full-range), but the view box position
+        // does, and calling _drawOverview here is cheap (~2ms).
+        this._drawOverview();
     }
 
     // v0.8.6 — called by applyClientFilters() after the filter
@@ -2764,6 +2770,13 @@ class TimeBrush {
         const railLabel = document.getElementById("rail-time-label");
         if (rangeLabel) rangeLabel.textContent = text;
         if (railLabel) railLabel.textContent = text;
+
+        // v0.10.0 — keep the overview boxes in sync with the
+        // selection window position. The view box position is
+        // updated by _drawOverview() (called from _draw()); the
+        // selection box tracks the playback window and needs to
+        // update on every syncWindow call too.
+        this._syncOverviewBoxes();
     }
 
     // v0.9.0 — format the selection-window readout based on its
@@ -2780,6 +2793,249 @@ class TimeBrush {
             return `${d0.getUTCFullYear()}-${pad(d0.getUTCMonth() + 1)} — ${d1.getUTCFullYear()}-${pad(d1.getUTCMonth() + 1)}`;
         }
         return `${d0.getUTCFullYear()}-${pad(d0.getUTCMonth() + 1)}-${pad(d0.getUTCDate())} — ${d1.getUTCFullYear()}-${pad(d1.getUTCMonth() + 1)}-${pad(d1.getUTCDate())}`;
+    }
+
+    // =================================================================
+    // v0.10.0 — Overview mini-map
+    // =================================================================
+    // A 24px-tall canvas below the main brush that always shows the
+    // FULL dataset range (34 AD → 2026) with a bilinear scale:
+    //   - 15% of the canvas width for 34 AD → 1899 (1,866 years)
+    //   - 85% for 1900 → 2026 (126 years)
+    // Pre-1900 records render as thin event ticks (not binned bars)
+    // because bins with 0-3 records each are noise. Post-1900 uses
+    // year-level bars from the cached histogram.
+    //
+    // Two overlaid boxes:
+    //   - View box (cyan) = main brush's zoom range (viewMinT..viewMaxT)
+    //     Draggable to pan, edges draggable to resize the zoom.
+    //   - Selection box (gold) = playback window (window[0]..window[1])
+    //     Display-only from the overview; dragged on the main brush.
+
+    // Bilinear scale: maps a timestamp (ms) to a percentage across
+    // the overview canvas. The break is at 1900.
+    _overviewTimeToPct(t) {
+        const BREAK_YEAR = 1900;
+        const breakT = Date.UTC(BREAK_YEAR, 0, 1);
+        const PRE_WIDTH = 15;   // % of canvas for pre-1900
+        const POST_WIDTH = 85;  // % for post-1900
+
+        if (t <= breakT) {
+            // Pre-1900 segment: linear from minT to breakT → 0% to 15%
+            const segStart = this.minT;
+            const segEnd = breakT;
+            const frac = Math.max(0, Math.min(1, (t - segStart) / (segEnd - segStart)));
+            return frac * PRE_WIDTH;
+        }
+        // Post-1900 segment: linear from breakT to maxT → 15% to 100%
+        const segStart = breakT;
+        const segEnd = this.maxT;
+        const frac = Math.max(0, Math.min(1, (t - segStart) / (segEnd - segStart)));
+        return PRE_WIDTH + frac * POST_WIDTH;
+    }
+
+    // Inverse: overview percentage → timestamp (ms). For click/drag.
+    _overviewPctToTime(pct) {
+        const BREAK_YEAR = 1900;
+        const breakT = Date.UTC(BREAK_YEAR, 0, 1);
+        const PRE_WIDTH = 15;
+        const POST_WIDTH = 85;
+
+        if (pct <= PRE_WIDTH) {
+            const frac = pct / PRE_WIDTH;
+            return this.minT + frac * (breakT - this.minT);
+        }
+        const frac = (pct - PRE_WIDTH) / POST_WIDTH;
+        return breakT + frac * (this.maxT - breakT);
+    }
+
+    _drawOverview() {
+        const canvas = document.getElementById("overview-canvas");
+        if (!canvas) return;
+        const r = canvas.getBoundingClientRect();
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = Math.max(1, Math.round(r.width * dpr));
+        canvas.height = Math.max(1, Math.round(r.height * dpr));
+        const w = r.width;
+        const h = r.height;
+        const ctx = canvas.getContext("2d");
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, w, h);
+
+        const accent = getComputedStyle(document.body).getPropertyValue("--accent").trim() || "#00F0FF";
+
+        // Get the full-range year histogram (unfiltered, cached).
+        const bins = this._getFullBins("year");
+        if (!bins || bins.length === 0) return;
+
+        // Find max count for scaling bar heights.
+        let max = 1;
+        for (const b of bins) if (b.count > max) max = b.count;
+
+        // Draw bars/ticks using the bilinear scale.
+        const BREAK_YEAR = 1900;
+        for (const b of bins) {
+            const year = b.year !== undefined ? b.year : new Date(b.startMs).getUTCFullYear();
+            if (b.count === 0) continue;
+            const t = b.startMs !== undefined ? b.startMs : Date.UTC(year, 0, 1);
+            const pct = this._overviewTimeToPct(t);
+            const x = (pct / 100) * w;
+
+            if (year < BREAK_YEAR) {
+                // Pre-1900: thin event ticks (1px wide, fixed height)
+                ctx.fillStyle = accent;
+                ctx.globalAlpha = 0.5;
+                ctx.fillRect(x, 4, 1, h - 8);
+            } else {
+                // Post-1900: scaled bars
+                const barH = (b.count / max) * (h - 4);
+                ctx.fillStyle = accent;
+                ctx.globalAlpha = 0.35;
+                ctx.fillRect(x, h - barH - 1, Math.max(1, w * 0.85 / 126 - 0.5), barH);
+            }
+        }
+        ctx.globalAlpha = 1;
+
+        // Draw the scale break line at 1900.
+        const breakPct = 15;
+        const breakX = (breakPct / 100) * w;
+        ctx.strokeStyle = "rgba(255,179,0,0.5)";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 2]);
+        ctx.beginPath();
+        ctx.moveTo(breakX, 0);
+        ctx.lineTo(breakX, h);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Position the view box and selection box via DOM elements.
+        this._syncOverviewBoxes();
+    }
+
+    _syncOverviewBoxes() {
+        const viewBox = document.getElementById("overview-view-box");
+        const selBox = document.getElementById("overview-selection-box");
+        if (!viewBox) return;
+
+        // View box = main brush's zoom range.
+        const vl = this._overviewTimeToPct(this.viewMinT);
+        const vr = this._overviewTimeToPct(this.viewMaxT);
+        viewBox.style.left = vl + "%";
+        viewBox.style.width = (vr - vl) + "%";
+
+        // Selection box = playback window.
+        if (selBox) {
+            const sl = this._overviewTimeToPct(this.window[0]);
+            const sr = this._overviewTimeToPct(this.window[1]);
+            selBox.style.left = sl + "%";
+            selBox.style.width = (sr - sl) + "%";
+        }
+    }
+
+    _bindOverviewEvents() {
+        const wrap = document.querySelector(".overview-wrap");
+        const viewBox = document.getElementById("overview-view-box");
+        if (!wrap || !viewBox) return;
+
+        let dragging = null;
+
+        const getOverviewPct = (e) => {
+            const r = wrap.getBoundingClientRect();
+            return ((e.clientX - r.left) / r.width) * 100;
+        };
+
+        // Click on the overview background = re-center view on that point.
+        wrap.addEventListener("pointerdown", (e) => {
+            if (e.target === viewBox || e.target.classList.contains("overview-handle")) return;
+            // Click on empty overview = re-center the view
+            const pct = getOverviewPct(e);
+            const clickT = this._overviewPctToTime(pct);
+            const halfView = this._viewSpan() / 2;
+            let newL = Math.max(this.minT, clickT - halfView);
+            let newR = Math.min(this.maxT, newL + this._viewSpan());
+            if (newR > this.maxT) { newL = this.maxT - this._viewSpan(); }
+            this.viewMinT = Math.max(this.minT, newL);
+            this.viewMaxT = Math.min(this.maxT, newR);
+            this._draw();
+            this._drawAnnotations();
+            this._syncWindow();
+            this._drawOverview();
+            this._updateResetViewBtn();
+        });
+
+        // Drag the view box = pan the main brush's zoom.
+        viewBox.addEventListener("pointerdown", (e) => {
+            if (e.target.classList.contains("overview-handle")) {
+                // Edge drag = resize the zoom
+                const side = e.target.classList.contains("overview-handle-l") ? "l" : "r";
+                dragging = {
+                    mode: "resize",
+                    side,
+                    startX: e.clientX,
+                    startViewL: this.viewMinT,
+                    startViewR: this.viewMaxT,
+                };
+            } else {
+                // Body drag = pan the zoom
+                dragging = {
+                    mode: "pan",
+                    startX: e.clientX,
+                    startViewL: this.viewMinT,
+                    startViewR: this.viewMaxT,
+                };
+            }
+            viewBox.classList.add("dragging");
+            e.preventDefault();
+            e.stopPropagation();
+        });
+
+        window.addEventListener("pointermove", (e) => {
+            if (!dragging) return;
+            const r = wrap.getBoundingClientRect();
+            const dx = e.clientX - dragging.startX;
+            // Convert px delta → time delta via the overview's bilinear scale.
+            // Approximate: use the post-1900 segment for the delta
+            // since most drags happen there.
+            const pctDelta = (dx / r.width) * 100;
+            const startPctL = this._overviewTimeToPct(dragging.startViewL);
+            const startPctR = this._overviewTimeToPct(dragging.startViewR);
+
+            if (dragging.mode === "pan") {
+                const newPctL = startPctL + pctDelta;
+                const newPctR = startPctR + pctDelta;
+                let newL = this._overviewPctToTime(Math.max(0, Math.min(100 - (startPctR - startPctL), newPctL)));
+                let newR = this._overviewPctToTime(Math.min(100, Math.max(startPctR - startPctL, newPctR)));
+                this.viewMinT = Math.max(this.minT, newL);
+                this.viewMaxT = Math.min(this.maxT, newR);
+            } else if (dragging.mode === "resize") {
+                if (dragging.side === "l") {
+                    const newPctL = Math.max(0, Math.min(startPctR - 2, startPctL + pctDelta));
+                    this.viewMinT = Math.max(this.minT, this._overviewPctToTime(newPctL));
+                } else {
+                    const newPctR = Math.min(100, Math.max(startPctL + 2, startPctR + pctDelta));
+                    this.viewMaxT = Math.min(this.maxT, this._overviewPctToTime(newPctR));
+                }
+                // Enforce minimum view span
+                if (this.viewMaxT - this.viewMinT < this._minViewSpanMs) {
+                    if (dragging.side === "l") {
+                        this.viewMinT = this.viewMaxT - this._minViewSpanMs;
+                    } else {
+                        this.viewMaxT = this.viewMinT + this._minViewSpanMs;
+                    }
+                }
+            }
+            this._draw();
+            this._drawAnnotations();
+            this._syncWindow();
+            this._drawOverview();
+        });
+
+        window.addEventListener("pointerup", () => {
+            if (!dragging) return;
+            dragging = null;
+            viewBox.classList.remove("dragging");
+            this._updateResetViewBtn();
+        });
     }
 
     // v0.9.2 — live commit during selection-window drag. Bypasses
@@ -3018,6 +3274,9 @@ class TimeBrush {
         // v0.9.0 — double-click on the canvas resets the view to
         // the full range. Classic "zoom out to fit" pattern.
         this.canvas.addEventListener("dblclick", () => this.resetView());
+
+        // v0.10.0 — bind the overview mini-map interactions.
+        this._bindOverviewEvents();
 
         // Resize observer so the histogram redraws on viewport changes.
         const ro = new ResizeObserver(() => {
