@@ -76,10 +76,10 @@ def test_index_html_has_expected_svg_count():
     chat fab, chat popover UFO, 5× rail-chevron.
     """
     content = _read(INDEX_HTML)
-    assert len(_SVG_OPEN_RE.findall(content)) == 14, (
-        "Expected 14 inline SVGs in index.html (settings gear, Ask AI, "
+    assert len(_SVG_OPEN_RE.findall(content)) == 15, (
+        "Expected 15 inline SVGs in index.html (settings gear, Ask AI, "
         "Connect, Near me, AI empty UFO, chat fab, chat popover UFO, "
-        "5x rail-chevron, and 2x DQ gear icons added in v0.11.1). "
+        "5x rail-chevron, 2x DQ gear icons, and 1x help tour icon). "
         "If this changed intentionally, update the expected count."
     )
 

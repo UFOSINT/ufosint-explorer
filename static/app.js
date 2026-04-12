@@ -109,6 +109,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     statsPromise
         .then(statsData => {
             _stopBadgeBoot();
+            state.statsData = statsData;  // v0.11.2: stash for tour
             showStats(statsData);
             initStatsBadge();
         })
@@ -200,6 +201,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     // v0.7: Theme toggle (SIGNAL / DECLASS)
     initThemeToggle();
 
+    // v0.11.2: Help tour button (always available in header)
+    initHelpTourButton();
+
     // v0.7.2: default date range is 1900 → current year. The UFOSINT
     // DB technically has records back to year 34 AD, but 1900+ is the
     // meaningful modern era and users expect a sane starting range
@@ -243,6 +247,23 @@ document.addEventListener("DOMContentLoaded", async () => {
             applyFilters();
         }
     });
+
+    // v0.11.2: First-visit cinematic intro + tour. Runs AFTER the map
+    // and Observatory are initialized so the tour has real DOM targets
+    // to highlight. Data loads behind the overlay; the intro is purely
+    // visual. statsPromise is already in-flight from line 103.
+    try {
+        if (!localStorage.getItem(TOUR_STORAGE_KEY)) {
+            const stats = await statsPromise.catch(() => null);
+            const total = stats ? stats.total_sightings : 614505;
+            startTour(false, total);
+        } else {
+            skipCinematicIntro();
+        }
+    } catch (_) {
+        // localStorage blocked (private browsing) — skip intro
+        skipCinematicIntro();
+    }
 });
 
 // =========================================================================
@@ -7123,4 +7144,312 @@ function closeModal() {
         _modalReturnFocus.focus();
     }
     _modalReturnFocus = null;
+}
+
+
+// =========================================================================
+// v0.11.2: Cinematic intro + guided tooltip tour
+// =========================================================================
+//
+// First-visit experience: a terminal-style "scanning databases" counter
+// that ticks up to the real sighting count, followed by a 5-step tooltip
+// tour highlighting the map, rail, TimeBrush, tabs, and stats badge.
+// Returning visitors skip the intro; a help button in the header replays
+// the tour (without the cinematic) anytime.
+
+const TOUR_STORAGE_KEY = "ufosint-intro-seen";
+
+const TOUR_STEPS = [
+    {
+        target: ".observatory-canvas-wrap",
+        body: "This is the <strong>Observatory</strong>. {mapped} mapped sightings from 5 databases, rendered on a GPU-accelerated map. Click any point to see its full report.",
+        position: "left",
+    },
+    {
+        target: ".observatory-rail",
+        body: "<strong>Data Quality filters</strong> live here. Toggle high-quality only, narrative red flags, media, movement categories, and more. Filters update the map in real time.",
+        position: "right",
+    },
+    {
+        target: ".observatory-time-brush",
+        body: "The <strong>TimeBrush</strong>. Drag handles to select a time window. Scroll to zoom into a decade or month. Hit Play to animate through history.",
+        position: "top",
+    },
+    {
+        target: ".tabs",
+        body: "Switch between <strong>Observatory</strong> (map), <strong>Timeline</strong> (charts over time), <strong>Insights</strong> (emotion + quality analysis), and <strong>Methodology</strong>.",
+        position: "bottom",
+    },
+    {
+        target: "#stats-badge",
+        body: "Click the <strong>stats badge</strong> for a detailed breakdown of all 5 source databases, date ranges, and coverage metrics.",
+        position: "bottom",
+    },
+];
+
+let _tourActive = false;
+let _tourStep = 0;
+let _tourMapped = "396,158";   // Replaced at runtime from stats
+
+// ---- Cinematic intro ----
+
+function runCinematicIntro(total) {
+    return new Promise((resolve) => {
+        const overlay = document.getElementById("intro-overlay");
+        const counterEl = document.getElementById("intro-counter-value");
+        const statusEl = document.getElementById("intro-status");
+        if (!overlay || !counterEl) {
+            skipCinematicIntro();
+            resolve();
+            return;
+        }
+
+        // Reduced motion: skip animation, show final number briefly
+        const prefersReduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        if (prefersReduced) {
+            counterEl.textContent = total.toLocaleString();
+            if (statusEl) statusEl.textContent = "READY";
+            setTimeout(() => {
+                overlay.classList.add("intro-done");
+                resolve();
+            }, 800);
+            return;
+        }
+
+        const duration = 3000;  // 3 seconds counter
+        const start = performance.now();
+        const statusMessages = [
+            "CONNECTING TO 5 SOURCES",
+            "CROSS-REFERENCING RECORDS",
+            "GEOCODING COORDINATES",
+            "BUILDING GPU LAYER",
+            "READY",
+        ];
+        let statusIdx = 0;
+        const statusInterval = setInterval(() => {
+            statusIdx++;
+            if (statusIdx < statusMessages.length && statusEl) {
+                statusEl.textContent = statusMessages[statusIdx];
+            }
+            if (statusIdx >= statusMessages.length - 1) {
+                clearInterval(statusInterval);
+            }
+        }, 700);
+
+        function tick(now) {
+            const elapsed = now - start;
+            const progress = Math.min(1, elapsed / duration);
+            // Ease-out cubic: fast start, slow finish
+            const eased = 1 - Math.pow(1 - progress, 3);
+            const value = Math.floor(eased * total);
+            counterEl.textContent = value.toLocaleString();
+
+            if (progress < 1) {
+                requestAnimationFrame(tick);
+            } else {
+                counterEl.textContent = total.toLocaleString();
+                // Hold on "READY" for 500ms then dissolve
+                setTimeout(() => {
+                    overlay.classList.add("intro-dissolving");
+                    // After CSS transition (600ms), mark done
+                    setTimeout(() => {
+                        overlay.classList.add("intro-done");
+                        clearInterval(statusInterval);
+                        resolve();
+                    }, 650);
+                }, 500);
+            }
+        }
+        requestAnimationFrame(tick);
+    });
+}
+
+function skipCinematicIntro() {
+    const overlay = document.getElementById("intro-overlay");
+    if (overlay) overlay.classList.add("intro-done");
+}
+
+// ---- Tour state machine ----
+
+function startTour(skipIntro, total) {
+    // Ensure we're on the Observatory tab so all targets exist
+    if (state.activeTab !== "observatory") {
+        switchTab("observatory");
+    }
+
+    // Resolve {mapped} placeholder
+    if (state.statsData && state.statsData.mapped_sightings) {
+        _tourMapped = state.statsData.mapped_sightings.toLocaleString();
+    }
+
+    if (!skipIntro) {
+        runCinematicIntro(total || 614505).then(() => {
+            _beginTourSteps();
+        });
+    } else {
+        skipCinematicIntro();
+        _beginTourSteps();
+    }
+}
+
+function _beginTourSteps() {
+    _tourActive = true;
+    _tourStep = 0;
+    const backdrop = document.getElementById("tour-backdrop");
+    const tooltip = document.getElementById("tour-tooltip");
+    const skipBtn = document.getElementById("tour-skip");
+    const nextBtn = document.getElementById("tour-next");
+    if (backdrop) backdrop.hidden = false;
+    if (tooltip) tooltip.hidden = false;
+    if (skipBtn) skipBtn.addEventListener("click", _endTour);
+    if (nextBtn) nextBtn.addEventListener("click", _advanceTour);
+    document.addEventListener("keydown", _tourEscapeHandler);
+    window.addEventListener("resize", _tourResizeHandler);
+    _showTourStep(0);
+}
+
+function _showTourStep(index) {
+    if (index >= TOUR_STEPS.length) { _endTour(); return; }
+
+    const step = TOUR_STEPS[index];
+    const target = document.querySelector(step.target);
+    const backdrop = document.getElementById("tour-backdrop");
+    const tooltip = document.getElementById("tour-tooltip");
+    const bodyEl = document.getElementById("tour-tooltip-body");
+    const progressEl = document.getElementById("tour-progress");
+    const arrow = document.getElementById("tour-arrow");
+    if (!tooltip || !bodyEl) return;
+
+    // Resolve placeholders in body text
+    let bodyText = step.body.replace("{mapped}", _tourMapped);
+    bodyEl.innerHTML = bodyText;
+    if (progressEl) progressEl.textContent = `${index + 1} / ${TOUR_STEPS.length}`;
+
+    // Last step: change Next to "Done"
+    const nextBtn = document.getElementById("tour-next");
+    if (nextBtn) {
+        nextBtn.textContent = index === TOUR_STEPS.length - 1 ? "Done" : "Next";
+    }
+
+    if (!target) {
+        // Target not in DOM yet — skip this step
+        tooltip.style.opacity = "0";
+        setTimeout(() => _advanceTour(), 100);
+        return;
+    }
+
+    // Scroll target into view
+    target.scrollIntoView({ behavior: "smooth", block: "nearest" });
+
+    // Position after a brief delay for scroll to settle
+    setTimeout(() => _positionTooltip(target, step.position, tooltip, backdrop, arrow), 150);
+}
+
+function _positionTooltip(target, position, tooltip, backdrop, arrow) {
+    const rect = target.getBoundingClientRect();
+    const pad = 8;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    // Cut a hole in the backdrop using clip-path
+    if (backdrop) {
+        const x1 = Math.max(0, rect.left - pad);
+        const y1 = Math.max(0, rect.top - pad);
+        const x2 = Math.min(vw, rect.right + pad);
+        const y2 = Math.min(vh, rect.bottom + pad);
+        // Outer rect (full viewport) + inner rect (hole) — polygon with counter-wound inner
+        backdrop.style.clipPath = `polygon(
+            0 0, ${vw}px 0, ${vw}px ${vh}px, 0 ${vh}px, 0 0,
+            ${x1}px ${y1}px, ${x1}px ${y2}px, ${x2}px ${y2}px, ${x2}px ${y1}px, ${x1}px ${y1}px
+        )`;
+    }
+
+    // Position tooltip
+    tooltip.setAttribute("data-position", position);
+    tooltip.style.opacity = "1";
+
+    // On narrow screens, use bottom sheet layout
+    const isMobile = window.innerWidth <= 700;
+    if (isMobile) {
+        tooltip.style.top = (rect.bottom + 16) + "px";
+        tooltip.style.left = "16px";
+        tooltip.style.right = "16px";
+        return;
+    }
+
+    const ttWidth = 340;
+    const ttHeight = tooltip.offsetHeight || 160;
+    let top, left;
+
+    switch (position) {
+        case "bottom":
+            top = rect.bottom + 12;
+            left = rect.left + rect.width / 2 - ttWidth / 2;
+            break;
+        case "top":
+            top = rect.top - ttHeight - 12;
+            left = rect.left + rect.width / 2 - ttWidth / 2;
+            break;
+        case "left":
+            top = rect.top + rect.height / 2 - ttHeight / 2;
+            left = rect.left - ttWidth - 16;
+            break;
+        case "right":
+            top = rect.top + rect.height / 2 - ttHeight / 2;
+            left = rect.right + 16;
+            break;
+        default:
+            top = rect.bottom + 12;
+            left = rect.left;
+    }
+
+    // Clamp to viewport
+    left = Math.max(8, Math.min(left, vw - ttWidth - 8));
+    top = Math.max(8, Math.min(top, vh - ttHeight - 8));
+
+    tooltip.style.top = top + "px";
+    tooltip.style.left = left + "px";
+}
+
+function _advanceTour() {
+    _tourStep++;
+    if (_tourStep >= TOUR_STEPS.length) {
+        _endTour();
+    } else {
+        _showTourStep(_tourStep);
+    }
+}
+
+function _endTour() {
+    _tourActive = false;
+    const backdrop = document.getElementById("tour-backdrop");
+    const tooltip = document.getElementById("tour-tooltip");
+    if (backdrop) { backdrop.hidden = true; backdrop.style.clipPath = ""; }
+    if (tooltip) tooltip.hidden = true;
+    document.removeEventListener("keydown", _tourEscapeHandler);
+    window.removeEventListener("resize", _tourResizeHandler);
+    // Remove click listeners to avoid duplicates on replay
+    const skipBtn = document.getElementById("tour-skip");
+    const nextBtn = document.getElementById("tour-next");
+    if (skipBtn) skipBtn.removeEventListener("click", _endTour);
+    if (nextBtn) nextBtn.removeEventListener("click", _advanceTour);
+    try { localStorage.setItem(TOUR_STORAGE_KEY, "1"); } catch (_) {}
+}
+
+function _tourEscapeHandler(e) {
+    if (e.key === "Escape" && _tourActive) _endTour();
+}
+
+function _tourResizeHandler() {
+    if (_tourActive) _showTourStep(_tourStep);
+}
+
+// ---- Help button ----
+
+function initHelpTourButton() {
+    const btn = document.getElementById("help-tour-btn");
+    if (!btn) return;
+    btn.addEventListener("click", () => {
+        startTour(true);
+    });
 }

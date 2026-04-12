@@ -4477,3 +4477,194 @@ body[data-hide-brush] .observatory-time-brush {
     font-size: 11px;
     font-variant-numeric: tabular-nums;
 }
+
+/* =========================================================================
+   v0.11.2: Cinematic intro overlay
+   ========================================================================= */
+.intro-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    background: var(--bg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    opacity: 1;
+    transition: opacity 600ms ease-out;
+    pointer-events: auto;
+}
+.intro-overlay.intro-dissolving {
+    opacity: 0;
+    pointer-events: none;
+}
+.intro-overlay.intro-done {
+    display: none;
+}
+.intro-content {
+    text-align: center;
+    font-family: var(--font-mono);
+}
+.intro-logo {
+    font-size: clamp(1.5rem, 4vw, 2.5rem);
+    font-weight: 700;
+    color: var(--accent);
+    text-shadow: 0 0 20px var(--accent);
+    letter-spacing: 0.08em;
+    margin-bottom: 32px;
+    animation: hack-pulse 1.5s ease-in-out infinite;
+}
+.intro-counter {
+    font-size: clamp(0.875rem, 2vw, 1.125rem);
+    color: var(--accent);
+    text-shadow: 0 0 6px var(--accent);
+}
+.intro-counter-label {
+    margin-right: 8px;
+}
+.intro-counter-value {
+    font-variant-numeric: tabular-nums;
+    min-width: 7ch;
+    display: inline-block;
+    text-align: right;
+}
+.intro-status {
+    margin-top: 16px;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    color: var(--text-muted);
+    animation: hack-pulse 2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .intro-overlay { transition: none; }
+    .intro-logo { animation: none; }
+    .intro-status { animation: none; }
+}
+
+/* =========================================================================
+   v0.11.2: Guided tooltip tour
+   ========================================================================= */
+.tour-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 10001;
+    background: rgba(0, 0, 0, 0.55);
+    pointer-events: auto;
+    transition: opacity 200ms;
+}
+.tour-backdrop[hidden] { display: none; }
+
+.tour-tooltip {
+    position: fixed;
+    z-index: 10002;
+    max-width: 340px;
+    background: var(--surface-1);
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    padding: 16px;
+    box-shadow: 0 0 20px rgba(0, 240, 255, 0.15), 0 8px 32px rgba(0,0,0,0.5);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--text);
+    transition: top 300ms ease-out, left 300ms ease-out, opacity 150ms;
+}
+.tour-tooltip[hidden] { display: none; }
+
+.tour-tooltip-body {
+    margin-bottom: 12px;
+    line-height: 1.6;
+    color: var(--text);
+}
+.tour-tooltip-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.tour-tooltip-progress {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+}
+.tour-tooltip-actions {
+    display: flex;
+    gap: 8px;
+}
+.tour-btn {
+    padding: 4px 12px;
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    transition: background 120ms, color 120ms;
+}
+.tour-btn-skip {
+    background: transparent;
+    color: var(--text-muted);
+}
+.tour-btn-skip:hover {
+    color: var(--text);
+    background: var(--surface-2);
+}
+.tour-btn-next {
+    background: var(--accent);
+    color: var(--bg);
+    border-color: var(--accent);
+    font-weight: 600;
+}
+.tour-btn-next:hover {
+    filter: brightness(1.15);
+}
+
+/* Arrow (CSS triangle via rotated square) */
+.tour-tooltip-arrow {
+    position: absolute;
+    width: 12px;
+    height: 12px;
+    background: var(--surface-1);
+    border: 1px solid var(--accent);
+    transform: rotate(45deg);
+    pointer-events: none;
+}
+.tour-tooltip[data-position="bottom"] .tour-tooltip-arrow {
+    top: -7px;
+    left: 50%;
+    margin-left: -6px;
+    border-right: none;
+    border-bottom: none;
+}
+.tour-tooltip[data-position="top"] .tour-tooltip-arrow {
+    bottom: -7px;
+    left: 50%;
+    margin-left: -6px;
+    border-left: none;
+    border-top: none;
+}
+.tour-tooltip[data-position="left"] .tour-tooltip-arrow {
+    right: -7px;
+    top: 24px;
+    border-left: none;
+    border-bottom: none;
+}
+.tour-tooltip[data-position="right"] .tour-tooltip-arrow {
+    left: -7px;
+    top: 24px;
+    border-right: none;
+    border-top: none;
+}
+
+/* Mobile: full-width bottom sheet, no arrow */
+@media (max-width: 700px) {
+    .tour-tooltip {
+        max-width: calc(100vw - 32px);
+        left: 16px !important;
+        right: 16px;
+    }
+    .tour-tooltip-arrow { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .tour-tooltip { transition: none; }
+    .tour-backdrop { transition: none; }
+}
