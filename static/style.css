@@ -3046,6 +3046,23 @@ select:focus {
 }
 #btn-more-filters .filter-count-badge[hidden] { display: none; }
 
+/* v0.10.0 — Reset link replaces the old Apply + Clear buttons.
+   Subtle underlined link, not a button, so it doesn't compete
+   visually with the filter dropdowns. */
+.filter-reset-link {
+    font-size: 11px;
+    color: var(--fg-dim, #8A94AD);
+    text-decoration: underline;
+    cursor: pointer;
+    letter-spacing: 0.04em;
+    padding: 4px 8px;
+    white-space: nowrap;
+    transition: color 120ms ease;
+}
+.filter-reset-link:hover {
+    color: var(--accent);
+}
+
 /* Mobile filter bar toggle (hidden on desktop) */
 #btn-mobile-filters {
     display: none;

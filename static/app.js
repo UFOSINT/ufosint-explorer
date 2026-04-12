@@ -149,8 +149,13 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     // Filter buttons
-    document.getElementById("btn-apply-filters").addEventListener("click", applyFilters);
-    document.getElementById("btn-clear-filters").addEventListener("click", clearFilters);
+    // v0.10.0: Apply + Clear buttons removed. All filters are now
+    // live-reactive via initFilterBarPolish(). The Reset link is
+    // wired there too.
+    // Legacy: if the old buttons somehow survive in the DOM (e.g.
+    // stale HTML cache), wire them defensively so they don't break.
+    document.getElementById("btn-apply-filters")?.addEventListener("click", applyFilters);
+    document.getElementById("btn-clear-filters")?.addEventListener("click", clearFilters);
 
     // v0.8.7: #coords-filter was deleted (had no byte slot in the
     // bulk buffer so the filter pipeline couldn't use it). The old
@@ -851,9 +856,13 @@ function switchTab(tab) {
 }
 
 async function applyFilters() {
+    // v0.10.0: the Apply button is gone — filters are live-reactive.
+    // This function is still the central entry point for all filter
+    // changes (called by the auto-apply debounce, rail toggles,
+    // brush drag commit, and the Reset link). The btn-apply-filters
+    // element no longer exists in the DOM, so the disableButtonWhile-
+    // Pending call gracefully no-ops (returns a no-op restore).
     const applyBtn = document.getElementById("btn-apply-filters");
-    // Clear the "unsaved changes" pulse — filters are now committed.
-    applyBtn?.classList.remove("is-dirty");
     const restore = disableButtonWhilePending(applyBtn, "Applying…");
     try {
         // v0.9.4-fix: ALWAYS run applyClientFilters first,
@@ -5355,10 +5364,14 @@ function initSettingsMenu() {
 // surviving fields.
 // =========================================================================
 
-// Selects that should auto-apply with a debounce. Text inputs (the
-// date range) keep the explicit Apply button because you don't want
-// fire-on-keystroke there. v0.8.7: trimmed to the 4 surviving
-// <select> filters.
+// v0.10.0: ALL filters are now live-reactive. The Apply button was
+// removed because applyClientFilters() runs in ~5ms — batching
+// multiple filter changes into one commit is unnecessary and the
+// explicit Apply step confuses users who expect instant feedback
+// (the UX reviewer's #2 issue). Selects fire on change (250ms
+// debounce); date inputs fire on input (500ms debounce to allow
+// typing a full year without thrashing). The "Reset" link replaces
+// both Apply and Clear.
 const AUTO_APPLY_SELECT_IDS = [
     "filter-shape",
     "filter-source",
@@ -5366,15 +5379,13 @@ const AUTO_APPLY_SELECT_IDS = [
     "filter-emotion",
 ];
 
-// Text inputs that mark the Apply button "dirty" on input. User must
-// still click Apply to commit these since typing a date char-by-char
-// would thrash queries.
-const DIRTY_INPUT_IDS = [
+const AUTO_APPLY_DATE_IDS = [
     "filter-date-from",
     "filter-date-to",
 ];
 
 let _autoApplyTimer = null;
+let _dateApplyTimer = null;
 
 function initFilterBarPolish() {
     // ----- Auto-apply on select change (250ms debounce) -----
@@ -5389,14 +5400,34 @@ function initFilterBarPolish() {
         });
     });
 
-    // ----- is-dirty on text inputs -----
-    const applyBtn = document.getElementById("btn-apply-filters");
-    DIRTY_INPUT_IDS.forEach(id => {
+    // v0.10.0: date inputs also auto-apply with a longer debounce
+    // (500ms) so the user has time to type a full 4-digit year or
+    // a YYYY-MM-DD date without thrashing applyClientFilters on
+    // every keystroke. On blur, commit immediately (the user is
+    // done typing).
+    AUTO_APPLY_DATE_IDS.forEach(id => {
         const el = document.getElementById(id);
-        if (!el || !applyBtn) return;
-        el.addEventListener("input", () => applyBtn.classList.add("is-dirty"));
+        if (!el) return;
+        el.addEventListener("input", () => {
+            clearTimeout(_dateApplyTimer);
+            _dateApplyTimer = setTimeout(() => {
+                if (typeof applyFilters === "function") applyFilters();
+            }, 500);
+        });
+        el.addEventListener("blur", () => {
+            clearTimeout(_dateApplyTimer);
+            if (typeof applyFilters === "function") applyFilters();
+        });
     });
-    applyBtn?.addEventListener("click", () => applyBtn.classList.remove("is-dirty"));
+
+    // v0.10.0: "Reset" link replaces the old Apply + Clear buttons.
+    const resetLink = document.getElementById("btn-reset-filters");
+    if (resetLink) {
+        resetLink.addEventListener("click", (e) => {
+            e.preventDefault();
+            clearFilters();
+        });
+    }
 
     // v0.8.7: the "More filters" drawer + badge was removed along
     // with the filter-collection / filter-hynek / filter-vallee

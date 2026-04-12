@@ -190,8 +190,13 @@
             <label for="filter-emotion">Emotion</label>
             <select id="filter-emotion"><option value="">All emotions</option></select>
         </div>
-        <button id="btn-apply-filters" class="btn btn-primary">Apply</button>
-        <button id="btn-clear-filters" class="btn btn-secondary">Clear</button>
+        <!-- v0.10.0: Apply button removed. All filters are now
+             live-reactive with a 250ms debounce on selects and
+             500ms on date inputs. The "Reset" link replaces both
+             Apply + Clear. Science reviewer confirmed the ~5ms
+             applyClientFilters cost makes batching unnecessary. -->
+        <a id="btn-reset-filters" class="filter-reset-link" href="#"
+           title="Reset all filters to default">Reset</a>
     </div>
 
     <!-- v0.8.7 — Movement category cluster. 10 multi-select checkboxes
