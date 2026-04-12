@@ -2237,36 +2237,42 @@ select:focus {
 /* ---- Mobile responsive ---- */
 @media (max-width: 720px) {
     #header {
-        flex-direction: column;
-        align-items: flex-start;
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 4px 8px;
+        padding: 6px 10px;
+    }
+    .header-left {
         gap: var(--s-2);
-        padding: var(--s-2) var(--s-3);
+        flex: 0 0 auto;
     }
-    .header-left { gap: var(--s-2); }
-    .stats-badge {
-        font-size: 10px;
-        white-space: normal;
-        line-height: 1.35;
-    }
+    .header-left h1 { font-size: 14px; }
+    .stats-badge { display: none; }
     /* v0.11.2 — show settings gear + help button on mobile but
        hide the theme pill (accessible via gear menu). */
     .tabs-settings {
         display: flex;
         gap: 4px;
-        margin-left: auto;
+        flex: 0 0 auto;
+        order: 2;
     }
     .theme-pill { display: none; }
     .tabs {
-        width: 100%;
+        flex: 1 1 0;
         overflow-x: auto;
-        scrollbar-width: thin;
-        padding-bottom: 2px;
+        scrollbar-width: none;
+        -webkit-overflow-scrolling: touch;
+        padding-bottom: 0;
+        gap: 2px;
     }
+    .tabs::-webkit-scrollbar { display: none; }
     .tab {
         white-space: nowrap;
         flex-shrink: 0;
-        font-size: 12px;
-        padding: 6px 12px;
+        font-size: 11px;
+        padding: 6px 10px;
+        min-height: 32px;
     }
     #filters-bar {
         padding: var(--s-2) var(--s-3);
@@ -3773,8 +3779,11 @@ body.is-touch .rail-section.rail-quality.is-collapsed .rail-chevron {
     .stats-badge { font-size: 10px; line-height: 1.5; }
     .stats-badge .stats-chip-optional { display: none; }
 
-    .observatory-time-brush { height: 105px; }
-    .brush-handle { width: 14px; }
+    .observatory-time-brush {
+        height: 130px;
+        padding: 4px 8px;
+    }
+    .brush-handle { width: 18px; }
 }
 
 @media (max-width: 500px) {
@@ -4665,12 +4674,18 @@ body[data-hide-brush] .observatory-time-brush {
     border-top: none;
 }
 
-/* Mobile: full-width bottom sheet, no arrow */
+/* Mobile: fixed bottom sheet so buttons are always visible */
 @media (max-width: 700px) {
     .tour-tooltip {
-        max-width: calc(100vw - 32px);
-        left: 16px !important;
-        right: 16px;
+        position: fixed !important;
+        bottom: 12px !important;
+        top: auto !important;
+        left: 12px !important;
+        right: 12px !important;
+        max-width: none;
+        width: auto;
+        max-height: 45vh;
+        overflow-y: auto;
     }
     .tour-tooltip-arrow { display: none; }
 }
@@ -4775,8 +4790,8 @@ body[data-hide-brush] .observatory-time-brush {
         min-height: 32px;
     }
 
-    /* Brush: more compact */
-    .observatory-time-brush { height: 95px; }
+    /* Brush: still needs room for histogram bars */
+    .observatory-time-brush { height: 120px; }
 
     /* Filter dropdowns: full width stacking */
     .filter-group { flex: 1 1 100%; min-width: 0; }

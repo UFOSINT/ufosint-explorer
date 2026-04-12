@@ -7368,12 +7368,15 @@ function _positionTooltip(target, position, tooltip, backdrop, arrow) {
     tooltip.setAttribute("data-position", position);
     tooltip.style.opacity = "1";
 
-    // On narrow screens, use bottom sheet layout
+    // On narrow screens, use fixed bottom sheet layout.
+    // v0.11.2: clear inline top so the CSS `bottom: 12px` rule
+    // takes effect — the old code set top: (rect.bottom + 16)
+    // which pushed the tooltip off the viewport on phones.
     const isMobile = window.innerWidth <= 700;
     if (isMobile) {
-        tooltip.style.top = (rect.bottom + 16) + "px";
-        tooltip.style.left = "16px";
-        tooltip.style.right = "16px";
+        tooltip.style.top = "";
+        tooltip.style.left = "";
+        tooltip.style.right = "";
         return;
     }
 
