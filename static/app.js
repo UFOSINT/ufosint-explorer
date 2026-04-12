@@ -3736,12 +3736,21 @@ async function loadTimeline() {
                 document.querySelectorAll(".gran-btn").forEach(b => {
                     b.classList.toggle("active", b.dataset.gran === gran);
                 });
-                // Destroy the existing chart so it rebuilds with the
-                // right dataset shape (year has source-stacking,
-                // month/day doesn't).
+                // Destroy all three chart instances so they rebuild
+                // with the right dataset shape. Year has source-
+                // stacking on the main chart; month/day doesn't.
+                // Quality and movement also change label format.
                 if (state.chart) {
                     state.chart.destroy();
                     state.chart = null;
+                }
+                if (state.timelineQualityChart) {
+                    state.timelineQualityChart.destroy();
+                    state.timelineQualityChart = null;
+                }
+                if (state.timelineMovementChart) {
+                    state.timelineMovementChart.destroy();
+                    state.timelineMovementChart = null;
                 }
                 refreshTimelineCards();
             });
@@ -4052,8 +4061,110 @@ function refreshTimelineCards() {
         renderTimelineMainChartAdaptive(adaptiveBins, selectedGran);
     }
 
-    renderTimelineQualityChart(filteredQuality);
-    renderTimelineMovementChart(filteredMovement);
+    // v0.10.0: quality + movement cards also use the selected
+    // granularity. When month/day is selected, we compute per-
+    // period aggregates from the adaptive bins instead of the
+    // year-level helpers. This makes all 3 cards zoom together.
+    if (selectedGran === "year") {
+        renderTimelineQualityChart(filteredQuality);
+        renderTimelineMovementChart(filteredMovement);
+    } else {
+        // Fetch the same adaptive bins used by the main chart.
+        let bins = window.UFODeck.getHistogramForGranularityVisible(selectedGran);
+        if (!bins) bins = window.UFODeck.getHistogram(selectedGran);
+        if (bins && viewMin && viewMax) {
+            bins = bins.filter(b => b.startMs >= viewMin && b.startMs <= viewMax);
+        }
+        // Compute quality medians per bin. We use a simplified
+        // approach: for each bin, walk visibleIdx rows whose
+        // dateDays falls in [bin.startMs, nextBin.startMs), collect
+        // quality scores, and pick the median. This is O(N*B) but
+        // at day-level zoom the bin count is small (90 for 3 months)
+        // and visibleIdx is pre-filtered, so it's fast enough.
+        if (bins && bins.length > 0) {
+            const epoch = Date.UTC(1900, 0, 1);
+            const msPerDay = 86400000;
+            const dd = P.dateDays;
+            const qs = P.qualityScore;
+            const mf = P.movementFlags;
+            const movements = P.movements || [];
+            const M = 10;
+            const iter = P.visibleIdx;
+            const N = iter ? iter.length : P.count;
+
+            // Build bin boundaries in day-index space for fast lookup
+            const binDayStarts = bins.map(b =>
+                Math.floor((b.startMs - epoch) / msPerDay)
+            );
+            // Sentinel: one past the last bin
+            const lastBinEnd = bins.length > 1
+                ? binDayStarts[binDayStarts.length - 1] + (binDayStarts[1] - binDayStarts[0])
+                : binDayStarts[0] + (selectedGran === "day" ? 1 : 30);
+
+            // Quality: collect scores per bin, compute median
+            const qualBins = bins.map(() => []);
+            // Movement: count per category per bin
+            const movCounts = new Uint32Array(bins.length * M);
+            const movTotals = new Uint32Array(bins.length);
+
+            for (let k = 0; k < N; k++) {
+                const i = iter ? iter[k] : k;
+                const d = dd[i];
+                if (d === 0) continue;
+                // Find which bin this row belongs to via linear scan
+                // (bins are sorted, small count at zoom level)
+                let bi = -1;
+                for (let b = binDayStarts.length - 1; b >= 0; b--) {
+                    if (d >= binDayStarts[b]) { bi = b; break; }
+                }
+                if (bi < 0) continue;
+
+                // Quality
+                const q = qs[i];
+                if (q !== 255) qualBins[bi].push(q);
+
+                // Movement
+                const mv = mf[i];
+                if (mv !== 0) {
+                    movTotals[bi]++;
+                    for (let c = 0; c < M; c++) {
+                        if (mv & (1 << c)) movCounts[bi * M + c]++;
+                    }
+                }
+            }
+
+            // Build quality output: [{year (or startMs label), median, count}]
+            const pad = (n) => String(n).padStart(2, "0");
+            const qualityAdaptive = bins.map((b, bi) => {
+                const arr = qualBins[bi];
+                let median = null;
+                if (arr.length > 0) {
+                    arr.sort((a, c) => a - c);
+                    median = arr[Math.floor(arr.length / 2)];
+                }
+                const d = new Date(b.startMs);
+                const year = d.getUTCFullYear();
+                return { year, startMs: b.startMs, median, count: arr.length };
+            });
+
+            // Build movement output
+            const movYears = bins.map(b => new Date(b.startMs).getUTCFullYear());
+            const movAdaptive = {
+                years: movYears,
+                movements: movements.slice(),
+                counts: movCounts,
+                totals: movTotals,
+                _bins: bins,  // stash for label formatting
+                _gran: selectedGran,
+            };
+
+            renderTimelineQualityChartAdaptive(qualityAdaptive, selectedGran);
+            renderTimelineMovementChartAdaptive(movAdaptive, selectedGran);
+        } else {
+            renderTimelineQualityChart(filteredQuality);
+            renderTimelineMovementChart(filteredMovement);
+        }
+    }
 
     const countEl = document.getElementById("timeline-visible-count");
     if (countEl) countEl.textContent = visible.toLocaleString();
@@ -4215,6 +4326,137 @@ function renderTimelineMainChart(stacked) {
             onHover: (evt, elements) => {
                 evt.native.target.style.cursor = elements.length ? "pointer" : "";
             },
+        },
+    });
+}
+
+// v0.10.0 — adaptive quality chart (month/day granularity).
+// Mirrors renderTimelineQualityChart but uses startMs-keyed bins
+// with month/day labels instead of year-only.
+function renderTimelineQualityChartAdaptive(data, gran) {
+    const canvas = document.getElementById("timeline-quality-chart");
+    if (!canvas || !data) return;
+    const pad = (n) => String(n).padStart(2, "0");
+    const accent = getComputedStyle(document.body).getPropertyValue("--accent").trim() || "#00F0FF";
+    const accentHover = getComputedStyle(document.body).getPropertyValue("--accent-hover").trim() || accent;
+
+    const labels = [];
+    const values = [];
+    for (const row of data) {
+        if (row.count === 0 || row.median == null) continue;
+        const d = new Date(row.startMs);
+        if (gran === "day") {
+            labels.push(`${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`);
+        } else {
+            const monthNames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+            labels.push(`${monthNames[d.getUTCMonth()]} ${d.getUTCFullYear()}`);
+        }
+        values.push(row.median);
+    }
+
+    if (state.timelineQualityChart) {
+        state.timelineQualityChart.data.labels = labels;
+        state.timelineQualityChart.data.datasets[0].data = values;
+        state.timelineQualityChart.data.datasets[0].borderColor = accent;
+        state.timelineQualityChart.data.datasets[0].pointBackgroundColor = accentHover;
+        state.timelineQualityChart.update("none");
+        return;
+    }
+    const ctx = canvas.getContext("2d");
+    state.timelineQualityChart = new Chart(ctx, {
+        type: "line",
+        data: {
+            labels,
+            datasets: [{
+                label: `Median quality score (per ${gran})`,
+                data: values,
+                borderColor: accent,
+                backgroundColor: "transparent",
+                pointBackgroundColor: accentHover,
+                pointRadius: gran === "day" ? 1 : 2,
+                tension: 0.2,
+                borderWidth: 2,
+            }],
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: { duration: 300 },
+            plugins: { legend: { display: false } },
+            scales: {
+                x: { ticks: { maxTicksLimit: gran === "day" ? 20 : 16 } },
+                y: { min: 0, max: 100, title: { display: true, text: `Median QS (per ${gran})` } },
+            },
+        },
+    });
+}
+
+// v0.10.0 — adaptive movement chart (month/day granularity).
+function renderTimelineMovementChartAdaptive(mv, gran) {
+    const canvas = document.getElementById("timeline-movement-chart");
+    if (!canvas || !mv || !mv._bins) return;
+    const pad = (n) => String(n).padStart(2, "0");
+    const bins = mv._bins;
+    const M = 10;
+
+    // Trim leading/trailing zero bins
+    let start = 0, end = bins.length - 1;
+    while (start < bins.length && mv.totals[start] === 0) start++;
+    while (end >= 0 && mv.totals[end] === 0) end--;
+    if (start > end) { start = 0; end = bins.length - 1; }
+
+    const labels = [];
+    for (let y = start; y <= end; y++) {
+        const d = new Date(bins[y].startMs);
+        if (gran === "day") {
+            labels.push(`${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`);
+        } else {
+            const monthNames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+            labels.push(`${monthNames[d.getUTCMonth()]} ${d.getUTCFullYear()}`);
+        }
+    }
+
+    const palette = [
+        "#00F0FF", "#FFB300", "#FF4E00", "#B8001F", "#7CF9FF",
+        "#8A94AD", "#6ea8ff", "#E6EAF2", "#C97B00", "#9C8B60",
+    ];
+    const datasets = [];
+    for (let b = 0; b < M; b++) {
+        const data = new Array(labels.length);
+        for (let y = 0; y < labels.length; y++) {
+            data[y] = mv.counts[(start + y) * M + b];
+        }
+        datasets.push({
+            label: mv.movements[b] || `cat ${b}`,
+            data,
+            backgroundColor: palette[b] + "AA",
+            borderColor: palette[b],
+            borderWidth: 1,
+            fill: true,
+        });
+    }
+
+    if (state.timelineMovementChart) {
+        state.timelineMovementChart.data.labels = labels;
+        state.timelineMovementChart.data.datasets = datasets;
+        state.timelineMovementChart.update("none");
+        return;
+    }
+    const ctx = canvas.getContext("2d");
+    state.timelineMovementChart = new Chart(ctx, {
+        type: "line",
+        data: { labels, datasets },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: "index", intersect: false },
+            animation: { duration: 300 },
+            plugins: { legend: { position: "top", labels: { boxWidth: 10 } } },
+            scales: {
+                x: { stacked: true, ticks: { maxTicksLimit: gran === "day" ? 20 : 16 } },
+                y: { stacked: true, beginAtZero: true },
+            },
+            elements: { point: { radius: 0 } },
         },
     });
 }
