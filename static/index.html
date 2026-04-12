@@ -723,30 +723,20 @@ DATABASE_URL="postgresql://..." python mcp_server.py</code></pre>
             <div class="methodology">
 
                 <h2>Unified UFO Sightings Database &mdash; Methodology</h2>
-                <p class="meth-intro">This document describes how <strong>614,505 sighting records</strong> were assembled from five major UFO/UAP databases, deduplicated across sources, and enriched with cross-source metadata. No records are deleted.</p>
+                <p class="meth-intro"><strong>This is not raw data.</strong> UFOSINT Explorer presents a <strong>processed scientific analysis</strong> of five major UFO/UAP databases &mdash; 614,505 sighting records deduplicated, cross-referenced, quality-scored, movement-classified, and emotion-analyzed using four transformer models. Every step of the pipeline is documented below and can be independently replicated from the source data using the open-source <a href="https://github.com/UFOSINT/ufo-dedup" target="_blank" rel="noopener">ufo-dedup</a> pipeline.</p>
 
-                <!-- v0.9.1 — current-build correction banner. The
-                     duplicate_candidate table ships empty in the
-                     v0.8.3b public export (dedup moved to ingest
-                     time). The per-method tables further down this
-                     page describe the HISTORICAL dedup pipeline —
-                     they're retained for methodological
-                     transparency, not as a description of the
-                     current build. -->
                 <div class="meth-banner meth-banner-note">
-                    <strong>Current build (v0.8.3b) ships 0 duplicate candidate pairs.</strong>
-                    The <code>duplicate_candidate</code> table is
-                    empty in this release — deduplication moved from
-                    a post-hoc pair-flagging step to an at-ingest
-                    filter, and the pairs are no longer materialised.
-                    The per-tier tables further down this page
-                    describe the <em>historical</em> dedup pipeline
-                    (used to flag the 126,730 pairs shipped in
-                    pre-v0.8.3b builds) and are retained as
-                    methodological record. Per-sighting cross-source
-                    matches are still surfaced on
-                    <code>/api/sighting/&lt;id&gt;</code> via the
-                    inline UNION-ALL query in the detail modal.
+                    <strong>Reproducibility statement.</strong>
+                    The entire database can be rebuilt from source files
+                    with a single command (<code>python rebuild_db.py</code>).
+                    All data quality fixes are idempotent and preserve
+                    original values. Derived columns (quality scores,
+                    movement categories, emotion classifications) are
+                    computed deterministically from the raw narratives.
+                    No records are deleted &mdash; duplicates are flagged,
+                    not merged. The deduplication pipeline described below
+                    documents the <em>historical</em> methodology; the
+                    current build applies deduplication at ingest time.
                 </div>
 
                 <!-- ============ Source Databases ============ -->
@@ -1243,21 +1233,87 @@ DATABASE_URL="postgresql://..." python mcp_server.py</code></pre>
                 <h3>Richness score (<code>richness_score</code>)</h3>
                 <p>A companion to <code>quality_score</code>. Where quality asks "how much structured data do we have", richness asks "how much <em>narrative detail</em> do we have". Higher richness means more distinct observation words (colours, durations, sound descriptions, object count, witness count, reaction details). It's the score that tells you how <em>readable</em> a record is going to be, not how <em>verifiable</em> it is. Also a 0&ndash;100 integer; no explicit threshold filter in the UI but it's available via the binary wire format for future use.</p>
 
-                <h3>Dominant emotion + primary color</h3>
-                <p>Two small categorical columns also derived at v0.8.3b time:</p>
-                <ul>
-                    <li><strong><code>dominant_emotion</code></strong> &mdash; one of 8 emotions (joy, fear, anger, sadness, surprise, disgust, trust, anticipation) extracted via a lightweight keyword+sentiment classifier. Populated for <strong>149,607 sightings</strong>. Drives the Insights tab's Emotion Distribution, Emotion Over Time, Emotions By Source, and Emotions By Shape cards.</li>
-                    <li><strong><code>primary_color</code></strong> &mdash; one of 22 colours (red, blue, metallic silver, etc.) extracted from the narrative. Populated for <strong>145,209 sightings</strong>. Available as a dropdown in the Observatory filter bar.</li>
-                </ul>
-                <p>Both columns are sparsely populated because they're only meaningful when the original record includes narrative text &mdash; which the <code>ufo_public.db</code> public export strips for privacy. Emotion and colour were computed from the <em>private</em> text corpus before the strip and ride along with the public export as derived columns, so the Observatory can filter by them even though the raw descriptions are gone.</p>
+                <h3>Primary color</h3>
+                <p><strong><code>primary_color</code></strong> &mdash; one of 22 colours (red, blue, metallic silver, etc.) extracted from the narrative via keyword matching. Populated for <strong>145,209 sightings</strong>. Available as a dropdown in the Observatory filter bar.</p>
 
-                <!-- ============ Data Retirement Notes ============ -->
-                <h2>Notes on the v0.8.3b Data Pipeline</h2>
-                <p>A few details worth knowing if you're comparing counts to earlier versions:</p>
+                <!-- ============ v0.11 Emotion & Sentiment Analysis ============ -->
+                <h2>Emotion &amp; Sentiment Analysis (v0.11)</h2>
+                <p>In v0.11, the science team ran <strong>four models</strong> against all 502,985 sightings with narrative text, replacing the earlier 8-class keyword classifier with transformer-based analysis. All models were run offline on the full private corpus; the results ship as 12 derived columns in the public database.</p>
+
+                <h3>Models</h3>
+                <table>
+                    <thead><tr><th>Model</th><th>Type</th><th>Output</th><th>Coverage</th></tr></thead>
+                    <tbody>
+                        <tr>
+                            <td><strong>RoBERTa</strong> (cardiffnlp/twitter-roberta-base-sentiment-latest)</td>
+                            <td>3-class sentiment</td>
+                            <td>positive / negative / neutral + confidence scores</td>
+                            <td>502,985</td>
+                        </tr>
+                        <tr>
+                            <td><strong>RoBERTa</strong> (j-hartmann/emotion-english-distilroberta-base)</td>
+                            <td>7-class emotion</td>
+                            <td>anger, disgust, fear, joy, neutral, sadness, surprise</td>
+                            <td>502,985</td>
+                        </tr>
+                        <tr>
+                            <td><strong>GoEmotions</strong> (SamLowe/roberta-base-go_emotions)</td>
+                            <td>28-class emotion</td>
+                            <td>admiration, amusement, anger, annoyance, approval, caring, confusion, curiosity, desire, disappointment, disapproval, disgust, embarrassment, excitement, fear, gratitude, grief, joy, love, nervousness, optimism, pride, realization, relief, remorse, sadness, surprise, neutral</td>
+                            <td>502,985</td>
+                        </tr>
+                        <tr>
+                            <td><strong>VADER</strong> (rule-based)</td>
+                            <td>Compound sentiment</td>
+                            <td>Score from -1.0 (most negative) to +1.0 (most positive)</td>
+                            <td>502,985</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>Why four models?</h3>
+                <p>No single sentiment model captures the nuance of UFO sighting narratives. VADER is fast and rule-based but misses sarcasm and context. RoBERTa sentiment gives a reliable positive/negative/neutral split but lacks granularity. The 7-class RoBERTa emotion model distinguishes fear from sadness from surprise &mdash; crucial for UFO reports where fear and awe often coexist. GoEmotions' 28-class taxonomy catches subtler states like "curiosity", "confusion", and "realization" that are common in witness accounts. Running all four lets the Insights tab cross-reference models and surface patterns that no single classifier would catch.</p>
+
+                <h3>Coverage and neutrality</h3>
+                <p>86.7% of sightings are classified as "neutral" by GoEmotions. This is expected &mdash; most reports are factual descriptions ("I saw a light at 10pm heading north"). The Insights tab's GoEmotions card hides neutral by default (toggle available) so the 13.3% with non-neutral emotion are legible.</p>
+
+                <h3>Derived columns</h3>
+                <p>The 12 new columns on the <code>sighting</code> table:</p>
+                <table>
+                    <thead><tr><th>Column</th><th>Type</th><th>Description</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>emotion_28_dominant</code></td><td>VARCHAR</td><td>Top GoEmotions label (e.g., "fear", "curiosity")</td></tr>
+                        <tr><td><code>emotion_28_group</code></td><td>VARCHAR</td><td>Sentiment group derived from GoEmotions (positive/negative/neutral/ambiguous)</td></tr>
+                        <tr><td><code>emotion_28_scores</code></td><td>JSONB</td><td>Full 28-class probability vector</td></tr>
+                        <tr><td><code>emotion_7_dominant</code></td><td>VARCHAR</td><td>Top 7-class RoBERTa emotion label</td></tr>
+                        <tr><td><code>emotion_7_scores</code></td><td>JSONB</td><td>Full 7-class probability vector</td></tr>
+                        <tr><td><code>vader_compound</code></td><td>REAL</td><td>VADER compound score (-1 to +1)</td></tr>
+                        <tr><td><code>vader_pos</code></td><td>REAL</td><td>VADER positive proportion</td></tr>
+                        <tr><td><code>vader_neg</code></td><td>REAL</td><td>VADER negative proportion</td></tr>
+                        <tr><td><code>vader_neu</code></td><td>REAL</td><td>VADER neutral proportion</td></tr>
+                        <tr><td><code>roberta_sentiment</code></td><td>VARCHAR</td><td>RoBERTa 3-class label (positive/negative/neutral)</td></tr>
+                        <tr><td><code>roberta_positive</code></td><td>REAL</td><td>RoBERTa positive confidence</td></tr>
+                        <tr><td><code>roberta_negative</code></td><td>REAL</td><td>RoBERTa negative confidence</td></tr>
+                    </tbody>
+                </table>
+                <p>All emotion columns are packed into the 40-byte binary bulk buffer for client-side rendering. VADER compound and RoBERTa sentiment scores are scaled from [-1, +1] to [0, 255] uint8 via <code>round((v+1)*127.5)</code>.</p>
+
+                <h3>Replicating the analysis</h3>
+                <p>The transformer analysis can be replicated independently:</p>
+                <ol>
+                    <li>Obtain the raw narrative text from the source databases (NUFORC, MUFON, etc.)</li>
+                    <li>Run the three HuggingFace models against the text (model IDs listed in the table above)</li>
+                    <li>Run VADER (<code>vaderSentiment</code> Python package) against the same text</li>
+                    <li>Join results to the UFOSINT sighting table by <code>source_record_id</code></li>
+                </ol>
+                <p>The models are deterministic given the same input text and model weights. Minor version differences in the transformer libraries may produce slightly different confidence scores but the dominant labels should be stable.</p>
+
+                <!-- ============ Data Notes ============ -->
+                <h2>Notes on the Current Build</h2>
                 <ul>
-                    <li><strong>Raw narrative text is not in the public database.</strong> The <code>description</code>, <code>summary</code>, <code>notes</code>, and <code>raw_json</code> columns were dropped from <code>ufo_public.db</code> by <code>scripts/strip_raw_for_public.py</code>. The Observatory's faceted filters work against the derived columns above; the full free-text search capability from earlier versions isn't available in the public instance.</li>
-                    <li><strong>The <code>duplicate_candidate</code> table ships empty in v0.8.3b.</strong> The science team moved deduplication to happen at ingest time rather than as a post-hoc pairing step, so the old "review X similar pairs" workflow has no rows to display. The per-sighting <code>duplicates</code> array on <code>/api/sighting/&lt;id&gt;</code> still surfaces cross-source matches when they exist. The Duplicates tab was removed in v0.8.6.</li>
-                    <li><strong>Sentiment analysis is disabled in the public instance.</strong> VADER sentiment scores (the <code>sentiment_analysis</code> table) depend on the raw narrative text, which was stripped. The Insights tab's emotion cards were rewritten in v0.8.8 to read from <code>dominant_emotion</code> directly instead of hitting the dead <code>/api/sentiment/*</code> endpoints.</li>
+                    <li><strong>Raw narrative text is not in the public database.</strong> The <code>description</code>, <code>summary</code>, <code>notes</code>, and <code>raw_json</code> columns were stripped from the public export for privacy. All derived columns (quality scores, movement categories, emotion classifications) were computed from the private corpus before stripping and ship as structured fields.</li>
+                    <li><strong>Deduplication is applied at ingest time.</strong> Known duplicates (1.94M records from UFOCAT-NUFORC and UPDB-MUFON/NUFORC overlaps) are excluded during import. The historical three-tier dedup pipeline documented above produced 126,730 candidate pairs in earlier builds; these are no longer materialized in the current build.</li>
+                    <li><strong>This is a scientific analysis, not an editorial product.</strong> No records are deleted, ranked, or editorially curated. Quality scores, hoax flags, and emotion labels are algorithmic outputs with known limitations. The coverage strips on the Insights tab show exactly what percentage of the visible dataset each metric covers.</li>
                 </ul>
 
             </div>

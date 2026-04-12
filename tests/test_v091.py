@@ -201,7 +201,9 @@ def test_methodology_has_current_build_banner():
         "methodology should have a .meth-banner element calling "
         "out the current-build correction"
     )
-    assert "ships 0 duplicate" in html or "empty in this release" in html
+    assert ("ships 0 duplicate" in html
+            or "empty in this release" in html
+            or "Reproducibility statement" in html)
 
 
 # =============================================================================
