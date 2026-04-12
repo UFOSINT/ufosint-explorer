@@ -538,6 +538,22 @@ def _api_stats_from_mv(conn):
     (total, date_min, date_max,
      geocoded, geocoded_original, geocoded_geonames, dupes) = row
 
+    # v0.9.1: mv_stats_summary reads MIN/MAX over the full date_event
+    # column, which still contains 692 bogus "0019-..." records that
+    # the v0.8.3b fix pipeline was supposed to NULL. Override the
+    # MV's date_min with a live query that excludes them. Cheap
+    # (single indexed MIN) and corrects the stats-popover headline.
+    if date_min and str(date_min).startswith("0019-"):
+        cur.execute("""
+            SELECT MIN(date_event)
+            FROM sighting
+            WHERE date_event IS NOT NULL
+              AND date_event NOT LIKE '0019-%'
+        """)
+        override = cur.fetchone()
+        if override and override[0]:
+            date_min = override[0]
+
     cur.execute("""
         SELECT name, count, collection
         FROM mv_stats_by_source ORDER BY count DESC
@@ -610,9 +626,19 @@ def _api_stats_from_live(conn):
     """)
     by_collection = [{"name": r[0], "count": r[1]} for r in cur.fetchall()]
 
+    # v0.9.1: exclude the 692 bogus "0019-..." records that should
+    # have been NULLed by the v0.8.3b date-fix pipeline but didn't
+    # make it onto the live DB. These are UFOCAT's 2-digit "19xx,
+    # year unknown" sentinel that ETL mis-interpreted as year 19 AD.
+    # The legitimate pre-1000 AD sightings (34, 61, 776, 919, etc.)
+    # are NOT affected — they use 4-digit zero-padded years like
+    # "0034-..." which don't match the "0019-%" prefix. See
+    # scripts/fix_year_0019.sql for the one-shot DB cleanup.
     cur.execute("""
         SELECT MIN(date_event), MAX(date_event)
-        FROM sighting WHERE date_event IS NOT NULL
+        FROM sighting
+        WHERE date_event IS NOT NULL
+          AND date_event NOT LIKE '0019-%'
     """)
     row = cur.fetchone()
     date_min, date_max = row[0], row[1]
@@ -1522,11 +1548,17 @@ def _points_bulk_build_cached(etag: str) -> tuple[bytes, bytes, dict]:
         # Column probe: which v0.8.2 derived columns actually exist?
         present_cols = _points_bulk_column_set(conn)
 
-        # Stable source index, alphabetical by name. Index 0 is reserved
-        # for "unknown" so every shipped source gets 1..N.
+        # Stable source index, alphabetical by name. Index 0 is
+        # reserved for "unknown" so every shipped source gets 1..N.
+        # v0.9.1: the zero slot used to be `None`, which caused
+        # client charts to render a silent null category. It's now
+        # the literal string "(unknown)" so a row with a broken FK
+        # gets labelled instead of disappearing. Orphaned rows are
+        # also counted in cov["orphaned_source"] so the client can
+        # detect the integrity issue via the meta sidecar.
         cur.execute("SELECT id, name FROM source_database ORDER BY name")
         source_rows = cur.fetchall()
-        source_names = [None] + [r[1] for r in source_rows]
+        source_names = ["(unknown)"] + [r[1] for r in source_rows]
         source_id_to_idx = {r[0]: i + 1 for i, r in enumerate(source_rows)}
 
         # v0.8.2 — prefer the canonical standardized_shape when the
@@ -1679,6 +1711,12 @@ def _points_bulk_build_cached(etag: str) -> tuple[bytes, bytes, dict]:
             # v0.8.5 — movement coverage counters
             "has_movement": 0,
             "movement_flags": 0,
+            # v0.9.1 — data-integrity counters. Every row packed
+            # into the buffer with source_idx = 0 or shape_idx = 0
+            # is orphaned (FK resolution failed at pack time).
+            # Client charts can warn when these are > 0.
+            "orphaned_source": 0,
+            "orphaned_shape": 0,
         }
 
         for row in cur:
@@ -1789,13 +1827,22 @@ def _points_bulk_build_cached(etag: str) -> tuple[bytes, bytes, dict]:
             if mv_flags:
                 cov["movement_flags"] += 1
 
+            # v0.9.1 — count orphaned source FKs. If a sighting
+            # row has a src_id that doesn't resolve in the
+            # source_database table, pack it as 0 (the "(unknown)"
+            # slot) and bump the counter so the meta sidecar
+            # surfaces the data-integrity issue.
+            src_idx_packed = source_id_to_idx.get(src_id, 0)
+            if src_idx_packed == 0:
+                cov["orphaned_source"] += 1
+
             buf.extend(
                 pack(
                     int(sid),
                     float(lat),
                     float(lng),
                     date_days,
-                    source_id_to_idx.get(src_id, 0),
+                    src_idx_packed,
                     shape_idx,
                     q_val,
                     h_val,
@@ -1938,9 +1985,21 @@ def api_timeline():
     cur = conn.cursor()
 
     year = request.args.get("year")
+    # v0.9.1: honor bins=monthly as an explicit request for
+    # month-level aggregation over the full range. Previously the
+    # `bins` parameter was silently ignored, so
+    # /api/timeline?bins=monthly returned year-level data and
+    # callers had no way to tell. Now monthly bins route to the
+    # live fallback (the materialized view is year-only) and the
+    # response mode reflects what was actually returned.
+    bins_mode = (request.args.get("bins") or "").lower()
+    want_monthly = bins_mode == "monthly"
 
     # --- MV fast path: unfiltered yearly timeline -----------------------
-    if not year and not _has_common_filters(request.args):
+    # Eligible when: no year drill-down, no filters, not explicitly
+    # asking for monthly bins. The MV is year-level so requesting
+    # monthly forces the live path.
+    if not year and not want_monthly and not _has_common_filters(request.args):
         try:
             cur.execute("""
                 SELECT period, source_name, cnt
@@ -1949,6 +2008,13 @@ def api_timeline():
             """)
             data = {}
             for period, source, count in cur.fetchall():
+                # v0.9.1: drop the 692 bogus "0019-..." records
+                # from the MV output. These should have been NULLed
+                # by the v0.8.3b date-fix pipeline. See
+                # scripts/fix_year_0019.sql for the one-shot
+                # cleanup; this filter is belt-and-suspenders.
+                if period and str(period).startswith("0019"):
+                    continue
                 data.setdefault(period, {})[source] = count
             conn.close()
             return jsonify({"mode": "yearly", "year": None, "data": data})
@@ -1958,11 +2024,20 @@ def api_timeline():
             print("[api_timeline] mv_timeline_yearly missing, falling back to live query")
             cur = conn.cursor()
 
-    clauses = ["s.date_event IS NOT NULL", "LENGTH(s.date_event) >= 4"]
+    # v0.9.1: same "0019-..." guard on the live path.
+    clauses = [
+        "s.date_event IS NOT NULL",
+        "LENGTH(s.date_event) >= 4",
+        "s.date_event NOT LIKE '0019-%'",
+    ]
     args = []
 
     add_common_filters(request.args, clauses, args)
 
+    # v0.9.1: three cases now — year-drilldown (monthly within one
+    # year), explicit full-range monthly (bins=monthly), and yearly.
+    # The third is the default and also what the MV fast path
+    # returns.
     if year:
         # Monthly breakdown for a specific year
         clauses.append("SUBSTR(s.date_event, 1, 4) = %s")
@@ -1981,6 +2056,27 @@ def api_timeline():
             GROUP BY period, sd.name
             ORDER BY period
         """
+        response_mode = "monthly"
+    elif want_monthly:
+        # v0.9.1: full-range monthly aggregation. Previously the
+        # `bins=monthly` param was silently ignored. Now we hit
+        # the live path and group by SUBSTR(date_event, 1, 7).
+        # Records without a month (date_event shorter than 7
+        # chars) are dropped by the LENGTH >= 7 guard.
+        where = " AND ".join(clauses)
+        sql = f"""
+            SELECT SUBSTR(s.date_event, 1, 7) as period,
+                   sd.name as source_name,
+                   COUNT(*) as cnt
+            FROM sighting s
+            JOIN source_database sd ON s.source_db_id = sd.id
+            LEFT JOIN location l ON s.location_id = l.id
+            WHERE {where}
+              AND LENGTH(s.date_event) >= 7
+            GROUP BY period, sd.name
+            ORDER BY period
+        """
+        response_mode = "monthly"
     else:
         # Yearly breakdown (includes pre-1900 historic sightings)
         where = " AND ".join(clauses)
@@ -1996,6 +2092,7 @@ def api_timeline():
             GROUP BY period, sd.name
             ORDER BY period
         """
+        response_mode = "yearly"
 
     cur.execute(sql, args)
     rows = cur.fetchall()
@@ -2010,7 +2107,7 @@ def api_timeline():
 
     conn.close()
     return jsonify({
-        "mode": "monthly" if year else "yearly",
+        "mode": response_mode,
         "year": year,
         "data": data,
     })
@@ -2519,7 +2616,12 @@ def api_sentiment_timeline():
     conn = get_db()
     cur = conn.cursor()
 
-    clauses = ["s.date_event IS NOT NULL", "LENGTH(s.date_event) >= 4"]
+    # v0.9.1: exclude the 692 bogus "0019-..." records.
+    clauses = [
+        "s.date_event IS NOT NULL",
+        "LENGTH(s.date_event) >= 4",
+        "s.date_event NOT LIKE '0019-%'",
+    ]
     args = []
     add_common_filters(request.args, clauses, args)
 

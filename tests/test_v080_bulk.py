@@ -265,8 +265,13 @@ def test_points_bulk_meta_returns_schema_and_lookups(client, monkeypatch):
     assert meta["schema"]["flag_bits"]["has_media"] == 1
     assert meta["schema"]["flag_bits"]["has_movement"] == 2
 
-    # Lookups: index 0 reserved for unknown/none, real entries start at 1
-    assert meta["sources"][0] is None
+    # Lookups: index 0 reserved for unknown/none, real entries
+    # start at 1. v0.9.1 changed meta["sources"][0] from None to
+    # the literal string "(unknown)" so client-side charts that
+    # render per-source categories have a labelled bucket for
+    # orphaned-FK rows instead of silently dropping them. Other
+    # lookups (shapes/colors/emotions) still use None at index 0.
+    assert meta["sources"][0] == "(unknown)"
     assert "MUFON" in meta["sources"]
     assert meta["shapes"][0] is None
     assert "Circle" in meta["shapes"]

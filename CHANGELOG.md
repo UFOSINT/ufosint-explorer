@@ -17,6 +17,175 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 Nothing yet.
 
+## [0.9.1] — 2026-04-12 — Correctness hotfix + Insights coverage panels
+
+Informed by a UX agent review and a Science agent review run in
+parallel before implementation. Both landed after v0.9.0 shipped
+and agreed independently on several issues — v0.9.1 fixes the
+ones that are actually wrong (not just suboptimal) plus adds
+the single cheapest honesty improvement.
+
+### Wave 1 — Correctness hotfix
+
+The v0.8.8 build had several places where the app was silently
+wrong, not just imprecise:
+
+- **Year-0019 records.** 692 UFOCAT records with a 2-digit "19"
+  sentinel (meaning "1900s, year unknown") were documented as
+  set to NULL by the v0.8.3b date-fix pipeline. That fix never
+  landed on Azure PG, so `/api/stats.date_range.min` returned
+  "0019-01-01" and `/api/timeline` showed a `{"0019": {...}}`
+  bucket — pretending 692 sightings happened in 19 AD. v0.9.1
+  adds query-time guards in three endpoints (`/api/stats` live +
+  MV paths, `/api/timeline` live + MV paths,
+  `/api/sentiment/timeline`) and ships a one-shot
+  `scripts/fix_year_0019.sql` cleanup script with audit logging,
+  idempotency checks, and a post-update sanity assertion.
+- **`/api/timeline?bins=monthly`** was silently ignored — the
+  server returned year-level data regardless. v0.9.1 honors the
+  parameter by routing monthly requests to the live path and
+  returning `{"mode": "monthly"}` in the response.
+- **`sources[0]` was `None`** in the bulk buffer meta sidecar.
+  Client-side charts rendering a per-source category silently
+  dropped orphaned-FK rows into a null bucket. v0.9.1 renames
+  the slot to the literal string `"(unknown)"` so those rows
+  get a labeled category, AND counts them in
+  `coverage.orphaned_source` so the client can detect the
+  data-integrity issue via the meta sidecar.
+- **Methodology page lede** claimed "126,730 duplicate
+  candidate pairs are flagged for review" — but
+  `/api/stats.duplicate_candidates = 0`. That's the
+  pre-v0.8.3b number; the `duplicate_candidate` table ships
+  empty in the current build because dedup moved to ingest
+  time. v0.9.1 strikes the claim from the lede and adds a
+  correction banner right below it.
+- **"Hoax likelihood"** was labelled and rendered as a
+  probability. It's a keyword-match heuristic. v0.9.1 renames
+  all user-facing strings to "narrative red flags" with a
+  tooltip disclaimer, keeps the underlying column name for
+  backward compat, and adds an Insights card subtitle
+  explaining it's a heuristic, not a calibrated posterior.
+- **"Had description"** toggle implied the narrative text is
+  readable. In the public DB raw text is stripped. Renamed to
+  "Had description (in source)" with a "classifier ran; text
+  not retained" sub-label.
+
+A new persistent **bias warning banner** appears inside the
+Observatory rail whenever the "High quality only" toggle is
+active. Text explains that the composite score rewards modern
+MUFON-investigated reports and that downstream charts inherit
+that bias.
+
+### Wave 2 — Insights coverage panels
+
+Every Insights card now surfaces a **coverage strip** at the
+bottom:
+
+```
+Emotion classifier populated    35.4%    n = 23,814 / 67,203
+```
+
+A green/yellow/orange/red pill encodes the coverage band:
+
+- **Green (≥ 80%)** — data is dense enough for the chart to be
+  trusted without caveats
+- **Yellow (50-80%)** — chart is meaningful but the user should
+  know the subset
+- **Orange (30-50%)** — card is dimmed to 0.72 opacity; visual
+  hierarchy signals "don't over-interpret this"
+- **Red (< 30%)** — card is dimmed further (0.45 opacity) and
+  displays a big red "INSUFFICIENT DATA — < 30% COVERAGE"
+  banner above the chart
+
+This was the Science reviewer's single top recommendation:
+"the single cheapest correction to the tool's biggest honesty
+problem." A single walk of `POINTS.visibleIdx` computes coverage
+for all 11 derived columns in a few milliseconds. Cards wire
+into a new `_mountAllCoverageStrips()` helper called from
+`refreshInsightsClientCards` so the early-return-on-chart-update
+pattern in each renderer doesn't swallow the coverage call.
+
+### Added
+
+- **`_computeInsightsCoverage(P)`** helper in `app.js` — walks
+  `POINTS.visibleIdx` once and returns `{ total, dated, quality,
+  hoax, richness, shape, color, emotion, hasDescription,
+  hasMedia, hasMovement, movementFlags }` each as `{ n, pct }`.
+- **`_renderCoverageStrip(canvasId, covEntry, label)`** — mounts
+  or updates a coverage strip at the bottom of a given card.
+  Colors the pill based on percentage band and toggles
+  `.is-low-coverage` / `.is-critical-coverage` classes on the
+  card.
+- **`_mountAllCoverageStrips()`** — calls `_renderCoverageStrip`
+  for all 8 client-side cards. Runs once per
+  `refreshInsightsClientCards` call.
+- **`updateQualityBiasBanner()`** — shows/hides the in-rail
+  warning banner based on whether `state.qualityFilter.highQuality`
+  is active.
+- **`scripts/fix_year_0019.sql`** — one-shot DB cleanup with
+  audit logging to the `date_correction` table, idempotent via
+  `NOT EXISTS` guard, refreshes `mv_stats_summary` + mv_timeline_yearly`
+  and asserts no `0019-%` records remain post-cleanup.
+- **`.meth-banner-note`** CSS class for the methodology current-
+  build correction banner.
+- **`.quality-bias-banner`** CSS class for the in-rail bias
+  warning.
+- **`.insight-coverage-strip`** + `.cov-pill.cov-{hi,mid,midlo,low}`
+  CSS for the per-card coverage readouts.
+- **`.insight-card.is-low-coverage`** / `.is-critical-coverage`
+  CSS for the dimming + INSUFFICIENT DATA banner.
+- **`tests/test_v091.py`** — 25 new static source-inspection
+  tests locking every point of the v0.9.1 contract.
+
+### Changed
+
+- **`_api_stats_from_mv()`** detects a stale `date_min` starting
+  with "0019-" and re-queries the live table to override with
+  the correct value.
+- **`_api_stats_from_live()`** adds `date_event NOT LIKE '0019-%'`
+  to the MIN/MAX query.
+- **`api_timeline()`** reads a `bins` query parameter, branches
+  to a full-range-monthly SQL path when `bins=monthly`, adds the
+  `NOT LIKE '0019-%'` guard on the live clauses, and drops the
+  `"0019"` key from the MV post-processing.
+- **`api_sentiment_timeline()`** adds the same `NOT LIKE '0019-%'`
+  guard.
+- **`/api/points-bulk?meta=1`** — `sources[0]` is now
+  `"(unknown)"`; `coverage.orphaned_source` + `orphaned_shape`
+  counters track rows whose FK didn't resolve at pack time.
+- **Methodology lede** — struck the 126,730 duplicate-candidate
+  claim; added a correction banner calling out the current-build
+  state.
+- **`mountQualityRail()`** — creates and manages the
+  `.quality-bias-banner` element; updates it on every toggle
+  change.
+- **`refreshInsightsClientCards()`** — now computes coverage
+  before rendering any chart and calls
+  `_mountAllCoverageStrips()` after.
+- **"High quality only" + "Hide likely hoaxes" toggles** —
+  renamed to "Hide narrative red flags" with a "flag score"
+  sub-label; the "High quality only" label stays but gains
+  the bias warning banner.
+- **"Hoax Likelihood Curve"** Insights card title renamed to
+  "Narrative Red Flags (keyword heuristic)".
+- **Detail modal** — "Hoax likelihood: 0.42" renamed to
+  "Narrative red flags: 0.42" with a hover tooltip explaining
+  it's a keyword-match heuristic, not a probability.
+- **`tests/test_v080_bulk.py`** — updated
+  `meta["sources"][0]` assertion from `is None` to
+  `== "(unknown)"`.
+
+### Fixed
+
+- **`/api/stats.date_range.min`** no longer returns "0019-01-01".
+- **`/api/timeline` response** no longer contains a
+  `{"0019": {"UFOCAT": 692}}` bucket.
+- **`/api/timeline?bins=monthly`** actually returns monthly
+  data instead of silently downgrading to yearly.
+- **Stats badge popover** shows the corrected date range.
+- **Insights charts** no longer render identical layouts at
+  5% coverage vs 95% coverage.
+
 ## [0.9.0] — 2026-04-11 — TimeBrush zoom/pan + mobile responsive layout
 
 Two big UX improvements:

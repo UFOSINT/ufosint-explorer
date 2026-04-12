@@ -2017,14 +2017,23 @@ function mountQualityRail() {
         },
         {
             key: "hideHoaxes",
-            label: "Hide likely hoaxes",
-            sub: `score > ${HOAX_THRESHOLD / 100}`,
+            // v0.9.1: renamed from "Hide likely hoaxes". The
+            // underlying score is a keyword heuristic, not a
+            // probability — describing it as "likely hoax" was
+            // false precision.
+            label: "Hide narrative red flags",
+            sub: `flag score > ${HOAX_THRESHOLD / 100}`,
             coverageKey: "hoax_score",
         },
         {
             key: "hasDescription",
-            label: "Has description",
-            sub: "narrative text",
+            // v0.9.1: the public DB strips raw narrative text, so
+            // "has description" rows don't actually have readable
+            // descriptions in this build. The flag records whether
+            // a description existed in the ORIGINAL source DB
+            // before the privacy strip. Renamed to reflect that.
+            label: "Had description (in source)",
+            sub: "classifier ran; text not retained",
             coverageKey: "has_description",
         },
         {
@@ -2079,6 +2088,9 @@ function mountQualityRail() {
                     // v0.8.5 — bit 2 of the flags byte
                     state.qualityFilter.hasMovement = e.target.checked ? true : null;
                 }
+                // v0.9.1 — re-evaluate the bias warning banner on
+                // every toggle change.
+                updateQualityBiasBanner();
                 applyFilters();
             });
         }
@@ -2088,6 +2100,38 @@ function mountQualityRail() {
     // building the filter descriptor.
     state.qualityFilter.qualityThreshold = QUALITY_THRESHOLD;
     state.qualityFilter.hoaxThreshold = HOAX_THRESHOLD;
+
+    // v0.9.1 — mount the bias warning element inside the
+    // rail-quality section. Shown when the "High quality only"
+    // toggle is active. Text explains that the composite score
+    // rewards modern, MUFON-investigated, well-dated reports so
+    // any downstream chart is structurally biased.
+    if (!host.querySelector(".quality-bias-banner")) {
+        const banner = document.createElement("div");
+        banner.className = "quality-bias-banner";
+        banner.hidden = true;
+        banner.innerHTML = `
+            <strong>High-quality filter is biased.</strong>
+            This subset (~19% of rows) rewards modern, MUFON-investigated,
+            well-dated reports. The quality score is a composite of 6
+            factors with unvalidated weights — see
+            <a href="#/methodology" class="quality-bias-link">Methodology</a>
+            before citing any number derived from it.
+        `;
+        host.parentElement?.appendChild(banner);
+    }
+    updateQualityBiasBanner();
+}
+
+// v0.9.1 — toggle the high-quality bias warning banner based on
+// the current filter state. Called from mountQualityRail (initial
+// mount), on every rail toggle change, and on any external filter
+// update that flips state.qualityFilter.highQuality.
+function updateQualityBiasBanner() {
+    const banner = document.querySelector(".quality-bias-banner");
+    if (!banner) return;
+    const active = !!(state.qualityFilter && state.qualityFilter.highQuality);
+    banner.hidden = !active;
 }
 
 // =========================================================================
@@ -3457,6 +3501,13 @@ async function loadInsights() {
 // /api/sentiment/* endpoints. All 8 cards are now purely client-side.
 function refreshInsightsClientCards() {
     if (!window.UFODeck || !window.UFODeck.POINTS || !window.UFODeck.POINTS.ready) return;
+    // v0.9.1 — compute coverage for each derived column over the
+    // current visible set BEFORE rendering any card. Every card
+    // gets a coverage strip at the bottom via
+    // _mountAllCoverageStrips() after all renderers run. Coverage
+    // drives the low-coverage greying-out too.
+    state.insightsCoverage = _computeInsightsCoverage(window.UFODeck.POINTS);
+
     // v0.8.8 emotion cards (client-side)
     renderEmotionRadar();
     renderEmotionOverTime();
@@ -3467,6 +3518,158 @@ function refreshInsightsClientCards() {
     renderMovementTaxonomy();
     renderShapeMovementMatrix();
     renderHoaxCurve();
+
+    // v0.9.1 — mount coverage strips on all 8 client-side cards
+    // AFTER all Chart.js instances have rendered. This runs from a
+    // single place so the early-return-on-chart-update pattern in
+    // each renderer doesn't cause the strip to get skipped.
+    _mountAllCoverageStrips();
+}
+
+// v0.9.1 — mount a coverage strip on every client-side insights
+// card. Called at the end of refreshInsightsClientCards. Reads
+// state.insightsCoverage (populated earlier in the same function).
+function _mountAllCoverageStrips() {
+    const cov = state.insightsCoverage;
+    if (!cov) return;
+    // Emotion cards all depend on dominant_emotion classification
+    _renderCoverageStrip("emotion-radar-chart", cov.emotion,
+        "Emotion classifier populated");
+    _renderCoverageStrip("sentiment-timeline-chart", cov.emotion,
+        "Emotion classifier populated");
+    _renderCoverageStrip("emotion-source-chart", cov.emotion,
+        "Emotion classifier populated");
+    _renderCoverageStrip("emotion-shape-chart", cov.emotion,
+        "Emotion classifier populated");
+    // v0.8.6 derived-column cards
+    _renderCoverageStrip("quality-distribution-chart", cov.quality,
+        "Quality score populated");
+    _renderCoverageStrip("movement-taxonomy-chart", cov.movementFlags,
+        "Movement-tagged rows");
+    // Shape × Movement needs BOTH shape and movement populated;
+    // use the minimum of the two.
+    const shapeMov = (cov.shape && cov.movementFlags)
+        ? { n: Math.min(cov.shape.n, cov.movementFlags.n),
+            pct: Math.min(cov.shape.pct, cov.movementFlags.pct) }
+        : null;
+    _renderCoverageStrip("shape-movement-chart", shapeMov,
+        "Shape + movement both populated");
+    _renderCoverageStrip("hoax-curve-chart", cov.hoax,
+        "Red flag score populated");
+}
+
+// v0.9.1 — walk POINTS.visibleIdx once and count, for each
+// derived column, how many rows have the column populated (or
+// the corresponding flag bit set). Returns an object with a
+// per-column { n, pct } pair plus the total visible count.
+//
+// The Insights tab's biggest honesty problem was that emotion /
+// color / hoax / movement charts rendered identical layouts
+// regardless of underlying coverage — a filter that left only
+// 200 emotion-labelled rows drew the same radar as a filter that
+// left 150,000. Now every card surfaces its coverage so users can
+// tell when they're looking at a sliver.
+function _computeInsightsCoverage(P) {
+    const iter = P.visibleIdx || null;
+    const N = iter ? iter.length : P.count;
+    const qs = P.qualityScore;
+    const hs = P.hoaxScore;
+    const rs = P.richnessScore;
+    const shp = P.shapeIdx;
+    const ci = P.colorIdx;
+    const ei = P.emotionIdx;
+    const fl = P.flags;
+    const mf = P.movementFlags;
+    const dd = P.dateDays;
+    const UNK = 255;
+    // flag bit constants are defined in deck.js. Duplicated here
+    // because _computeInsightsCoverage is the one place app.js
+    // reads the flags byte directly.
+    const FLAG_HAS_DESC = 0x01;
+    const FLAG_HAS_MEDIA = 0x02;
+    const FLAG_HAS_MOVEMENT = 0x04;
+
+    let dated = 0;
+    let quality = 0;
+    let hoax = 0;
+    let richness = 0;
+    let shape = 0;
+    let color = 0;
+    let emotion = 0;
+    let hasDesc = 0;
+    let hasMedia = 0;
+    let hasMovement = 0;
+    let movementFlags = 0;
+
+    for (let k = 0; k < N; k++) {
+        const i = iter ? iter[k] : k;
+        if (dd[i] !== 0) dated++;
+        if (qs[i] !== UNK) quality++;
+        if (hs[i] !== UNK) hoax++;
+        if (rs[i] !== UNK) richness++;
+        if (shp[i] !== 0) shape++;
+        if (ci[i] !== 0) color++;
+        if (ei[i] !== 0) emotion++;
+        const f = fl[i];
+        if (f & FLAG_HAS_DESC) hasDesc++;
+        if (f & FLAG_HAS_MEDIA) hasMedia++;
+        if (f & FLAG_HAS_MOVEMENT) hasMovement++;
+        if (mf[i] !== 0) movementFlags++;
+    }
+
+    const pct = (n) => N > 0 ? (n / N) * 100 : 0;
+    return {
+        total: N,
+        dated: { n: dated, pct: pct(dated) },
+        quality: { n: quality, pct: pct(quality) },
+        hoax: { n: hoax, pct: pct(hoax) },
+        richness: { n: richness, pct: pct(richness) },
+        shape: { n: shape, pct: pct(shape) },
+        color: { n: color, pct: pct(color) },
+        emotion: { n: emotion, pct: pct(emotion) },
+        hasDescription: { n: hasDesc, pct: pct(hasDesc) },
+        hasMedia: { n: hasMedia, pct: pct(hasMedia) },
+        hasMovement: { n: hasMovement, pct: pct(hasMovement) },
+        movementFlags: { n: movementFlags, pct: pct(movementFlags) },
+    };
+}
+
+// v0.9.1 — mount (or update) a coverage strip at the bottom of a
+// given insight card. The strip is a single line of text + a
+// colored pill showing the percentage. Colors: green ≥ 80%,
+// yellow 50–80%, orange 30–50%, red < 30%. Cards with <50%
+// coverage also get the .is-low-coverage class which greys out
+// the whole card (users can still read it but the visual cue
+// says "don't over-interpret this").
+function _renderCoverageStrip(canvasId, covEntry, label) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas || !covEntry) return;
+    const card = canvas.closest(".insight-card");
+    if (!card) return;
+
+    const pct = covEntry.pct;
+    const n = covEntry.n;
+    const total = state.insightsCoverage?.total || 0;
+
+    let band = "cov-hi";
+    if (pct < 30) band = "cov-low";
+    else if (pct < 50) band = "cov-midlo";
+    else if (pct < 80) band = "cov-mid";
+
+    card.classList.toggle("is-low-coverage", pct < 50);
+    card.classList.toggle("is-critical-coverage", pct < 30);
+
+    let strip = card.querySelector(".insight-coverage-strip");
+    if (!strip) {
+        strip = document.createElement("div");
+        strip.className = "insight-coverage-strip";
+        card.appendChild(strip);
+    }
+    strip.innerHTML = `
+        <span class="cov-label">${escapeHtml(label)}</span>
+        <span class="cov-pill ${band}">${pct.toFixed(1)}%</span>
+        <span class="cov-n">n = ${n.toLocaleString()} / ${total.toLocaleString()}</span>
+    `;
 }
 
 // -------------------------------------------------------------------------
@@ -3766,13 +3969,13 @@ function renderHoaxCurve() {
                 legend: { display: false },
                 tooltip: {
                     callbacks: {
-                        title: (items) => `Hoax score ${items[0].label}-${(+items[0].label) + 4}`,
+                        title: (items) => `Red flag score ${items[0].label}-${(+items[0].label) + 4}`,
                         label: (item) => `${item.parsed.y.toLocaleString()} sightings`,
                     },
                 },
             },
             scales: {
-                x: { title: { display: true, text: "Hoax likelihood (0 = genuine, 100 = hoax)" } },
+                x: { title: { display: true, text: "Narrative red flag score (heuristic, not a probability)" } },
                 y: { beginAtZero: true },
             },
         },
@@ -4374,12 +4577,17 @@ async function openDetail(id) {
                 </div>`;
             }
             if (r.hoax_likelihood != null) {
-                // hoax_likelihood is REAL 0.0-1.0. Render as a
-                // burgundy "danger" bar — higher = more likely hoax.
+                // v0.9.1: renamed from "Hoax likelihood" to
+                // "Narrative red flags" because the underlying
+                // column is a keyword-match heuristic, not a
+                // calibrated probability. The value stays
+                // 0.0-1.0 so existing clients don't break, but
+                // the display label and tooltip explain what it
+                // actually measures.
                 const val = Number(r.hoax_likelihood);
                 const pct = Math.max(0, Math.min(100, Math.round(val * 100)));
                 html += `<div class="detail-row">
-                    <span class="detail-label">Hoax likelihood:</span>
+                    <span class="detail-label" title="Keyword-based heuristic flagging narrative patterns (hoax-language, shape/date collisions, source priors). Not a calibrated probability — see Methodology.">Narrative red flags:</span>
                     <div class="quality-bar quality-bar-hoax"><div class="quality-bar-fill" style="width:${pct}%"></div></div>
                     <span class="quality-bar-value">${val.toFixed(2)}</span>
                 </div>`;

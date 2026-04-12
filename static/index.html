@@ -453,7 +453,7 @@
                     </div>
                 </div>
                 <div class="insight-card">
-                    <h3>Hoax Likelihood Curve</h3>
+                    <h3>Narrative Red Flags (keyword heuristic)</h3>
                     <div class="insight-chart-wrap">
                         <canvas id="hoax-curve-chart"></canvas>
                     </div>
@@ -622,7 +622,31 @@ DATABASE_URL="postgresql://..." python mcp_server.py</code></pre>
             <div class="methodology">
 
                 <h2>Unified UFO Sightings Database &mdash; Methodology</h2>
-                <p class="meth-intro">This document describes how <strong>614,505 sighting records</strong> were assembled from five major UFO/UAP databases, deduplicated across sources, and enriched with cross-source metadata. <strong>126,730 duplicate candidate pairs</strong> are flagged for review. No records are deleted.</p>
+                <p class="meth-intro">This document describes how <strong>614,505 sighting records</strong> were assembled from five major UFO/UAP databases, deduplicated across sources, and enriched with cross-source metadata. No records are deleted.</p>
+
+                <!-- v0.9.1 — current-build correction banner. The
+                     duplicate_candidate table ships empty in the
+                     v0.8.3b public export (dedup moved to ingest
+                     time). The per-method tables further down this
+                     page describe the HISTORICAL dedup pipeline —
+                     they're retained for methodological
+                     transparency, not as a description of the
+                     current build. -->
+                <div class="meth-banner meth-banner-note">
+                    <strong>Current build (v0.8.3b) ships 0 duplicate candidate pairs.</strong>
+                    The <code>duplicate_candidate</code> table is
+                    empty in this release — deduplication moved from
+                    a post-hoc pair-flagging step to an at-ingest
+                    filter, and the pairs are no longer materialised.
+                    The per-tier tables further down this page
+                    describe the <em>historical</em> dedup pipeline
+                    (used to flag the 126,730 pairs shipped in
+                    pre-v0.8.3b builds) and are retained as
+                    methodological record. Per-sighting cross-source
+                    matches are still surfaced on
+                    <code>/api/sighting/&lt;id&gt;</code> via the
+                    inline UNION-ALL query in the detail modal.
+                </div>
 
                 <!-- ============ Source Databases ============ -->
                 <h3>Source Databases</h3>

@@ -1760,6 +1760,33 @@ select:focus {
     margin-bottom: 20px;
 }
 
+/* v0.9.1 — correction banner used in the methodology lede to call
+   out places where the page describes historical state (pre-v0.8.3b)
+   vs. the current build. */
+.methodology .meth-banner {
+    font-size: 13px;
+    line-height: 1.55;
+    margin: 0 0 24px;
+    padding: 14px 18px;
+    border-radius: 6px;
+    border: 1px solid var(--accent-warm, #FFB300);
+    background: color-mix(in oklab, var(--bg-card) 80%, var(--accent-warm, #FFB300) 20%);
+    color: var(--text);
+}
+.methodology .meth-banner strong {
+    display: block;
+    color: var(--accent-warm, #FFB300);
+    margin-bottom: 6px;
+    font-size: 13px;
+    letter-spacing: 0.03em;
+}
+.methodology .meth-banner code {
+    font-size: 12px;
+    padding: 1px 4px;
+    background: color-mix(in oklab, var(--bg-card) 70%, var(--accent) 10%);
+    border-radius: 3px;
+}
+
 .methodology ul,
 .methodology ol {
     margin: 8px 0 12px 20px;
@@ -1923,6 +1950,87 @@ select:focus {
    stacked-bar layout has room to breathe. */
 .insight-card-wide {
     grid-column: 1 / -1;
+}
+
+/* v0.9.1 — coverage strip at the bottom of each insights card.
+   Shows "what fraction of visible rows actually have the column
+   this chart is drawn from". The Science reviewer called this the
+   single cheapest correction to the tool's biggest honesty
+   problem: a user filtering to a narrow subset sees the same
+   chart layout regardless of how sparse the underlying data is,
+   with no indication that they might be looking at a sliver. */
+.insight-coverage-strip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px dashed var(--border);
+    font-size: 10px;
+    letter-spacing: 0.02em;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+}
+.insight-coverage-strip .cov-label {
+    flex: 1;
+    min-width: 0;
+    text-overflow: ellipsis;
+    overflow: hidden;
+    white-space: nowrap;
+}
+.insight-coverage-strip .cov-pill {
+    display: inline-block;
+    padding: 2px 7px;
+    border-radius: 999px;
+    font-weight: 600;
+    font-size: 10px;
+    border: 1px solid transparent;
+}
+.insight-coverage-strip .cov-pill.cov-hi {
+    background: color-mix(in oklab, var(--bg-card) 78%, #3fb950 22%);
+    border-color: #3fb950;
+    color: #3fb950;
+}
+.insight-coverage-strip .cov-pill.cov-mid {
+    background: color-mix(in oklab, var(--bg-card) 80%, #d4af37 20%);
+    border-color: #d4af37;
+    color: #d4af37;
+}
+.insight-coverage-strip .cov-pill.cov-midlo {
+    background: color-mix(in oklab, var(--bg-card) 80%, #f28e2b 20%);
+    border-color: #f28e2b;
+    color: #f28e2b;
+}
+.insight-coverage-strip .cov-pill.cov-low {
+    background: color-mix(in oklab, var(--bg-card) 80%, #e15759 20%);
+    border-color: #e15759;
+    color: #e15759;
+}
+.insight-coverage-strip .cov-n {
+    color: var(--text-muted);
+    font-size: 10px;
+    white-space: nowrap;
+}
+
+/* Low-coverage card greys out the whole chart so the user can
+   still read it but the visual hierarchy signals "don't
+   over-interpret this". Critical coverage (<30%) goes further
+   and dims the card to 0.45 opacity. */
+.insight-card.is-low-coverage .insight-chart-wrap {
+    opacity: 0.72;
+}
+.insight-card.is-critical-coverage .insight-chart-wrap {
+    opacity: 0.45;
+}
+.insight-card.is-critical-coverage::before {
+    content: "INSUFFICIENT DATA — < 30% COVERAGE";
+    display: block;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    color: #e15759;
+    margin-bottom: 6px;
+    text-align: center;
 }
 
 @media (max-width: 900px) {
@@ -3482,6 +3590,35 @@ body.is-touch .movement-cluster { flex-wrap: nowrap; }
     text-transform: uppercase;
     margin-top: 1px;
 }
+/* v0.9.1 — bias warning banner shown when the "High quality
+   only" toggle is active. Lives inside the Observatory rail
+   next to the Data Quality section. Amber styling so the user
+   can't miss it, but low-key enough not to dominate the rail. */
+.quality-bias-banner {
+    margin-top: var(--s-2);
+    padding: 8px 10px;
+    border: 1px solid var(--accent-warm, #FFB300);
+    border-radius: 4px;
+    background: color-mix(in oklab, var(--bg-card) 82%, var(--accent-warm, #FFB300) 18%);
+    color: var(--text);
+    font-size: 10px;
+    line-height: 1.45;
+    letter-spacing: 0.01em;
+}
+.quality-bias-banner[hidden] { display: none; }
+.quality-bias-banner strong {
+    display: block;
+    color: var(--accent-warm, #FFB300);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 9px;
+    margin-bottom: 3px;
+}
+.quality-bias-banner .quality-bias-link {
+    color: var(--accent);
+    text-decoration: underline;
+}
+
 .rail-toggle-list li.rail-toggle-disabled {
     opacity: 0.4;
     cursor: not-allowed;
