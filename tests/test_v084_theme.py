@@ -121,7 +121,9 @@ def test_style_css_theme_pill_uses_tokens():
     """The pill must use CSS variables so it re-skins correctly on
     theme change. Hardcoded colors would lock it to one theme."""
     css = _read(STYLE_CSS)
-    start = css.find(".theme-pill {")
+    # v0.11.2: skip the mobile media-query `.theme-pill { display:none }`
+    # and find the actual top-level definition instead.
+    start = css.find("\n.theme-pill {")
     assert start != -1
     # Grab the next ~800 chars covering the .theme-pill block + children
     block = css[start:start + 2000]

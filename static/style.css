@@ -2248,12 +2248,14 @@ select:focus {
         white-space: normal;
         line-height: 1.35;
     }
-    /* v0.9.4 — hide the theme toggle row on very narrow screens
-       so the header stays one line. Users can still access themes
-       via the gear menu. */
+    /* v0.11.2 — show settings gear + help button on mobile but
+       hide the theme pill (accessible via gear menu). */
     .tabs-settings {
-        display: none;
+        display: flex;
+        gap: 4px;
+        margin-left: auto;
     }
+    .theme-pill { display: none; }
     .tabs {
         width: 100%;
         overflow-x: auto;
@@ -4676,4 +4678,142 @@ body[data-hide-brush] .observatory-time-brush {
 @media (prefers-reduced-motion: reduce) {
     .tour-tooltip { transition: none; }
     .tour-backdrop { transition: none; }
+}
+
+/* =========================================================================
+   v0.11.2: Mobile-ready fixes (375px phone target)
+   =========================================================================
+   Addresses: header button visibility, tab/filter touch targets,
+   modal detail grid, brush header overflow, chat popover height.
+   Layered on top of the existing 720px / 700px / 500px breakpoints. */
+
+/* --- 600px: Modal + detail grid --- */
+@media (max-width: 600px) {
+    .modal {
+        width: 96vw;
+        max-height: 90vh;
+        border-radius: 8px;
+    }
+    .detail-grid {
+        grid-template-columns: 1fr;
+    }
+    .modal-header { padding: 10px 14px; }
+    .modal-body { padding: 12px 14px; }
+    .modal-close { font-size: 20px; width: 32px; height: 32px; }
+}
+
+/* --- 500px: Brush header wraps, filters reflow --- */
+@media (max-width: 500px) {
+    /* Brush header: allow wrapping so PLAY/SPEED/READOUT
+       stack into two rows instead of overflowing */
+    .brush-header {
+        flex-wrap: wrap;
+        gap: 4px 8px;
+        padding: 4px 8px;
+    }
+    .brush-readout {
+        flex: 1 1 100%;
+        font-size: 9px;
+        text-align: center;
+    }
+    .brush-play-btn, .brush-reset-btn, .brush-mode-btn {
+        font-size: 9px;
+        padding: 4px 8px;
+        min-height: 28px;
+        min-width: 44px;
+    }
+    .brush-speed-select {
+        font-size: 9px;
+        padding: 2px 4px;
+        min-height: 28px;
+    }
+    .brush-speed-label { font-size: 9px; }
+
+    /* Filter groups: drop min-width so they don't overflow */
+    .filter-group { min-width: 0; flex: 1 1 42%; }
+
+    /* Tabs: bigger touch targets */
+    .tab {
+        min-height: 36px;
+        padding: 8px 10px;
+    }
+
+    /* Header: horizontal layout with scrolling tabs */
+    #header {
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: center;
+        padding: 6px 8px;
+        gap: 4px;
+    }
+    .header-left {
+        flex: 0 0 auto;
+        max-width: 45%;
+    }
+    .header-left h1 { font-size: 13px; }
+    .stats-badge { display: none; }
+    .tabs {
+        flex: 1 1 0;
+        order: 1;
+        gap: 2px;
+    }
+    .tabs-settings {
+        order: 2;
+        flex: 0 0 auto;
+    }
+}
+
+/* --- 375px: Tight phone layout --- */
+@media (max-width: 400px) {
+    #header { padding: 4px 6px; }
+    .header-left h1 { font-size: 12px; letter-spacing: 0; }
+
+    /* Tabs shrink further */
+    .tab {
+        font-size: 11px;
+        padding: 6px 8px;
+        min-height: 32px;
+    }
+
+    /* Brush: more compact */
+    .observatory-time-brush { height: 95px; }
+
+    /* Filter dropdowns: full width stacking */
+    .filter-group { flex: 1 1 100%; min-width: 0; }
+
+    /* Insights jump nav: scroll not wrap */
+    .insights-jump-nav {
+        overflow-x: auto;
+        flex-wrap: nowrap;
+        scrollbar-width: none;
+        gap: 4px;
+    }
+    .insights-jump-nav::-webkit-scrollbar { display: none; }
+    .jump-pill { flex-shrink: 0; font-size: 11px; }
+
+    /* Chat popover: cap height to viewport */
+    .chat-popover { height: 60vh; max-height: 400px; }
+    .chat-fab { min-width: 44px; min-height: 44px; }
+
+    /* DQ gear popup: left-align on narrow screens */
+    .dq-gear-popup { right: -8px; min-width: 240px; }
+}
+
+/* --- Touch-friendly hit targets (any mobile) --- */
+@media (max-width: 700px) {
+    /* Minimum 44px touch targets for interactive elements */
+    .rail-collapse-btn { min-height: 44px; display: flex; align-items: center; }
+    .movement-chip { min-height: 32px; }
+    .gran-btn { min-height: 32px; min-width: 44px; }
+
+    /* Brush handles: expand visual + hit area */
+    .brush-handle { width: 18px; }
+    .brush-handle::before {
+        content: "";
+        position: absolute;
+        inset: -12px -10px;
+    }
+
+    /* Observatory rail: enable scrolling if content overflows */
+    .observatory-rail { overflow-y: auto; }
 }
