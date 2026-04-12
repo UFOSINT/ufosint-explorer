@@ -2,21 +2,50 @@
 
 Interactive web interface for browsing the Unified UFO Sightings Database — **614,505 sighting records** from five major UFO/UAP databases, deduplicated and cross-referenced.
 
-**Live:** [ufosint-explorer.azurewebsites.net](https://ufosint-explorer.azurewebsites.net) · *(custom domain `ufosint.com` in progress)*
+**Live:** [ufosint-explorer.azurewebsites.net](https://ufosint-explorer.azurewebsites.net)
 
-> This repo is the successor to `UFOSINT/ufo-explorer`, which was a Railway-hosted proof of concept. We have moved hosting to Azure App Service and rebranded around the ufosint.com domain. The POC repo is archived for reference.
+> This repo is the successor to `UFOSINT/ufo-explorer`, which was a Railway-hosted proof of concept. Hosting has moved to Azure App Service. The POC repo is archived for reference.
 
 ## Features
 
-- **Interactive Map** — Clustered markers and heatmap view of geocoded sightings with bounding-box filtering
-- **Timeline** — Stacked bar chart of sightings by year, drill down into monthly view
-- **Search** — Full-text search across 614K descriptions with filters for shape, source, Hynek/Vallee classification, date range, country, state, and collection
-- **Duplicates Browser** — Browse 126,730 cross-source duplicate candidate pairs with confidence scores
-- **Insights** — Sentiment and emotion analytics dashboard
-- **Export** — CSV and JSON download of filtered result sets
-- **Methodology** — Full documentation of the import pipeline, deduplication strategy, and scoring methodology
-- **BYOK AI chat** — Bring your own OpenAI / Anthropic / OpenRouter key and chat with the database using function calling
-- **MCP server** — `/mcp` exposes the same 6 tools over JSON-RPC for Claude Desktop, Cursor, Cline, Continue, Windsurf, etc.
+### Observatory
+- **GPU-accelerated map** — 396,158 geocoded sightings rendered via deck.gl on a Leaflet base. Points, heatmap, and hex-bin views. Click any sighting for a full detail modal.
+- **Data Quality rail** — Five toggles (high quality, narrative red flags, has description, has media, has movement) filter the map in real time. Bias warning when the high-quality subset is active.
+- **Live filters** — Shape, color, source, emotion, date range, and 10 movement-category checkboxes. No Apply button — selections take effect at 250ms debounce.
+
+### TimeBrush
+- **Shared across all tabs** — a zoomable, pannable histogram of sightings over time (1900 — present). Scroll to zoom; drag to pan; drag handles to select a playback window.
+- **Adaptive granularity** — year, month, or day bars depending on zoom level, with a bilinear-scale overview mini-map (15% pre-1900, 85% post-1900).
+- **Playback animation** — Hit Play to sweep a time window across the dataset. 10 speed options (0.5 day/sec to 10 year/sec). Sliding and cumulative modes. Timeline and Insights charts animate in sync.
+
+### Timeline
+- **Three-card dashboard** — All sightings stacked by source, quality score over time (median per year), and movement-category share over time.
+- **Zoom-aware** — Charts reflect the TimeBrush zoom range. Day/Month/Year toggle matches the brush's adaptive granularity.
+- **Cross-filtering** — Click any bar segment to isolate that source/year across all three charts.
+
+### Insights
+- **9 client-side cards** in 3 sections:
+  - **Emotion & Sentiment** (5 cards) — Sentiment polarity, 7-class RoBERTa emotion distribution, 28-class GoEmotions detail (with neutral toggle), VADER/RoBERTa score distributions, emotion profile by source.
+  - **Data Quality** (2 cards) — Quality score distribution, narrative red flags curve.
+  - **Movement & Shape** (2 cards) — Movement taxonomy, shape-by-movement matrix.
+- **Coverage strips** — Every card shows an N/total coverage indicator with color-coded pill (green/yellow/orange/red). Cards below 50% coverage are dimmed; below 30% show an "INSUFFICIENT DATA" banner.
+- **Cross-filtering** — Click any chart segment to filter all other cards to that subset.
+
+### AI Integration
+- **BYOK AI chat** — Bring your own OpenAI, Anthropic, or OpenRouter API key. Chat with the database using 6 function-calling tools. Runs entirely in the browser; keys never leave localStorage.
+- **MCP server** — `/mcp` exposes the same 6 tools over JSON-RPC 2.0 for Claude Desktop, Cursor, Cline, Continue, Windsurf, and any MCP-compatible client.
+- **Data Quality gear popup** — Timeline and Insights tabs have a gear icon for adjusting quality filters without switching to Observatory.
+
+### First-Visit Experience
+- **Cinematic landing** — Terminal-style counter ticks up to the total sighting count, then dissolves to reveal the map.
+- **Guided tour** — 5-step tooltip walkthrough highlighting the map, rail, TimeBrush, tabs, and stats badge. Respects `prefers-reduced-motion`.
+- **Help button** — `?` icon in the header replays the tour anytime.
+
+### Other
+- **Methodology** — Full documentation of the import pipeline, deduplication strategy, scoring methodology, and transformer emotion analysis.
+- **Export** — CSV and JSON download of filtered result sets.
+- **Mobile responsive** — Accordion rail, wrapping filter bar, touch-friendly TimeBrush on phones and tablets.
+- **Themes** — Signal (dark cyan) and Declass (warm amber) color schemes.
 
 ## Data Sources
 
@@ -32,33 +61,91 @@ Total raw records across all sources: ~2.56 million. After removing known overla
 
 All source datasets were paid for / licensed by UFOSINT. This repository contains only code; the raw sources and the built database live outside the repo — see the [`ufo-dedup`](https://github.com/UFOSINT/ufo-dedup) pipeline repo for details.
 
-## Deduplication
+## Emotion & Sentiment Analysis (v0.11)
 
-Three-tier cross-source deduplication flags **126,730 candidate pairs** for review without deleting any records:
+Three transformer models + VADER run against 502,985 sightings with narrative text:
 
-- **Tier 1:** MUFON–NUFORC matching on date + city + state (7,694 pairs)
-- **Tier 2:** All remaining cross-source pairs via location keys (51,879 pairs)
-- **Tier 3:** Description fuzzy matching for date-only matches (17,157 pairs)
+| Model | Type | Output | Coverage |
+|---|---|---|---|
+| **RoBERTa** (cardiffnlp) | 3-class sentiment | positive / negative / neutral | 502,985 rows |
+| **RoBERTa** (j-hartmann) | 7-class emotion | anger, disgust, fear, joy, neutral, sadness, surprise | 502,985 rows |
+| **GoEmotions** (SamLowe) | 28-class emotion | admiration, amusement, anger, ... (28 labels) | 502,985 rows |
+| **VADER** | Rule-based sentiment | compound score (-1 to +1) | 502,985 rows |
 
-102,554 NUFORC records enriched with Hynek classifications from UFOCAT metadata.
+All models run offline via the science team's analysis pipeline. Results are stored as 12 new columns in the sighting table and packed into the 40-byte binary bulk buffer for client-side rendering.
+
+## Binary Bulk Buffer
+
+The frontend loads all 396,158 mapped sightings in a single 15MB binary fetch (`/api/points-bulk`). Each sighting is packed into **40 bytes** (v011-1 schema):
+
+```
+<IffIBBBBBBBBBBHHHBBBBBBBB   (26 fields, 40 bytes per row)
+```
+
+Fields include: sighting ID, lat/lon, date (day-index), source/shape/color/emotion indices, quality/hoax/richness scores, flags (has_description, has_media, has_movement), movement bitmask, and 5 emotion/sentiment fields (emotion_28_group, emotion_28_dominant, emotion_7_dominant, vader_compound, roberta_sentiment).
+
+All client-side filtering, histogramming, and chart rendering runs against these typed arrays — typically completing in <5ms for 396k rows.
 
 ## Tech Stack
 
-- **Backend:** Python 3.12 / Flask / Gunicorn (2 workers × 4 threads)
+- **Backend:** Python 3.12 / Flask / Gunicorn (2 workers x 4 threads)
 - **Database:** Azure Database for PostgreSQL Flexible Server (Burstable B1ms), accessed via `psycopg` 3 + `psycopg_pool`
-- **Frontend:** Vanilla JS, Leaflet (maps + markercluster + heat), Chart.js (timeline), Inter font
+- **Frontend:** Vanilla JS (~7,300 lines), Leaflet + deck.gl (map), Chart.js (charts), Inter font
+- **Binary protocol:** 40-byte packed struct per sighting, ~15MB raw / ~6MB gzipped
+- **AI:** BYOK chat (OpenAI/Anthropic/OpenRouter), MCP server (JSON-RPC 2.0 + stdio)
 - **Hosting:** Azure App Service (Linux, B1 tier)
-- **CI/CD:** GitHub Actions → `azure/webapps-deploy@v3` on push to `main` or tag push
-- **Testing:** pytest + ruff, enforced in CI before every deploy
+- **CI/CD:** GitHub Actions -> `azure/webapps-deploy@v3` on push to `main` or tag push
+- **Testing:** pytest (500+ static analysis tests) + ruff, enforced in CI before every deploy
+
+## MCP Tools
+
+Six read-only tools exposed via `/mcp` (JSON-RPC 2.0) and `/api/tools-catalog` (OpenAI format):
+
+| Tool | Description |
+|------|-------------|
+| `search_sightings` | Free-text + filter search (up to 200 records). Filters: shape, source, state, country, date range, Hynek class. |
+| `get_sighting` | Full record for a single sighting by ID. |
+| `get_stats` | Top-level database statistics: totals, per-source counts, date range, geocoded count. |
+| `get_timeline` | Counts grouped by year or month. Optional source/shape filter. |
+| `find_duplicates_for` | Cross-source duplicate candidates for a given sighting ID. |
+| `count_by` | Top-N rankings by categorical field (shape, hynek, vallee, source, country, state). |
+
+### Claude Desktop Setup
+
+```json
+{
+  "mcpServers": {
+    "ufosint": {
+      "url": "https://ufosint-explorer.azurewebsites.net/mcp",
+      "transport": "http"
+    }
+  }
+}
+```
+
+### Claude Code Setup
+
+```json
+{
+  "mcpServers": {
+    "ufosint": {
+      "url": "https://ufosint-explorer.azurewebsites.net/mcp",
+      "transport": "http"
+    }
+  }
+}
+```
+
+Add to `.claude/settings.json` or your global Claude Code MCP config.
 
 ## Documentation
 
 | Doc | For |
 |-----|-----|
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | How the app is structured, request flow, cache strategy, DB access patterns, tool catalog, conventions, and known gotchas. |
-| [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Azure infrastructure setup, environment variables, CI/CD pipeline, how to cut a release, and how to debug the live site. |
-| [`docs/TESTING.md`](docs/TESTING.md) | What the test suite covers, how to run it locally, and how to add new tests. |
-| [`CHANGELOG.md`](CHANGELOG.md) | Release history, following SemVer. |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | App structure, request flow, cache strategy, DB access patterns, tool catalog, conventions. |
+| [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Azure infrastructure, environment variables, CI/CD pipeline, release procedures. |
+| [`docs/TESTING.md`](docs/TESTING.md) | Test suite coverage, how to run locally, how to add new tests. |
+| [`CHANGELOG.md`](CHANGELOG.md) | Release history (SemVer). |
 
 ## Running Locally
 
@@ -79,34 +166,21 @@ The database is built from raw source files by the ETL pipeline in the sibling r
 ## Running Tests
 
 ```bash
-# Full suite (< 1 second)
+# Full suite (< 2 seconds, 500+ tests)
 pytest
 
 # Lint
 ruff check .
 
-# Auto-fix lint issues
-ruff check . --fix
+# JS syntax check
+node -c static/app.js && node -c static/deck.js
 ```
 
-See [`docs/TESTING.md`](docs/TESTING.md) for the full breakdown of what each test file covers and how to add new ones.
+See [`docs/TESTING.md`](docs/TESTING.md) for the full breakdown of what each test file covers.
 
 ## Deploying
 
-Push to `main` — that's it. The GitHub Actions workflow runs `test → build → deploy → smoke`. The `smoke` stage verifies the live HTML ships with versioned asset URLs (`style.css?v=<version>`); if it doesn't, the deploy is marked failed.
-
-To cut a tagged release:
-
-```bash
-# Move the CHANGELOG entry out of [Unreleased]
-vim CHANGELOG.md
-git commit -am "Prep v0.4.2 release"
-
-git tag -a v0.4.2 -m "v0.4.2 — <summary>"
-git push origin main v0.4.2
-```
-
-Pushing the tag re-triggers the workflow because the trigger list includes `tags: 'v*'`.
+Push to `main` — that's it. The GitHub Actions workflow runs `test -> build -> deploy -> smoke`. The `smoke` stage verifies the live HTML ships with versioned asset URLs; if it doesn't, the deploy fails.
 
 See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for the full pipeline breakdown, Azure setup, and rollback procedure.
 
@@ -116,7 +190,7 @@ See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for the full pipeline breakdown, 
 |---|---|---|---|
 | `DATABASE_URL` | **Yes** | — | psycopg connection string, must include `sslmode=require`. App refuses to start without it. |
 | `PORT` | No | `5000` | Server port. App Service sets this automatically. |
-| `ASSET_VERSION` | No | auto | Override the auto-computed asset version string. Only set this when debugging the versioning system. |
+| `ASSET_VERSION` | No | auto | Override the auto-computed asset version string. |
 
 See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md#5-environment-variables-reference) for the full list.
 
