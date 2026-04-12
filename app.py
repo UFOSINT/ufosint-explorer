@@ -1244,9 +1244,9 @@ def api_hexbin():
 # Row grows from 28 to 32 bytes, staying 4-byte aligned so V8's
 # optimized Uint32Array reads on `id` don't fall on unaligned
 # offsets. See docs/V085_MOVEMENT_PLAN.md for the full layout.
-_POINTS_BULK_SCHEMA_VERSION = "v083-1"
-_POINTS_BULK_BYTES_PER_ROW = 32
-# Little-endian row format, 32 bytes:
+_POINTS_BULK_SCHEMA_VERSION = "v011-1"
+_POINTS_BULK_BYTES_PER_ROW = 40
+# Little-endian row format, 40 bytes:
 #   I  uint32  id                (offset 0)
 #   f  float32 lat               (offset 4)
 #   f  float32 lng               (offset 8)
@@ -1257,14 +1257,23 @@ _POINTS_BULK_BYTES_PER_ROW = 32
 #   B  uint8   hoax_score        (offset 19, 255 = unknown)
 #   B  uint8   richness_score    (offset 20, 255 = unknown)
 #   B  uint8   color_idx         (offset 21)
-#   B  uint8   emotion_idx       (offset 22)
+#   B  uint8   emotion_idx       (offset 22, legacy 8-class keyword)
 #   B  uint8   flags             (offset 23, bit0=desc, bit1=media, bit2=movement)
 #   B  uint8   num_witnesses     (offset 24, clamped 0-255)
 #   B  uint8   _reserved         (offset 25)
 #   H  uint16  duration_log2     (offset 26, log2(sec+1) rounded, 0=unknown)
-#   H  uint16  movement_flags    (offset 28, NEW in v083-1, bit-packed categories)
-#   H  uint16  _reserved2        (offset 30, future: topic_id bitmask, etc.)
-_POINTS_BULK_STRUCT = "<IffIBBBBBBBBBBHHH"
+#   H  uint16  movement_flags    (offset 28, bit-packed categories)
+#   H  uint16  _reserved2        (offset 30)
+# --- v0.11 new fields (bytes 32-39) ---
+#   B  uint8   emotion_28_idx    (offset 32, GoEmotions 28-class dominant label)
+#   B  uint8   emotion_28_group  (offset 33, 0=neutral,1=positive,2=negative,3=ambiguous)
+#   B  uint8   emotion_7_idx     (offset 34, 7-class RoBERTa dominant label)
+#   B  uint8   vader_compound    (offset 35, scaled: round((v+1)*127.5) → 0-255 maps -1..+1)
+#   B  uint8   roberta_sentiment (offset 36, scaled same way)
+#   B  uint8   _reserved3a       (offset 37)
+#   B  uint8   _reserved3b       (offset 38)
+#   B  uint8   _reserved3c       (offset 39)
+_POINTS_BULK_STRUCT = "<IffIBBBBBBBBBBHHHBBBBBBBB"
 
 # v0.8.5 — Canonical movement category order. The science-team
 # analyze.py produces at most these 10 categories; the index in this
@@ -1311,6 +1320,12 @@ _POINTS_BULK_DERIVED_COLS = (
     # v0.8.5 (science team's v0.8.3b data layer)
     "has_movement_mentioned",
     "movement_categories",
+    # v0.11 — transformer-based emotion classification
+    "emotion_28_dominant",
+    "emotion_28_group",
+    "emotion_7_dominant",
+    "vader_compound",
+    "roberta_sentiment",
 )
 
 
@@ -1638,6 +1653,35 @@ def _points_bulk_build_cached(etag: str) -> tuple[bytes, bytes, dict]:
             emotion_names = [None] + distinct_emotions
             emotion_to_idx = {e: i + 1 for i, e in enumerate(distinct_emotions)}
 
+        # v0.11 — lookup tables for the transformer emotion columns.
+        # Same pattern: index 0 = unknown/NULL, 1..N = real labels.
+        emo28_names = [None]
+        emo28_to_idx: dict = {}
+        if "emotion_28_dominant" in present_cols:
+            cur.execute(
+                "SELECT DISTINCT emotion_28_dominant FROM sighting "
+                "WHERE emotion_28_dominant IS NOT NULL "
+                "ORDER BY emotion_28_dominant"
+            )
+            distinct_emo28 = [r[0] for r in cur.fetchall()][:254]
+            emo28_names = [None] + distinct_emo28
+            emo28_to_idx = {e: i + 1 for i, e in enumerate(distinct_emo28)}
+
+        # GoEmotions sentiment group: 4 fixed values
+        _EMO28_GROUP_MAP = {"neutral": 0, "positive": 1, "negative": 2, "ambiguous": 3}
+
+        emo7_names = [None]
+        emo7_to_idx: dict = {}
+        if "emotion_7_dominant" in present_cols:
+            cur.execute(
+                "SELECT DISTINCT emotion_7_dominant FROM sighting "
+                "WHERE emotion_7_dominant IS NOT NULL "
+                "ORDER BY emotion_7_dominant"
+            )
+            distinct_emo7 = [r[0] for r in cur.fetchall()][:254]
+            emo7_names = [None] + distinct_emo7
+            emo7_to_idx = {e: i + 1 for i, e in enumerate(distinct_emo7)}
+
         # Build the SELECT list. Columns that don't exist in the
         # schema yet get `NULL AS col_name` so the tuple position stays
         # stable regardless of migration state.
@@ -1673,6 +1717,12 @@ def _points_bulk_build_cached(etag: str) -> tuple[bytes, bytes, dict]:
             # pre-v0.8.3 schema via the column probe / _col_expr.
             _col_expr("has_movement_mentioned"),
             _col_expr("movement_categories"),
+            # v0.11 — transformer emotion classification
+            _col_expr("emotion_28_dominant"),
+            _col_expr("emotion_28_group"),
+            _col_expr("emotion_7_dominant"),
+            _col_expr("vader_compound"),
+            _col_expr("roberta_sentiment"),
         ]
         select_sql = ",\n                   ".join(select_parts)
 
@@ -1726,6 +1776,9 @@ def _points_bulk_build_cached(etag: str) -> tuple[bytes, bytes, dict]:
                 sighting_dt, std_shape, prim_color, dom_emotion,
                 quality, richness, hoax, has_desc, has_media,
                 has_movement, movement_cats_json,
+                # v0.11 — transformer emotion columns
+                emo28_dom, emo28_group, emo7_dom,
+                vader_comp, roberta_sent,
             ) = row
 
             # Prefer the explicit sighting_datetime when present, fall
@@ -1836,6 +1889,26 @@ def _points_bulk_build_cached(etag: str) -> tuple[bytes, bytes, dict]:
             if src_idx_packed == 0:
                 cov["orphaned_source"] += 1
 
+            # v0.11 — pack the new emotion fields into bytes 32-39.
+            # Categorical columns → uint8 index into lookup table.
+            # VADER/RoBERTa scores → uint8 scaled from [-1,+1] to [0,255].
+            emo28_idx = emo28_to_idx.get(emo28_dom, 0) if emo28_dom else 0
+            emo28_grp = _EMO28_GROUP_MAP.get(emo28_group, 0) if emo28_group else 0
+            emo7_idx = emo7_to_idx.get(emo7_dom, 0) if emo7_dom else 0
+
+            # Scale VADER compound / RoBERTa sentiment from [-1,+1]
+            # to [0,255]. 128 = neutral (0.0). 0 = -1.0, 255 = +1.0.
+            # NULL → 128 (treat as neutral for rendering; coverage
+            # strip still shows the true coverage from the column
+            # probe, not from the packed value).
+            def _scale_score(v):
+                if v is None:
+                    return 128
+                return max(0, min(255, int(round((float(v) + 1) * 127.5))))
+
+            vader_u8 = _scale_score(vader_comp)
+            roberta_u8 = _scale_score(roberta_sent)
+
             buf.extend(
                 pack(
                     int(sid),
@@ -1854,7 +1927,14 @@ def _points_bulk_build_cached(etag: str) -> tuple[bytes, bytes, dict]:
                     0,  # _reserved
                     dur_log2,
                     mv_flags,       # v0.8.5 — movement category bitmask
-                    0,              # _reserved2 (32-byte alignment padding)
+                    0,              # _reserved2
+                    # --- v0.11 new fields (bytes 32-39) ---
+                    emo28_idx,      # GoEmotions 28-class dominant
+                    emo28_grp,      # sentiment group (0-3)
+                    emo7_idx,       # 7-class RoBERTa dominant
+                    vader_u8,       # VADER compound scaled 0-255
+                    roberta_u8,     # RoBERTa sentiment scaled 0-255
+                    0, 0, 0,        # _reserved3 (padding to 40 bytes)
                 )
             )
             count += 1
@@ -1876,6 +1956,10 @@ def _points_bulk_build_cached(etag: str) -> tuple[bytes, bytes, dict]:
         # the client can decode the movement_flags uint16. Slot 0
         # is 'hovering', slot 1 is 'linear', etc. See _MOVEMENT_CATS.
         "movements": list(_MOVEMENT_CATS),
+        # v0.11 — transformer emotion lookup tables
+        "emotions_28": emo28_names,
+        "emotions_28_groups": ["neutral", "positive", "negative", "ambiguous"],
+        "emotions_7": emo7_names,
         "shape_source": "standardized" if use_std_shape else "raw",
         "raw_size": len(raw),
         "gzip_size": len(gzipped),
@@ -1910,6 +1994,15 @@ def _points_bulk_build_cached(etag: str) -> tuple[bytes, bytes, dict]:
                 # bit 7 = vanished, bit 8 = followed, bit 9 = landed.
                 {"name": "movement_flags",  "offset": 28, "type": "uint16",  "len": 2},
                 {"name": "_reserved2",      "offset": 30, "type": "uint16",  "len": 2},
+                # v0.11 — transformer emotion fields
+                {"name": "emotion_28_idx",     "offset": 32, "type": "uint8",  "len": 1},
+                {"name": "emotion_28_group",   "offset": 33, "type": "uint8",  "len": 1},
+                {"name": "emotion_7_idx",      "offset": 34, "type": "uint8",  "len": 1},
+                {"name": "vader_compound",     "offset": 35, "type": "uint8",  "len": 1},
+                {"name": "roberta_sentiment",  "offset": 36, "type": "uint8",  "len": 1},
+                {"name": "_reserved3a",        "offset": 37, "type": "uint8",  "len": 1},
+                {"name": "_reserved3b",        "offset": 38, "type": "uint8",  "len": 1},
+                {"name": "_reserved3c",        "offset": 39, "type": "uint8",  "len": 1},
             ],
             "flag_bits": {
                 "has_description": 0,

@@ -171,17 +171,17 @@ def test_migrator_has_pg_column_probe():
 # app.py — points-bulk schema bump + helpers
 # ---------------------------------------------------------------------------
 def test_app_schema_version_bumped():
-    """v0.8.5 bumped the schema again to v083-1 (32-byte row with
-    movement_flags). v082-1 is preserved in git history."""
+    """v0.11 bumped the schema to v011-1 (40-byte row with
+    transformer emotion fields)."""
     src = _read(APP_PY)
-    assert '_POINTS_BULK_SCHEMA_VERSION = "v083-1"' in src
+    assert '_POINTS_BULK_SCHEMA_VERSION = "v011-1"' in src
 
 
 def test_app_bytes_per_row_is_28():
-    """v0.8.5 grew the row to 32 bytes. See test_v085_movement for
-    the full v0.8.3b/v0.8.5 layout contract."""
+    """v0.11 grew the row to 40 bytes (32 existing + 8 new for
+    the transformer emotion columns)."""
     src = _read(APP_PY)
-    assert "_POINTS_BULK_BYTES_PER_ROW = 32" in src
+    assert "_POINTS_BULK_BYTES_PER_ROW = 40" in src
 
 
 def test_app_has_column_probe_helper():

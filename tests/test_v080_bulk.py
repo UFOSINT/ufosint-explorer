@@ -46,10 +46,9 @@ def test_points_bulk_schema_version_constant():
 
 def test_points_bulk_bytes_per_row_constant():
     src = _read(APP_PY)
-    # v0.8.5 (v0.8.3b data layer) bumped to 32-byte rows to fit
-    # movement_flags + reserved padding. 28 bytes (v0.8.2) and 16
-    # bytes (v0.8.0) are in git history.
-    assert "_POINTS_BULK_BYTES_PER_ROW = 32" in src, (
+    # v0.11: bumped to 40-byte rows for the transformer emotion
+    # columns (32 existing + 8 new bytes).
+    assert "_POINTS_BULK_BYTES_PER_ROW = 40" in src, (
         "The row layout is part of the wire contract — the client "
         "hard-codes it into its DataView offsets. Lock it here so a "
         "refactor can't silently bump it without a schema version change."
@@ -58,11 +57,12 @@ def test_points_bulk_bytes_per_row_constant():
 
 def test_points_bulk_struct_format():
     src = _read(APP_PY)
-    # v0.8.5: 32-byte row = v0.8.2 28-byte layout + uint16
-    # movement_flags + uint16 reserved2.
-    assert '_POINTS_BULK_STRUCT = "<IffIBBBBBBBBBBHHH"' in src, (
+    # v0.11: 40-byte row = v0.8.5 32-byte layout + 8 new uint8
+    # fields (emotion_28_idx, emotion_28_group, emotion_7_idx,
+    # vader_compound, roberta_sentiment, 3× reserved).
+    assert '_POINTS_BULK_STRUCT = "<IffIBBBBBBBBBBHHHBBBBBBBB"' in src, (
         "The struct format locks the on-wire order. Little-endian so "
-        "the JS DataView reads it directly. 18 fields, 32 bytes total."
+        "the JS DataView reads it directly. 26 fields, 40 bytes total."
     )
 
 
@@ -145,6 +145,12 @@ class _FakeBulkCursor:
             self._current = [("red", "red"), ("white", "white")]
         elif "distinct dominant_emotion" in s:
             self._current = [("fear", "fear"), ("surprise", "surprise")]
+        elif "distinct emotion_28_dominant" in s:
+            # v0.11 — GoEmotions 28-class lookup
+            self._current = [("confusion",), ("fear",), ("neutral",)]
+        elif "distinct emotion_7_dominant" in s:
+            # v0.11 — 7-class RoBERTa lookup
+            self._current = [("fear",), ("neutral",), ("surprise",)]
         elif "from sighting s" in s and "join location l" in s and "order by s.id" in s:
             # The big geocoded scan. Must return 17-tuple rows matching
             # the SELECT list in _points_bulk_build().
@@ -186,17 +192,20 @@ def _make_sighting(
     quality=None, richness=None, hoax=None,
     has_desc=0, has_media=0,
     has_movement=0, movement_cats_json=None,
+    emo28_dom=None, emo28_group=None, emo7_dom=None,
+    vader_comp=None, roberta_sent=None,
 ):
-    """Build a 19-tuple matching the v083-1 SELECT list.
+    """Build a 24-tuple matching the v011-1 SELECT list.
 
-    Order must match _points_bulk_build() (v0.8.5 adds the two v0.8.3b
-    movement fields at the end):
+    Order must match _points_bulk_build():
       id, latitude, longitude, source_db_id, raw_shape, date_event,
       duration_seconds, raw_num_witnesses,
       sighting_datetime, standardized_shape, primary_color, dominant_emotion,
       quality_score, richness_score, hoax_likelihood,
       has_description, has_media,
-      has_movement_mentioned, movement_categories  ← NEW in v0.8.5
+      has_movement_mentioned, movement_categories,
+      emotion_28_dominant, emotion_28_group, emotion_7_dominant,
+      vader_compound, roberta_sentiment
     """
     return (
         sid, lat, lng, src, raw_shape, date_event,
@@ -204,6 +213,8 @@ def _make_sighting(
         sighting_dt, std_shape, prim_color, dom_emotion,
         quality, richness, hoax, has_desc, has_media,
         has_movement, movement_cats_json,
+        emo28_dom, emo28_group, emo7_dom,
+        vader_comp, roberta_sent,
     )
 
 
@@ -241,8 +252,9 @@ def test_points_bulk_meta_returns_schema_and_lookups(client, monkeypatch):
 
     # v0.8.5 shape (v0.8.3b data layer)
     assert meta["count"] == len(_SAMPLE_SIGHTINGS)
-    assert meta["schema_version"] == "v083-1"
-    assert meta["schema"]["bytes_per_row"] == 32
+    # v0.11: schema bumped from v083-1 (32B) to v011-1 (40B)
+    assert meta["schema_version"] == "v011-1"
+    assert meta["schema"]["bytes_per_row"] == 40
     assert meta["schema"]["endian"] == "little"
     assert meta["schema"]["score_unknown"] == 255
     assert meta["schema"]["date_epoch"] == "1900-01-01"
@@ -257,6 +269,10 @@ def test_points_bulk_meta_returns_schema_and_lookups(client, monkeypatch):
         "num_witnesses", "_reserved", "duration_log2",
         # v0.8.5 additions
         "movement_flags", "_reserved2",
+        # v0.11 additions
+        "emotion_28_idx", "emotion_28_group",
+        "emotion_7_idx", "vader_compound", "roberta_sentiment",
+        "_reserved3a", "_reserved3b", "_reserved3c",
     ]
 
     # v0.8.5 flag bits map: bit 0 = has_desc, bit 1 = has_media,
@@ -311,9 +327,9 @@ def test_points_bulk_default_returns_gzipped_binary(client, monkeypatch):
     assert resp.headers.get("Content-Encoding") == "gzip"
     assert resp.headers.get("ETag")
 
-    # Ungzip and verify size is an exact multiple of 32 (v0.8.5 row size)
+    # Ungzip and verify size is an exact multiple of 40 (v0.11 row size)
     raw = gzip.decompress(resp.data)
-    assert len(raw) == len(_SAMPLE_SIGHTINGS) * 32, (
+    assert len(raw) == len(_SAMPLE_SIGHTINGS) * 40, (
         "packed buffer length must equal count * bytes_per_row"
     )
 
@@ -325,17 +341,15 @@ def test_points_bulk_binary_roundtrip(client, monkeypatch):
     """Unpack the packed bytes and verify key fields match the input.
 
     float32 precision loss is fine for lat/lng (< 1 cm at the equator).
-    The v0.8.5 row format carries 17 unpacked fields in 32 bytes
-    (the `HHH` tail is 3 uint16s: duration_log2, movement_flags,
-    _reserved2).
+    The v0.11 row format carries 25 unpacked fields in 40 bytes.
     """
     _install_fake(monkeypatch, _SAMPLE_SIGHTINGS)
     resp = client.get("/api/points-bulk")
     raw = gzip.decompress(resp.data)
 
-    fmt = "<IffIBBBBBBBBBBHHH"
+    fmt = "<IffIBBBBBBBBBBHHHBBBBBBBB"
     row_size = struct.calcsize(fmt)
-    assert row_size == 32
+    assert row_size == 40
 
     unpacked = [
         struct.unpack_from(fmt, raw, offset=i * row_size)

@@ -190,12 +190,17 @@
         // If the server sends a different size the schema changed on
         // us and we should bail loudly rather than silently corrupt
         // every marker.
-        if (bytesPerRow !== 32) {
+        // v0.11: row size bumped from 32 to 40 bytes. Accept either
+        // for backward compat during deploy window (the server might
+        // be ahead of the CDN-cached HTML/JS).
+        if (bytesPerRow !== 40 && bytesPerRow !== 32) {
             throw new Error(
-                `unexpected row size ${bytesPerRow} — expected 32 (v0.8.5). ` +
+                `unexpected row size ${bytesPerRow} — expected 40 (v0.11). ` +
                 `Deploy probably has stale server code.`,
             );
         }
+        const isV11 = bytesPerRow === 40;
+        const rowBytes = bytesPerRow;
 
         const N = meta.count;
         const dv = new DataView(buf);
@@ -213,14 +218,17 @@
         POINTS.flags         = new Uint8Array(N);
         POINTS.numWitnesses  = new Uint8Array(N);
         POINTS.durationLog2  = new Uint16Array(N);
-        POINTS.movementFlags = new Uint16Array(N);  // v0.8.5
+        POINTS.movementFlags = new Uint16Array(N);
+        // v0.11 — new typed arrays for transformer emotion data
+        POINTS.emotion28Idx      = new Uint8Array(N);
+        POINTS.emotion28Group    = new Uint8Array(N);
+        POINTS.emotion7Idx       = new Uint8Array(N);
+        POINTS.vaderCompound     = new Uint8Array(N);  // scaled 0-255
+        POINTS.robertaSentiment  = new Uint8Array(N);  // scaled 0-255
 
-        // Hot deserialisation loop. Hard-coded offsets for speed —
-        // anything dynamic would cost 5-10 ms per 100k rows. The
-        // schema version assertion above guards against silent
-        // layout drift.
+        // Hot deserialisation loop. Hard-coded offsets for speed.
         for (let i = 0; i < N; i++) {
-            const o = i * 32;
+            const o = i * rowBytes;
             POINTS.id[i]            = dv.getUint32(o,      true);
             POINTS.lat[i]           = dv.getFloat32(o + 4,  true);
             POINTS.lng[i]           = dv.getFloat32(o + 8,  true);
@@ -234,15 +242,21 @@
             POINTS.emotionIdx[i]    = dv.getUint8(o + 22);
             POINTS.flags[i]         = dv.getUint8(o + 23);
             POINTS.numWitnesses[i]  = dv.getUint8(o + 24);
-            // byte 25 is _reserved, skip
             POINTS.durationLog2[i]  = dv.getUint16(o + 26, true);
-            // v0.8.5 — movement_flags bitmask at offset 28. Bytes
-            // 30-31 are _reserved2 and skipped.
             POINTS.movementFlags[i] = dv.getUint16(o + 28, true);
+            // v0.11 — bytes 32-36 carry the new emotion fields.
+            // Only read if the row is 40 bytes (v0.11 schema).
+            if (isV11) {
+                POINTS.emotion28Idx[i]     = dv.getUint8(o + 32);
+                POINTS.emotion28Group[i]   = dv.getUint8(o + 33);
+                POINTS.emotion7Idx[i]      = dv.getUint8(o + 34);
+                POINTS.vaderCompound[i]    = dv.getUint8(o + 35);
+                POINTS.robertaSentiment[i] = dv.getUint8(o + 36);
+            }
         }
         const t2 = performance.now();
         console.info(
-            `[v0.8.5] Deserialised ${N.toLocaleString()} rows in ${(t2 - t1).toFixed(0)} ms`,
+            `[v0.11] Deserialised ${N.toLocaleString()} rows (${rowBytes}B each) in ${(t2 - t1).toFixed(0)} ms`,
         );
 
         POINTS.count = N;
@@ -251,7 +265,11 @@
         POINTS.shapes    = meta.shapes || [null];
         POINTS.colors    = meta.colors || [null];
         POINTS.emotions  = meta.emotions || [null];
-        POINTS.movements = meta.movements || [];  // v0.8.5
+        POINTS.movements = meta.movements || [];
+        // v0.11 — new lookup tables for transformer emotions
+        POINTS.emotions28      = meta.emotions_28 || [null];
+        POINTS.emotions28Groups = meta.emotions_28_groups || ["neutral", "positive", "negative", "ambiguous"];
+        POINTS.emotions7       = meta.emotions_7 || [null];
         POINTS.coverage  = meta.coverage || {};
         POINTS.columnsPresent = meta.columns_present || {};
         POINTS.shapeSource = meta.shape_source || "raw";

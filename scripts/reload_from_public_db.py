@@ -66,7 +66,7 @@ import psycopg
 
 
 # =============================================================================
-# Expected v0.8.3b headline numbers (from the science team's handoff)
+# Expected v0.11 headline numbers (from the science team's handoff)
 # =============================================================================
 EXPECTED = {
     "total": 614_505,
@@ -76,6 +76,11 @@ EXPECTED = {
     "coords": 396_165,
     "std_shape": 236_463,
     "date_correction": 714,
+    # v0.11 — emotion classification columns
+    "emotion_28": 502_985,
+    "emotion_7": 502_985,
+    "vader": 502_985,
+    "roberta": 502_985,
 }
 
 # Tables the migrator TRUNCATEs and re-populates. Must match the
@@ -195,6 +200,11 @@ def step1_verify_source() -> None:
             ),
             ("coords", "SELECT COUNT(*) FROM sighting WHERE lat IS NOT NULL AND lng IS NOT NULL"),
             ("std_shape", "SELECT COUNT(*) FROM sighting WHERE standardized_shape IS NOT NULL"),
+            # v0.11 — emotion classification columns
+            ("emotion_28", "SELECT COUNT(*) FROM sighting WHERE emotion_28_dominant IS NOT NULL"),
+            ("emotion_7", "SELECT COUNT(*) FROM sighting WHERE emotion_7_dominant IS NOT NULL"),
+            ("vader", "SELECT COUNT(*) FROM sighting WHERE vader_compound IS NOT NULL"),
+            ("roberta", "SELECT COUNT(*) FROM sighting WHERE roberta_sentiment IS NOT NULL"),
         ]
 
         bad = []
@@ -576,6 +586,11 @@ def step6_verify(url: str) -> bool:
         ("coords", "SELECT COUNT(*) FROM sighting WHERE lat IS NOT NULL AND lng IS NOT NULL"),
         ("std_shape", "SELECT COUNT(*) FROM sighting WHERE standardized_shape IS NOT NULL"),
         ("date_correction", "SELECT COUNT(*) FROM date_correction"),
+        # v0.11 — emotion classification columns
+        ("emotion_28", "SELECT COUNT(*) FROM sighting WHERE emotion_28_dominant IS NOT NULL"),
+        ("emotion_7", "SELECT COUNT(*) FROM sighting WHERE emotion_7_dominant IS NOT NULL"),
+        ("vader", "SELECT COUNT(*) FROM sighting WHERE vader_compound IS NOT NULL"),
+        ("roberta", "SELECT COUNT(*) FROM sighting WHERE roberta_sentiment IS NOT NULL"),
     ]
 
     bad = []
