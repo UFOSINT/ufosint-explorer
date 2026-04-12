@@ -856,20 +856,27 @@ async function applyFilters() {
     applyBtn?.classList.remove("is-dirty");
     const restore = disableButtonWhilePending(applyBtn, "Applying…");
     try {
+        // v0.9.4-fix: ALWAYS run applyClientFilters first,
+        // regardless of which tab is active. This updates
+        // POINTS.visibleIdx from the current filter state.
+        // Previously this only ran on the Observatory tab,
+        // which meant Timeline and Insights were reading stale
+        // visibleIdx and showing outdated charts when the user
+        // changed filters while on those tabs.
+        //
+        // applyClientFilters also retallies the brush histogram
+        // and refreshes Timeline/Insights cards via the hooks
+        // it already has — so calling it here is sufficient for
+        // cross-tab filter consistency. The tab-specific blocks
+        // below handle map-layer refreshes and legacy fallbacks.
+        const gpu = applyClientFilters();
+
         if (state.activeTab === "map" || state.activeTab === "observatory") {
-            // v0.8.0: Try the GPU filter path first. When the deck.gl
-            // layer is ready, applyClientFilters() walks the typed
-            // arrays in ~1 ms and we're done. Falls through to the
-            // legacy server fetch on ancient browsers.
-            //
-            // v0.8.2-cleanup-2: ALSO suppress the fallback during the
-            // deck.gl boot window. Without this guard, an early
-            // applyFilters() (e.g. from clearFilters() at boot, or
-            // from a hash-driven filter restore) would fire the
-            // legacy markerCluster path, which then renders its
-            // numbered bubbles on top of the deck.gl layer once
-            // bootDeckGL() finishes.
-            const gpu = applyClientFilters();
+            // v0.8.0: When the deck.gl layer is ready,
+            // applyClientFilters() above already walked the
+            // typed arrays and refreshed the layer. Falls
+            // through to the legacy server fetch on ancient
+            // browsers where deck.gl isn't available.
             const deckPending = (state.deckBoot === "pending");
             if (!gpu && !deckPending) {
                 if (state.mapMode === "heatmap") await loadHeatmap();
