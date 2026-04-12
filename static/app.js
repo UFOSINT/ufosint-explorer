@@ -2706,6 +2706,19 @@ class TimeBrush {
         // with zoom (they're full-range), but the view box position
         // does, and calling _drawOverview here is cheap (~2ms).
         this._drawOverview();
+
+        // v0.10.0 — if the user is on the Timeline tab, debounce a
+        // refresh of the Timeline cards so they mirror the brush's
+        // zoom level. Without this, the charts stay at full-range
+        // year-level even when the brush is zoomed to a 3-month
+        // window. Debounced at 200ms so scroll-wheel zoom doesn't
+        // thrash Chart.js redraws at 60fps.
+        if (state.activeTab === "timeline" && typeof refreshTimelineCards === "function") {
+            clearTimeout(this._timelineRefreshTimer);
+            this._timelineRefreshTimer = setTimeout(() => {
+                refreshTimelineCards();
+            }, 200);
+        }
     }
 
     // v0.8.6 — called by applyClientFilters() after the filter
@@ -3881,6 +3894,29 @@ function refreshTimelineCards() {
         P.visibleIdx = _getCrossFilteredIndices();
     }
 
+    // v0.10.0: Timeline charts now mirror the brush's zoom state.
+    // If the brush is zoomed to a narrow range, the charts show
+    // only that range at the matching granularity (year/month/day).
+    // This uses the same _pickGranularity() + getHistogram(gran)
+    // pipeline the brush uses, so the Timeline tab feels like a
+    // bigger version of the brush histogram.
+    const brush = state.timeBrush;
+    let viewMin = null;
+    let viewMax = null;
+    let gran = "year";
+    if (brush) {
+        viewMin = brush.viewMinT;
+        viewMax = brush.viewMaxT;
+        gran = brush._pickGranularity();
+    }
+
+    // Main chart: use adaptive-granularity histogram filtered to
+    // the brush's view range. getHistogramBySource only exists at
+    // year level, so for month/day granularity the main chart
+    // falls back to a single-series histogram (no source stacking).
+    // The quality and movement charts use the same view-filtered
+    // data at year level (their aggregate patterns are meaningful
+    // even when the chart x-axis matches the zoomed range).
     const stacked = window.UFODeck.getYearHistogramBySource(true);
     const quality = window.UFODeck.computeMedianByYear(P.qualityScore);
     const movement = window.UFODeck.computeMovementShareByYear();
@@ -3890,16 +3926,91 @@ function refreshTimelineCards() {
     // affected by the cross-filter.
     P.visibleIdx = origIdx;
 
+    // v0.10.0: filter all three datasets to the brush's view range.
+    // For stacked (year-level), trim years outside the view. For
+    // quality and movement, same year-range trim.
+    const filterToView = (data, getYear) => {
+        if (!viewMin || !viewMax || !data) return data;
+        const minYear = new Date(viewMin).getUTCFullYear();
+        const maxYear = new Date(viewMax).getUTCFullYear();
+        return data.filter(d => {
+            const y = getYear(d);
+            return y >= minYear && y <= maxYear;
+        });
+    };
+
+    // Filter stacked histogram
+    if (stacked && stacked.years) {
+        const minYear = viewMin ? new Date(viewMin).getUTCFullYear() : -Infinity;
+        const maxYear = viewMax ? new Date(viewMax).getUTCFullYear() : Infinity;
+        // Find start/end indices in the years array
+        let start = 0, end = stacked.years.length - 1;
+        while (start < stacked.years.length && stacked.years[start] < minYear) start++;
+        while (end >= 0 && stacked.years[end] > maxYear) end--;
+        if (start <= end) {
+            // Create a view-filtered copy
+            const filteredYears = stacked.years.slice(start, end + 1);
+            const sourceCount = stacked.sources.length;
+            const filteredCounts = new Uint32Array(filteredYears.length * sourceCount);
+            const filteredTotals = new Uint32Array(filteredYears.length);
+            for (let y = 0; y < filteredYears.length; y++) {
+                filteredTotals[y] = stacked.totals[start + y];
+                for (let s = 0; s < sourceCount; s++) {
+                    filteredCounts[y * sourceCount + s] = stacked.counts[(start + y) * sourceCount + s];
+                }
+            }
+            let maxTotal = 0;
+            for (let y = 0; y < filteredYears.length; y++) {
+                if (filteredTotals[y] > maxTotal) maxTotal = filteredTotals[y];
+            }
+            stacked.years = filteredYears;
+            stacked.counts = filteredCounts;
+            stacked.totals = filteredTotals;
+            stacked.maxTotal = maxTotal;
+        }
+    }
+
+    // Filter quality and movement to the view range
+    const filteredQuality = filterToView(quality, d => d.year);
+    const filteredMovement = movement;
+    if (filteredMovement && filteredMovement.years && viewMin && viewMax) {
+        const minYear = new Date(viewMin).getUTCFullYear();
+        const maxYear = new Date(viewMax).getUTCFullYear();
+        let start = 0, end = filteredMovement.years.length - 1;
+        while (start < filteredMovement.years.length && filteredMovement.years[start] < minYear) start++;
+        while (end >= 0 && filteredMovement.years[end] > maxYear) end--;
+        if (start <= end && (start > 0 || end < filteredMovement.years.length - 1)) {
+            const M = 10;
+            filteredMovement.years = filteredMovement.years.slice(start, end + 1);
+            const newCounts = new Uint32Array(filteredMovement.years.length * M);
+            const newTotals = new Uint32Array(filteredMovement.years.length);
+            for (let y = 0; y < filteredMovement.years.length; y++) {
+                newTotals[y] = filteredMovement.totals[start + y];
+                for (let b = 0; b < M; b++) {
+                    newCounts[y * M + b] = filteredMovement.counts[(start + y) * M + b];
+                }
+            }
+            filteredMovement.counts = newCounts;
+            filteredMovement.totals = newTotals;
+        }
+    }
+
     renderTimelineMainChart(stacked);
-    renderTimelineQualityChart(quality);
-    renderTimelineMovementChart(movement);
+    renderTimelineQualityChart(filteredQuality);
+    renderTimelineMovementChart(filteredMovement);
 
     const countEl = document.getElementById("timeline-visible-count");
     if (countEl) countEl.textContent = visible.toLocaleString();
 
     const labelEl = document.getElementById("timeline-range-label");
-    if (labelEl && stacked.years.length) {
-        labelEl.textContent = `${stacked.years[0]} — ${stacked.years[stacked.years.length - 1]}`;
+    if (labelEl) {
+        if (viewMin && viewMax) {
+            const d0 = new Date(viewMin);
+            const d1 = new Date(viewMax);
+            labelEl.textContent = `${d0.getUTCFullYear()} — ${d1.getUTCFullYear()}`;
+        } else if (stacked && stacked.years && stacked.years.length) {
+            labelEl.textContent = `${stacked.years[0]} — ${stacked.years[stacked.years.length - 1]}`;
+        }
     }
 }
 
