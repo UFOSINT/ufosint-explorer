@@ -5162,15 +5162,25 @@ function initFilterBarPolish() {
     }
 
     if (mobileBtn && bar) {
-        // Start collapsed on narrow screens; initFilterBarPolish runs
-        // after DOMContentLoaded so we can just check the window width.
-        if (window.innerWidth <= 720) {
+        // v0.9.4: on mobile the hamburger now collapses EVERYTHING
+        // above the map: filter bar, movement row, and the
+        // Observatory accordion rail. We toggle a body-level class
+        // instead of just #filters-bar.is-collapsed so CSS can
+        // target all three panels from a single selector.
+        // Default: collapsed on narrow / touch screens so the map
+        // gets maximum vertical space on first load.
+        const isMobileWidth = window.innerWidth <= 720;
+        const isTouchDevice = document.body.classList.contains("is-touch");
+        if (isMobileWidth || isTouchDevice) {
+            document.body.classList.add("mobile-filters-hidden");
             bar.classList.add("is-collapsed");
             mobileBtn.setAttribute("aria-expanded", "false");
         }
         mobileBtn.addEventListener("click", () => {
-            const isCollapsed = bar.classList.toggle("is-collapsed");
-            mobileBtn.setAttribute("aria-expanded", String(!isCollapsed));
+            const willHide = !document.body.classList.contains("mobile-filters-hidden");
+            document.body.classList.toggle("mobile-filters-hidden", willHide);
+            bar.classList.toggle("is-collapsed", willHide);
+            mobileBtn.setAttribute("aria-expanded", String(!willHide));
         });
         // Every filter change updates the mobile count
         FILTER_FIELDS.forEach(f => {

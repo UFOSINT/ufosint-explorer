@@ -2222,9 +2222,15 @@ select:focus {
     }
     .header-left { gap: var(--s-2); }
     .stats-badge {
-        font-size: 11px;
+        font-size: 10px;
         white-space: normal;
         line-height: 1.35;
+    }
+    /* v0.9.4 — hide the theme toggle row on very narrow screens
+       so the header stays one line. Users can still access themes
+       via the gear menu. */
+    .tabs-settings {
+        display: none;
     }
     .tabs {
         width: 100%;
@@ -2235,6 +2241,8 @@ select:focus {
     .tab {
         white-space: nowrap;
         flex-shrink: 0;
+        font-size: 12px;
+        padding: 6px 12px;
     }
     #filters-bar {
         padding: var(--s-2) var(--s-3);
@@ -3062,6 +3070,47 @@ select:focus {
         display: inline-block;
         transition: transform var(--t-fast) ease-out;
     }
+
+    /* v0.9.4 — the hamburger now collapses EVERYTHING above the
+       map: filter bar content (already handled by .is-collapsed
+       above), the movement pill row, AND the Observatory rail.
+       body.mobile-filters-hidden is toggled by the JS handler;
+       these rules make the movement row and rail disappear when
+       the user hasn't expanded the hamburger, giving the map
+       maximum vertical space on first load. The rail stays
+       hidden even when its accordion sections are individually
+       expanded, because the top-level toggle takes priority. */
+    body.mobile-filters-hidden .filter-movement-row {
+        display: none;
+    }
+    body.mobile-filters-hidden .observatory-rail {
+        display: none;
+    }
+    /* Give the map canvas more vertical room when everything is
+       collapsed. The observatory-stage grid is already single-
+       column on mobile (grid-template-columns: 1fr); when the
+       rail is hidden the stage becomes a single-row grid and
+       #panel-observatory fills the remaining viewport height
+       after the collapsed filter bar and the TimeBrush. */
+    body.mobile-filters-hidden .observatory-stage {
+        grid-template-rows: 1fr;
+    }
+}
+
+/* Same rules for touch-primary devices regardless of width */
+body.is-touch #btn-mobile-filters {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s-2);
+}
+body.is-touch.mobile-filters-hidden .filter-movement-row {
+    display: none;
+}
+body.is-touch.mobile-filters-hidden .observatory-rail {
+    display: none;
+}
+body.is-touch.mobile-filters-hidden .observatory-stage {
+    grid-template-rows: 1fr;
 }
 
 /* ---- "Unsaved changes" indicator on the Apply button ---- */
