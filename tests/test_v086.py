@@ -362,7 +362,7 @@ def test_insights_client_cards_decoupled_from_sentiment_endpoints():
     POINTS.vaderCompound / emotion28Group, not the old endpoints."""
     src = _read(APP_JS)
     m = re.search(
-        r"function refreshInsightsClientCards\(\)[\s\S]*?\n\}\n",
+        r"function refreshInsightsClientCards\([^)]*\)[\s\S]*?\n\}\n",
         src,
     )
     assert m, "couldn't locate refreshInsightsClientCards() body"

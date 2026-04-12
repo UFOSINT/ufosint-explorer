@@ -2192,6 +2192,143 @@ function updateQualityBiasBanner() {
 }
 
 // =========================================================================
+// v0.11.1 — Data Quality gear popup for Timeline / Insights tabs
+// =========================================================================
+//
+// Mirrors the Observatory rail's quality toggles into a small floating
+// popover anchored to a gear icon in each tab header. State is shared
+// with the rail — toggling a checkbox in the gear popup also updates the
+// rail checkbox (and vice versa when the rail re-mounts). The popup is
+// populated lazily on first open so it costs nothing until clicked.
+
+function _mountDqGearPopup(gearBtnId, popupId, listId) {
+    const btn = document.getElementById(gearBtnId);
+    const popup = document.getElementById(popupId);
+    const list = document.getElementById(listId);
+    if (!btn || !popup || !list) return;
+    if (btn.dataset.dqWired === "1") return;
+    btn.dataset.dqWired = "1";
+
+    function openPopup() {
+        _populateDqList(listId);
+        popup.hidden = false;
+        btn.setAttribute("aria-expanded", "true");
+        // Close on outside click / Escape
+        setTimeout(() => {
+            document.addEventListener("pointerdown", closeOnOutside);
+            document.addEventListener("keydown", closeOnEscape);
+        }, 0);
+    }
+    function closePopup() {
+        popup.hidden = true;
+        btn.setAttribute("aria-expanded", "false");
+        document.removeEventListener("pointerdown", closeOnOutside);
+        document.removeEventListener("keydown", closeOnEscape);
+    }
+    function closeOnOutside(e) {
+        if (!popup.contains(e.target) && !btn.contains(e.target)) closePopup();
+    }
+    function closeOnEscape(e) {
+        if (e.key === "Escape") closePopup();
+    }
+    btn.addEventListener("click", () => {
+        if (popup.hidden) openPopup(); else closePopup();
+    });
+}
+
+function _populateDqList(listId) {
+    const list = document.getElementById(listId);
+    if (!list) return;
+
+    const coverage = (
+        window.UFODeck
+        && typeof window.UFODeck.getCoverage === "function"
+        && window.UFODeck.POINTS
+        && window.UFODeck.POINTS.ready
+    ) ? window.UFODeck.getCoverage() : {};
+    const cov = (key) => (coverage[key] || 0);
+
+    const QUALITY_THRESHOLD = 60;
+    const HOAX_THRESHOLD = 50;
+    const toggles = [
+        { key: "highQuality", label: "High quality only", sub: `score \u2265 ${QUALITY_THRESHOLD}`, coverageKey: "quality_score" },
+        { key: "hideHoaxes", label: "Hide narrative red flags", sub: `flag score > ${HOAX_THRESHOLD / 100}`, coverageKey: "hoax_score" },
+        { key: "hasDescription", label: "Had description (in source)", sub: "classifier ran; text not retained", coverageKey: "has_description" },
+        { key: "hasMedia", label: "Has media", sub: "photo / video reference", coverageKey: "has_media" },
+        { key: "hasMovement", label: "Has movement described", sub: "hovering / landing / erratic / \u2026", coverageKey: "has_movement" },
+    ];
+
+    list.innerHTML = "";
+    for (const t of toggles) {
+        const populated = cov(t.coverageKey) > 0;
+        const li = document.createElement("li");
+        li.className = populated ? "" : "rail-toggle-disabled";
+        const id = `dq-gear-${listId}-${t.key}`;
+        const disabled = populated ? "" : " disabled";
+        const checked = _isDqActive(t.key) ? " checked" : "";
+        li.innerHTML = `
+            <input type="checkbox" id="${id}" data-qkey="${t.key}"${disabled}${checked}>
+            <label for="${id}">
+                ${escapeHtml(t.label)}
+                <span class="rail-toggle-sub">${escapeHtml(t.sub)}</span>
+            </label>
+        `;
+        list.appendChild(li);
+        if (populated) {
+            const input = li.querySelector("input");
+            input.addEventListener("change", (e) => {
+                const key = e.target.dataset.qkey;
+                if (!state.qualityFilter) state.qualityFilter = {};
+                if (key === "highQuality") {
+                    state.qualityFilter.highQuality = e.target.checked;
+                } else if (key === "hideHoaxes") {
+                    state.qualityFilter.hideHoaxes = e.target.checked;
+                } else {
+                    state.qualityFilter[key] = e.target.checked ? true : null;
+                }
+                updateQualityBiasBanner();
+                _syncDqGearBadges();
+                applyFilters();
+            });
+        }
+    }
+}
+
+function _isDqActive(key) {
+    if (!state.qualityFilter) return false;
+    const v = state.qualityFilter[key];
+    return key === "highQuality" || key === "hideHoaxes" ? !!v : v === true;
+}
+
+// Update the small badge on each gear icon showing how many DQ
+// filters are active.
+function _syncDqGearBadges() {
+    const count = _countActiveDqFilters();
+    for (const btnId of ["timeline-dq-gear", "insights-dq-gear"]) {
+        const btn = document.getElementById(btnId);
+        if (!btn) continue;
+        let badge = btn.querySelector(".dq-gear-badge");
+        if (!badge) {
+            badge = document.createElement("span");
+            badge.className = "dq-gear-badge";
+            btn.appendChild(badge);
+        }
+        badge.textContent = count > 0 ? String(count) : "";
+    }
+}
+
+function _countActiveDqFilters() {
+    if (!state.qualityFilter) return 0;
+    let n = 0;
+    if (state.qualityFilter.highQuality) n++;
+    if (state.qualityFilter.hideHoaxes) n++;
+    if (state.qualityFilter.hasDescription === true) n++;
+    if (state.qualityFilter.hasMedia === true) n++;
+    if (state.qualityFilter.hasMovement === true) n++;
+    return n;
+}
+
+// =========================================================================
 // Hex bin rendering (v0.7)
 // =========================================================================
 //
@@ -3397,6 +3534,7 @@ class TimeBrush {
 
     togglePlay() {
         const playBtn = document.getElementById("brush-play");
+        const progressEl = document.getElementById("brush-play-progress");
         if (this.playing) {
             this.playing = false;
             cancelAnimationFrame(this.playRaf);
@@ -3405,6 +3543,8 @@ class TimeBrush {
                 playBtn.textContent = "▶ PLAY";
                 playBtn.setAttribute("aria-pressed", "false");
             }
+            // v0.11.1 — hide progress bar on stop
+            if (progressEl) progressEl.hidden = true;
             // Commit the final window to the URL hash + form inputs
             // via the debounced onChange path. Flush immediately so
             // there's no 300 ms delay between STOP and the state
@@ -3421,6 +3561,12 @@ class TimeBrush {
             playBtn.classList.add("playing");
             playBtn.textContent = "■ STOP";
             playBtn.setAttribute("aria-pressed", "true");
+        }
+        // v0.11.1 — show progress bar
+        if (progressEl) {
+            progressEl.hidden = false;
+            const fill = progressEl.querySelector(".brush-play-progress-fill");
+            if (fill) fill.style.width = "0%";
         }
         const span = this.maxT - this.minT;
         const isCumulative = (this.playMode === "cumulative");
@@ -3497,6 +3643,20 @@ class TimeBrush {
             }
             this._syncWindow();
 
+            // v0.11.1 — update playback progress bar. Shows how
+            // far through the dataset range the window's right
+            // edge has advanced (0% = minT, 100% = maxT).
+            if (progressEl && !progressEl.hidden) {
+                const fill = progressEl.querySelector(".brush-play-progress-fill");
+                if (fill) {
+                    const totalSpan = this.maxT - this.minT;
+                    const pct = totalSpan > 0
+                        ? ((this.window[1] - this.minT) / totalSpan) * 100
+                        : 0;
+                    fill.style.width = Math.min(100, Math.max(0, pct)) + "%";
+                }
+            }
+
             // v0.9.3 — GPU fast path. Uses day-precision so
             // sub-year playback actually filters correctly
             // (the old v0.8.1 path passed year integers, which
@@ -3528,17 +3688,25 @@ class TimeBrush {
             // — debounce never fires during continuous 60fps
             // playback because each frame resets the timer before
             // it triggers. Throttle guarantees ~4 updates/sec.
+            //
+            // v0.11.1: pass playback=true so the refresh functions
+            // skip expensive work that doesn't help animation:
+            // - coverage strip computation (walks all 396k rows)
+            // - coverage strip DOM updates
+            // - cross-filter setup (no cross-filter during play)
+            // This cuts per-frame JS from ~20ms to ~8ms, roughly
+            // doubling the budget headroom at 4 fps throttle.
             const now = Date.now();
             if (state.activeTab === "timeline" && typeof refreshTimelineCards === "function") {
                 if (!this._lastTimelineRefresh || now - this._lastTimelineRefresh > 250) {
                     this._lastTimelineRefresh = now;
-                    refreshTimelineCards();
+                    refreshTimelineCards(true);
                 }
             }
             if (state.activeTab === "insights" && typeof refreshInsightsClientCards === "function") {
                 if (!this._lastInsightsRefresh || now - this._lastInsightsRefresh > 250) {
                     this._lastInsightsRefresh = now;
-                    refreshInsightsClientCards();
+                    refreshInsightsClientCards(true);
                 }
             }
 
@@ -3791,6 +3959,11 @@ async function loadTimeline() {
         });
     }
 
+    // v0.11.1 — mount the Data Quality gear popup on the Timeline
+    // tab header. Lazily wired once; re-populates on each open.
+    _mountDqGearPopup("timeline-dq-gear", "timeline-dq-popup", "timeline-dq-list");
+    _syncDqGearBadges();
+
     refreshTimelineCards();
 }
 
@@ -3976,17 +4149,20 @@ function _renderCrossFilterChips() {
 }
 window.clearCrossFilter = clearCrossFilter;
 
-function refreshTimelineCards() {
+function refreshTimelineCards(playback) {
     if (!window.UFODeck || !window.UFODeck.POINTS || !window.UFODeck.POINTS.ready) return;
 
     // v0.10.0: if a cross-filter is active on the Timeline tab,
     // temporarily swap POINTS.visibleIdx to the cross-filtered
     // sub-set so the deck.js aggregate helpers read the right
     // data. Restore after rendering.
+    // v0.11.1: skip cross-filter swap during playback — no cross-
+    // filter is active while playing, and the swap + restore adds
+    // overhead.
     const P = window.UFODeck.POINTS;
     const origIdx = P.visibleIdx;
     const cf = state.crossFilter;
-    if (cf && cf.tab === "timeline") {
+    if (!playback && cf && cf.tab === "timeline") {
         P.visibleIdx = _getCrossFilteredIndices();
     }
 
@@ -4708,6 +4884,11 @@ async function loadInsights() {
         return;
     }
 
+    // v0.11.1 — mount the Data Quality gear popup on the Insights
+    // tab header. Same pattern as Timeline.
+    _mountDqGearPopup("insights-dq-gear", "insights-dq-popup", "insights-dq-list");
+    _syncDqGearBadges();
+
     refreshInsightsClientCards();
 
     // Status line: surface the emotion coverage number so users
@@ -4738,41 +4919,47 @@ async function loadInsights() {
 // v0.8.8: the 4 emotion cards (radar, over-time, by-source, by-shape)
 // were rewritten to read from POINTS.emotionIdx instead of the dead
 // /api/sentiment/* endpoints. All 8 cards are now purely client-side.
-function refreshInsightsClientCards() {
+function refreshInsightsClientCards(playback) {
     if (!window.UFODeck || !window.UFODeck.POINTS || !window.UFODeck.POINTS.ready) return;
 
     // v0.10.0: if a cross-filter is active on the Insights tab,
     // temporarily swap POINTS.visibleIdx to the cross-filtered
     // sub-set so every renderer reads the right data. Restore
     // after rendering so the Observatory map isn't affected.
+    // v0.11.1: skip cross-filter swap during playback for speed.
     const P = window.UFODeck.POINTS;
     const origIdx = P.visibleIdx;
     const cf = state.crossFilter;
-    if (cf && cf.tab === "insights") {
+    if (!playback && cf && cf.tab === "insights") {
         P.visibleIdx = _getCrossFilteredIndices();
     }
 
     // v0.9.1 — compute coverage for each derived column over the
     // (possibly cross-filtered) visible set.
-    state.insightsCoverage = _computeInsightsCoverage(P);
+    // v0.11.1: skip during playback — coverage doesn't change
+    // meaningfully frame-to-frame and the full walk of 396k rows
+    // costs ~8ms per call.
+    if (!playback) {
+        state.insightsCoverage = _computeInsightsCoverage(P);
+    }
 
     // v0.10.0: check the cross-filtered N. Science reviewer's
     // guardrail: N < 30 → show a warning instead of rendering.
-    const cfN = P.visibleIdx ? P.visibleIdx.length : P.count;
-    if (cf && cf.tab === "insights" && cfN < 30) {
-        // Too few rows — show a warning in the chip bar and
-        // restore visibleIdx without rendering charts.
-        P.visibleIdx = origIdx;
-        _renderCrossFilterChips();
-        const chipsEl = document.getElementById("insights-filter-chips");
-        if (chipsEl) {
-            chipsEl.innerHTML += `
-                <span class="cross-filter-warning">
-                    Only ${cfN} sightings match — too few to chart reliably
-                </span>
-            `;
+    if (!playback) {
+        const cfN = P.visibleIdx ? P.visibleIdx.length : P.count;
+        if (cf && cf.tab === "insights" && cfN < 30) {
+            P.visibleIdx = origIdx;
+            _renderCrossFilterChips();
+            const chipsEl = document.getElementById("insights-filter-chips");
+            if (chipsEl) {
+                chipsEl.innerHTML += `
+                    <span class="cross-filter-warning">
+                        Only ${cfN} sightings match — too few to chart reliably
+                    </span>
+                `;
+            }
+            return;
         }
-        return;
     }
 
     // v0.11 — Section A: Emotion & Sentiment Analysis (5 cards)
@@ -4793,7 +4980,13 @@ function refreshInsightsClientCards() {
 
     // v0.9.1 — mount coverage strips on all 9 client-side cards
     // AFTER all Chart.js instances have rendered.
-    _mountAllCoverageStrips();
+    // v0.11.1: skip during playback — DOM updates for coverage
+    // strips add ~3ms per frame with no visible benefit during
+    // animation. Strips re-mount when playback stops and the
+    // normal (non-playback) refresh path runs.
+    if (!playback) {
+        _mountAllCoverageStrips();
+    }
 }
 
 // v0.9.1 — mount a coverage strip on every client-side insights

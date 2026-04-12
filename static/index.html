@@ -341,6 +341,23 @@
                     <span id="timeline-range-label">1900 — 2026</span>
                     · <span id="timeline-visible-count">0</span> in view
                 </div>
+                <!-- v0.11.1 — Data Quality gear popup. Mirrors the
+                     Observatory rail's quality toggles so users can
+                     filter without switching tabs. -->
+                <div class="dq-gear-wrap">
+                    <button class="dq-gear-btn" id="timeline-dq-gear" type="button"
+                            title="Data Quality filters"
+                            aria-expanded="false" aria-haspopup="true">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <circle cx="12" cy="12" r="3"/>
+                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                        </svg>
+                    </button>
+                    <div class="dq-gear-popup" id="timeline-dq-popup" hidden>
+                        <div class="dq-gear-title">Data Quality Filters</div>
+                        <ul class="dq-gear-list" id="timeline-dq-list"></ul>
+                    </div>
+                </div>
             </div>
             <div class="timeline-hint">All three charts reflect the current Observatory filter state. Change a filter on any tab and these cards re-tally instantly.</div>
             <div class="timeline-grid">
@@ -382,6 +399,21 @@
             <div class="insights-header">
                 <span class="insights-title">Insights</span>
                 <span id="insights-status" class="insights-status" aria-live="polite"></span>
+                <!-- v0.11.1 — Data Quality gear popup for Insights tab -->
+                <div class="dq-gear-wrap">
+                    <button class="dq-gear-btn" id="insights-dq-gear" type="button"
+                            title="Data Quality filters"
+                            aria-expanded="false" aria-haspopup="true">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <circle cx="12" cy="12" r="3"/>
+                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                        </svg>
+                    </button>
+                    <div class="dq-gear-popup" id="insights-dq-popup" hidden>
+                        <div class="dq-gear-title">Data Quality Filters</div>
+                        <ul class="dq-gear-list" id="insights-dq-list"></ul>
+                    </div>
+                </div>
             </div>
 
             <!-- Mobile jump-nav -->
@@ -1223,6 +1255,13 @@ DATABASE_URL="postgresql://..." python mcp_server.py</code></pre>
                          narrow range via scroll wheel or drag-pan.
                          Click or double-click the canvas to restore
                          the full 1900—2026 view. -->
+                    <!-- v0.11.1 — playback progress bar. Thin strip
+                         at the bottom of the brush header showing how
+                         far through the range the playback window has
+                         advanced. Hidden when not playing. -->
+                    <div id="brush-play-progress" class="brush-play-progress" hidden>
+                        <div class="brush-play-progress-fill"></div>
+                    </div>
                     <button id="brush-reset-view" class="brush-reset-btn" type="button"
                             title="Zoom out to full range (or double-click the timeline)" hidden>RESET VIEW</button>
                     <!-- v0.9.2 — explicit Apply button. Brush drag

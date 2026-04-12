@@ -158,7 +158,7 @@ def test_load_timeline_chart_destroy_only_on_granularity_change():
     We still check that refreshTimelineCards does NOT call destroy."""
     content = _read(APP_JS)
     refresh_section = re.search(
-        r"function refreshTimelineCards\(\).*?^\}",
+        r"function refreshTimelineCards\([^)]*\).*?^\}",
         content,
         re.DOTALL | re.MULTILINE,
     )
