@@ -660,6 +660,196 @@
     }
 
     // =================================================================
+    // v0.9.2 — Adaptive-granularity histograms for TimeBrush zoom
+    // =================================================================
+    // The v0.9.0 TimeBrush zoom ships year bars regardless of zoom
+    // level. When the user zooms in to a 3-month window, there are
+    // 0-1 bars visible — a solid useless block. v0.9.2 adds month +
+    // day bar variants and the brush picks the right granularity
+    // based on its current view span:
+    //
+    //   viewSpan > 10 years  → year bars   (current behaviour)
+    //   viewSpan 1-10 years  → month bars
+    //   viewSpan < 1 year    → day bars
+    //
+    // Cost: year cache is ~126 entries (free), month cache is ~1500
+    // entries (~6 KB), day cache is ~46,000 entries (~180 KB).
+    // Computation: one walk of POINTS.dateDays for each variant.
+    // Day histogram is the cheapest because it's just integer
+    // subtraction per row — no binary search. Month histogram uses
+    // a precomputed monthStarts lookup table + binary search.
+    //
+    // All three cache indefinitely for the unfiltered path. Filtered
+    // variants (getHistogramForVisible) do not cache — they're
+    // recomputed on every TimeBrush.retally() call. That's ~5-20 ms
+    // per filter change which the user can't perceive.
+
+    // Cache for unfiltered histograms. Keyed by granularity name.
+    // Filled on first call; cleared on... nothing yet, since the
+    // bulk buffer is immutable for the session.
+    const _histCache = {};
+
+    // Precomputed "first day of month" table covering the full
+    // year range. monthStarts[i] = day-since-1900 of the first day
+    // of the i-th month, where i = (year - min) * 12 + month.
+    // Built lazily on first month-histogram request.
+    let _monthStartsLUT = null;
+
+    function _buildMonthStarts() {
+        if (_monthStartsLUT) return _monthStartsLUT;
+        _ensureYearStats();
+        const minY = _yearStats.min;
+        const maxY = _yearStats.max;
+        if (minY == null) return null;
+        const spanYears = maxY - minY + 1;
+        // +1 sentinel entry past the last month for binary search
+        const table = new Uint32Array(spanYears * 12 + 1);
+        for (let y = 0; y < spanYears; y++) {
+            for (let m = 0; m < 12; m++) {
+                table[y * 12 + m] = Math.floor(
+                    (Date.UTC(minY + y, m, 1) - Date.UTC(1900, 0, 1)) / 86400000,
+                );
+            }
+        }
+        // Sentinel: first day after the last month covered.
+        table[spanYears * 12] = Math.floor(
+            (Date.UTC(maxY + 1, 0, 1) - Date.UTC(1900, 0, 1)) / 86400000,
+        );
+        _monthStartsLUT = { minYear: minY, spanYears, table };
+        return _monthStartsLUT;
+    }
+
+    // Return day-since-1900 → absolute ms since epoch for bin start.
+    function _daysToMs(days) {
+        return Date.UTC(1900, 0, 1) + days * 86400000;
+    }
+
+    // Shared builder used by both getHistogram and
+    // getHistogramForVisible. `iter` is the row-index iterator
+    // (visibleIdx or null = all rows). `gran` is "year"|"month"|"day".
+    // Returns an array of { startMs, count } bins.
+    function _buildHistogram(iter, gran) {
+        if (!POINTS.ready) return null;
+        _ensureYearStats();
+        const minY = _yearStats.min;
+        const maxY = _yearStats.max;
+        if (minY == null) return [];
+        const dd = POINTS.dateDays;
+        const N = iter ? iter.length : POINTS.count;
+
+        if (gran === "year") {
+            // Same shape as the legacy getYearHistogram but emits
+            // { startMs, count } instead of { year, count } so the
+            // TimeBrush draw loop can use a single x-position
+            // routine regardless of granularity.
+            const spanYears = maxY - minY + 1;
+            const bins = new Uint32Array(spanYears);
+            const yearStarts = new Uint32Array(spanYears + 1);
+            for (let y = 0; y <= spanYears; y++) {
+                yearStarts[y] = _yearToDays(minY + y);
+            }
+            for (let k = 0; k < N; k++) {
+                const i = iter ? iter[k] : k;
+                const d = dd[i];
+                if (d === 0) continue;
+                let lo = 0, hi = spanYears;
+                while (lo < hi) {
+                    const mid = (lo + hi + 1) >>> 1;
+                    if (yearStarts[mid] <= d) lo = mid;
+                    else hi = mid - 1;
+                }
+                if (lo >= 0 && lo < spanYears) bins[lo]++;
+            }
+            const out = new Array(spanYears);
+            for (let y = 0; y < spanYears; y++) {
+                out[y] = {
+                    startMs: Date.UTC(minY + y, 0, 1),
+                    count: bins[y],
+                };
+            }
+            return out;
+        }
+
+        if (gran === "month") {
+            // Binary search against monthStarts LUT. ~1500 entries,
+            // O(log 1500) ≈ 11 comparisons per row = ~4.4M ops for
+            // 396k rows ≈ 15-20 ms. Cached, so the cost is one-time.
+            const lut = _buildMonthStarts();
+            if (!lut) return [];
+            const table = lut.table;
+            const nMonths = lut.spanYears * 12;
+            const bins = new Uint32Array(nMonths);
+            for (let k = 0; k < N; k++) {
+                const i = iter ? iter[k] : k;
+                const d = dd[i];
+                if (d === 0) continue;
+                // Binary search for largest m such that table[m] <= d
+                let lo = 0, hi = nMonths;
+                while (lo < hi) {
+                    const mid = (lo + hi + 1) >>> 1;
+                    if (table[mid] <= d) lo = mid;
+                    else hi = mid - 1;
+                }
+                if (lo >= 0 && lo < nMonths) bins[lo]++;
+            }
+            const out = new Array(nMonths);
+            for (let m = 0; m < nMonths; m++) {
+                out[m] = {
+                    startMs: _daysToMs(table[m]),
+                    count: bins[m],
+                };
+            }
+            return out;
+        }
+
+        // gran === "day"
+        // Day histogram is the CHEAPEST because it's direct integer
+        // subtraction — each row's bin index is just
+        // `dayIdx - minDayIdx`. No binary search. ~5 ms for 396k
+        // rows, fastest of the three.
+        _ensureYearStats();
+        const minDay = _dayStats.min != null ? _dayStats.min : 0;
+        const maxDay = _dayStats.max != null ? _dayStats.max : (minDay + 1);
+        const nDays = maxDay - minDay + 1;
+        if (nDays <= 0) return [];
+        const bins = new Uint32Array(nDays);
+        for (let k = 0; k < N; k++) {
+            const i = iter ? iter[k] : k;
+            const d = dd[i];
+            if (d === 0) continue;
+            const idx = d - minDay;
+            if (idx >= 0 && idx < nDays) bins[idx]++;
+        }
+        const out = new Array(nDays);
+        for (let j = 0; j < nDays; j++) {
+            out[j] = {
+                startMs: _daysToMs(minDay + j),
+                count: bins[j],
+            };
+        }
+        return out;
+    }
+
+    // Public: unfiltered histogram at the given granularity.
+    // Cached indefinitely. granularity ∈ { "year", "month", "day" }.
+    function getHistogram(granularity) {
+        const gran = granularity || "year";
+        if (_histCache[gran]) return _histCache[gran];
+        const out = _buildHistogram(null, gran);
+        if (out) _histCache[gran] = out;
+        return out;
+    }
+
+    // Public: filtered histogram at the given granularity.
+    // Walks POINTS.visibleIdx. Not cached — recomputed on every
+    // call because the filter state can change at any time.
+    function getHistogramForGranularityVisible(granularity) {
+        const gran = granularity || "year";
+        if (!POINTS.visibleIdx) return null;
+        return _buildHistogram(POINTS.visibleIdx, gran);
+    }
+
+    // =================================================================
     // v0.8.6 — aggregate helpers for the Timeline page + Insights cards
     // =================================================================
     // All helpers in this block share a common shape:
@@ -1191,6 +1381,16 @@
         computeMedianByYear,
         computeMovementShareByYear,
         countVisible,
+
+        // v0.9.2 — adaptive-granularity histograms for the
+        // TimeBrush zoom. getHistogram(gran) returns an unfiltered
+        // cached histogram at year/month/day granularity;
+        // getHistogramForGranularityVisible(gran) returns the
+        // same shape but walks POINTS.visibleIdx. Both return
+        // [{ startMs, count }] so the TimeBrush draw loop can
+        // compute bar x-positions uniformly across granularities.
+        getHistogram,
+        getHistogramForGranularityVisible,
 
         // v0.8.2 — derived-fields API
         getDayRange,

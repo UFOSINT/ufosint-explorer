@@ -347,6 +347,18 @@
                          the full 1900—2026 view. -->
                     <button id="brush-reset-view" class="brush-reset-btn" type="button"
                             title="Zoom out to full range (or double-click the timeline)" hidden>RESET VIEW</button>
+                    <!-- v0.9.2 — explicit Apply button. Brush drag
+                         now commits the filter live via deck.gl's
+                         setTimeWindow on every pointermove, so the
+                         pointerup commit is effectively redundant
+                         for the common case. But users can arrive
+                         at the brush via URL hash, programmatic
+                         calls, or edge cases where the live commit
+                         didn't run — the Apply button force-
+                         applies the current window to the form
+                         inputs + hash + full filter pipeline. -->
+                    <button id="brush-apply" class="brush-reset-btn" type="button"
+                            title="Force-apply the current window (re-runs the full filter pipeline)">APPLY</button>
                     <button id="brush-reset" class="brush-reset-btn" type="button">RESET</button>
                 </div>
                 <div class="brush-wrap">

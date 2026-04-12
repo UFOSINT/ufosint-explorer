@@ -2360,11 +2360,28 @@ class TimeBrush {
         // would collapse into a solid wall of bars.
         this._minViewSpanMs = 7 * 86400000;
 
+        // v0.9.2 — legacy single-granularity bins field. Still
+        // populated via ensureData() for fallback code paths (e.g.
+        // the /api/timeline legacy path when deck.gl isn't ready)
+        // but _draw() prefers the per-granularity cache below.
         this.bins = null;
-        // v0.8.6: filtered overlay bins set by retally() after
-        // applyClientFilters. When non-null, _draw() prefers this
-        // over `bins` so the brush histogram always shows the
-        // currently visible set.
+
+        // v0.9.2 — adaptive-granularity cache. Three slots: year,
+        // month, day. Each holds the unfiltered + filtered bins for
+        // that granularity. _draw() picks the right slot based on
+        // current view span; _invalidateBinsCache() clears the
+        // filtered variants on every filter change (retally).
+        this._binsCache = {
+            year:  { full: null, filtered: null },
+            month: { full: null, filtered: null },
+            day:   { full: null, filtered: null },
+        };
+        // Non-null when a filter is active (retally was called with
+        // a truthy signal). Drives the ghost overlay in _draw.
+        this._hasActiveFilter = false;
+        // Legacy field kept for backward compat with any external
+        // caller that reads this.binsFiltered directly. The actual
+        // per-granularity filtered bins live in _binsCache.
         this.binsFiltered = null;
         this.annotations = null;
         this.playing = false;
@@ -2474,6 +2491,59 @@ class TimeBrush {
         this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
 
+    // v0.9.2 — pick the histogram granularity for the current view
+    // span. Thresholds are in milliseconds of view span:
+    //   > 10 years → year bars (126 max across full range)
+    //   > 400 days → month bars (~1,500 across full range)
+    //   else       → day bars (~46,000 across full range, ~90
+    //                visible at 3-month zoom)
+    //
+    // The thresholds are chosen so the visible bin count at each
+    // transition is roughly the same (50-120 bars) so the density
+    // stays readable. Day bars kick in when the user zooms below a
+    // ~1-year view, which is where sub-year precision becomes
+    // meaningful.
+    _pickGranularity() {
+        const span = this._viewSpan();
+        const tenYears = 10 * 365.25 * 86400000;
+        const thirteenMonths = 400 * 86400000;
+        if (span > tenYears) return "year";
+        if (span > thirteenMonths) return "month";
+        return "day";
+    }
+
+    // v0.9.2 — fetch the unfiltered histogram for the given
+    // granularity from deck.js's cache. Stores a reference in
+    // _binsCache so subsequent draws at the same granularity
+    // avoid any work. deck.js caches the computed result
+    // indefinitely, so this is O(1) after the first call per
+    // granularity.
+    _getFullBins(gran) {
+        const slot = this._binsCache[gran];
+        if (slot && slot.full) return slot.full;
+        if (!(window.UFODeck && typeof window.UFODeck.getHistogram === "function")) {
+            return this.bins;  // legacy fallback — year-only
+        }
+        const bins = window.UFODeck.getHistogram(gran);
+        if (slot) slot.full = bins;
+        return bins;
+    }
+
+    // v0.9.2 — fetch the filtered histogram for the given
+    // granularity. Recomputed lazily on first access after a
+    // filter change (retally sets slot.filtered = null); cached
+    // within a single filter state across pan/zoom changes.
+    _getFilteredBins(gran) {
+        const slot = this._binsCache[gran];
+        if (slot && slot.filtered) return slot.filtered;
+        if (!(window.UFODeck && typeof window.UFODeck.getHistogramForGranularityVisible === "function")) {
+            return null;
+        }
+        const bins = window.UFODeck.getHistogramForGranularityVisible(gran);
+        if (slot) slot.filtered = bins;
+        return bins;
+    }
+
     _draw() {
         const ctx = this.ctx;
         const w = this.w, h = this.h;
@@ -2485,14 +2555,20 @@ class TimeBrush {
         const accentDim = getComputedStyle(document.body).getPropertyValue("--fg-dim").trim() || "#8A94AD";
         const line = getComputedStyle(document.body).getPropertyValue("--border").trim() || "#13203A";
 
-        // v0.8.6: always draw the unfiltered bins as a dim "ghost"
-        // background so the user sees the full dataset shape even
-        // when filters are active. The filtered bins draw on top in
-        // the full accent color. When nothing is filtered, only the
-        // foreground draws (ghost is skipped because binsFiltered is
-        // null).
-        const fgBins = this.binsFiltered || this.bins;
-        const ghostBins = this.binsFiltered ? this.bins : null;
+        // v0.9.2 — pick the right histogram granularity for the
+        // current zoom level, then fetch foreground/ghost bins at
+        // that granularity. When zoomed out → year bars (as before);
+        // zoomed to a 2-5 year window → month bars; zoomed below a
+        // year → day bars. Each { startMs, count } bin's x-position
+        // is computed via _viewTimeToPx so the draw loop is
+        // uniform across granularities.
+        const gran = this._pickGranularity();
+        let fgBins = this._hasActiveFilter ? this._getFilteredBins(gran) : this._getFullBins(gran);
+        const ghostBins = this._hasActiveFilter ? this._getFullBins(gran) : null;
+
+        // Fallback: if deck.js helpers aren't available yet (cold
+        // boot), use the legacy this.bins populated by ensureData.
+        if (!fgBins) fgBins = this.bins;
 
         if (!fgBins || fgBins.length === 0) {
             // Empty state
@@ -2501,27 +2577,44 @@ class TimeBrush {
             return;
         }
 
-        // v0.9.0 — iterate only bins whose year falls in the current
-        // view range (viewMinT..viewMaxT). Bars outside the view are
-        // skipped entirely. The view IS the visible histogram, so
-        // zoom levels narrower than a decade still show bars at the
-        // correct x-positions.
-        const viewMinYear = new Date(this.viewMinT).getUTCFullYear();
-        const viewMaxYear = new Date(this.viewMaxT).getUTCFullYear();
+        const viewL = this.viewMinT;
+        const viewR = this.viewMaxT;
+
+        // Legacy (year-only) fallback path: bins have .year, not
+        // .startMs. Detect and convert on the fly so the draw loop
+        // below can assume .startMs.
+        const normaliseBins = (bins) => {
+            if (!bins || bins.length === 0) return bins;
+            if (bins[0].startMs !== undefined) return bins;
+            // Legacy { year, count } → add startMs inline
+            return bins.map(b => ({
+                startMs: Date.UTC(b.year || 0, 0, 1),
+                count: b.count,
+            }));
+        };
+        const fg = normaliseBins(fgBins);
+        const ghost = normaliseBins(ghostBins);
 
         // Scale against the in-view unfiltered max so filtered bars
         // shrink visibly rather than renormalising to fill the pane.
+        // Use the ghost if present (unfiltered full-range data),
+        // otherwise fall back to the foreground.
+        const scaleBins = ghost || fg;
         let max = 1;
-        const scaleBins = this.bins || fgBins;
         for (const b of scaleBins) {
-            if (b.year < viewMinYear || b.year > viewMaxYear) continue;
+            if (b.startMs < viewL || b.startMs > viewR) continue;
             if (b.count > max) max = b.count;
         }
 
-        // Bar width = canvas width / visible years. Minimum 1 px so
-        // extreme zoom-out still renders something.
-        const visibleYears = Math.max(1, viewMaxYear - viewMinYear + 1);
-        const barW = Math.max(1, w / visibleYears);
+        // Bar width: count visible bins so the bar fills the
+        // canvas width without overlap. At year gran ~126 bars;
+        // at month gran ~1500 bars; at day gran ~46,000 bars —
+        // but only the subset in view is drawn.
+        let visibleBars = 0;
+        for (const b of fg) {
+            if (b.startMs >= viewL && b.startMs <= viewR) visibleBars++;
+        }
+        const barW = Math.max(1, w / Math.max(1, visibleBars));
 
         // Shared draw routine for ghost + foreground layers. Each
         // bar's x-coord is computed via _viewTimeToPx so the math
@@ -2531,16 +2624,15 @@ class TimeBrush {
             ctx.fillStyle = fill;
             ctx.globalAlpha = alpha;
             for (const b of bins) {
-                if (b.year < viewMinYear || b.year > viewMaxYear) continue;
-                const tMs = Date.UTC(b.year, 0, 1);
-                const x = this._viewTimeToPx(tMs);
+                if (b.startMs < viewL || b.startMs > viewR) continue;
+                const x = this._viewTimeToPx(b.startMs);
                 const hBar = (b.count / max) * (h - 14);
                 ctx.fillRect(x, h - hBar - 2, Math.max(0.6, barW - 0.4), hBar);
             }
             ctx.globalAlpha = 1;
         };
-        drawLayer(ghostBins, 0.25, accentDim);
-        drawLayer(fgBins, 0.85, accent);
+        drawLayer(ghost, 0.25, accentDim);
+        drawLayer(fg, 0.85, accent);
 
         // Baseline
         ctx.strokeStyle = line;
@@ -2552,10 +2644,26 @@ class TimeBrush {
     }
 
     // v0.8.6 — called by applyClientFilters() after the filter
-    // pipeline updates POINTS.visibleIdx. Pass null to clear the
-    // filtered overlay and restore the cached unfiltered bins.
+    // pipeline updates POINTS.visibleIdx.
+    //
+    // v0.9.2 — with adaptive granularity, `bins` is no longer used
+    // directly — _draw() fetches per-granularity filtered bins on
+    // demand from deck.js. retally() just invalidates the three
+    // filtered slots so the next _draw() recomputes. The `bins`
+    // argument is kept for backward compat: pass truthy (anything)
+    // to signal "filter is active", pass null to signal "no filter"
+    // (restore the unfiltered appearance).
     retally(bins) {
-        this.binsFiltered = bins;
+        this._hasActiveFilter = !!bins;
+        // Legacy field kept for external readers.
+        this.binsFiltered = bins || null;
+        // Invalidate all three granularity's filtered slots so
+        // _draw recomputes from the current POINTS.visibleIdx.
+        for (const gran of ["year", "month", "day"]) {
+            if (this._binsCache[gran]) {
+                this._binsCache[gran].filtered = null;
+            }
+        }
         this._draw();
     }
 
@@ -2641,6 +2749,31 @@ class TimeBrush {
             return `${d0.getUTCFullYear()}-${pad(d0.getUTCMonth() + 1)} — ${d1.getUTCFullYear()}-${pad(d1.getUTCMonth() + 1)}`;
         }
         return `${d0.getUTCFullYear()}-${pad(d0.getUTCMonth() + 1)}-${pad(d0.getUTCDate())} — ${d1.getUTCFullYear()}-${pad(d1.getUTCMonth() + 1)}-${pad(d1.getUTCDate())}`;
+    }
+
+    // v0.9.2 — live commit during selection-window drag. Bypasses
+    // applyClientFilters → hash-write → form-input-write and goes
+    // straight to UFODeck.setTimeWindow with the current window
+    // in day-precision mode. This is the SAME code path the Play
+    // loop uses at 60fps, so it's known to be cheap enough to
+    // run on every pointermove. The final commit (which DOES
+    // write form inputs + hash) still happens on pointerup via
+    // the existing _onChangeRaw path.
+    //
+    // Result: the map re-tallies continuously as the user drags,
+    // giving live feedback, without churning the URL history or
+    // triggering the full applyFilters pipeline mid-drag.
+    _liveCommit() {
+        if (!(window.UFODeck && typeof window.UFODeck.setTimeWindow === "function")) {
+            return;
+        }
+        if (!window.UFODeck.isReady || !window.UFODeck.isReady()) return;
+        // Convert ms → day-index for the GPU filter.
+        const msPerDay = 86400000;
+        const epoch = Date.UTC(1900, 0, 1);
+        const dayFrom = Math.floor((this.window[0] - epoch) / msPerDay);
+        const dayTo = Math.floor((this.window[1] - epoch) / msPerDay);
+        window.UFODeck.setTimeWindow(dayFrom, dayTo, { dayPrecision: true });
     }
 
     // v0.9.0 — px coordinate <-> ms in the CURRENT VIEW (not the
@@ -2771,14 +2904,26 @@ class TimeBrush {
                 if (newL < this.minT) { newR += (this.minT - newL); newL = this.minT; }
                 if (newR > this.maxT) { newL -= (newR - this.maxT); newR = this.maxT; }
             } else if (dragging.mode === "l") {
-                newL = Math.max(this.minT, Math.min(newR - 30 * 86400000, dragging.startL + dt));
+                // v0.9.2: min window span dropped from 30 days to
+                // 7 days. With day-level histograms now visible
+                // when zoomed in, users can meaningfully set a
+                // one-week window (7 bars) for narrow-slice
+                // playback. Narrower than that and the histogram
+                // becomes visually useless.
+                newL = Math.max(this.minT, Math.min(newR - 7 * 86400000, dragging.startL + dt));
             } else if (dragging.mode === "r") {
-                newR = Math.min(this.maxT, Math.max(newL + 30 * 86400000, dragging.startR + dt));
+                newR = Math.min(this.maxT, Math.max(newL + 7 * 86400000, dragging.startR + dt));
             }
             this.window = [newL, newR];
             // Visual-only update: window rectangle + year labels.
-            // No filter commit yet.
             this._syncWindow();
+            // v0.9.2 — live commit on every move. Pushes the new
+            // window straight into the deck.gl filter via
+            // UFODeck.setTimeWindow, bypassing the hash/form-input
+            // pipeline. The final commit (which DOES write form
+            // inputs + hash) still happens on pointerup. Result:
+            // live map feedback during drag without history churn.
+            this._liveCommit();
         };
 
         const onPointerUp = () => {
@@ -2851,13 +2996,34 @@ class TimeBrush {
         });
         ro.observe(this.canvas);
 
-        // Play / reset / reset-view buttons
+        // Play / reset / reset-view / apply buttons
         const playBtn = document.getElementById("brush-play");
         const resetBtn = document.getElementById("brush-reset");
         const resetViewBtn = document.getElementById("brush-reset-view");
+        const applyBtn = document.getElementById("brush-apply");
         if (playBtn) playBtn.addEventListener("click", () => this.togglePlay());
         if (resetBtn) resetBtn.addEventListener("click", () => this.reset());
         if (resetViewBtn) resetViewBtn.addEventListener("click", () => this.resetView());
+        // v0.9.2 — explicit Apply button. Force-applies the
+        // current window via the full filter pipeline (form
+        // inputs, hash, applyFilters). Same commit path as
+        // pointerup, but user-initiated.
+        if (applyBtn) applyBtn.addEventListener("click", () => this.applyNow());
+    }
+
+    // v0.9.2 — force-apply the current selection window to the
+    // full filter pipeline. Equivalent to what pointerup does,
+    // but callable from the Apply button or programmatically.
+    // Cancels any pending debounced onChange so the commit is
+    // immediate.
+    applyNow() {
+        this.onChange.cancel?.();
+        if (this._onChangeRaw) {
+            this._onChangeRaw(
+                this._isoDate(this.window[0]),
+                this._isoDate(this.window[1]),
+            );
+        }
     }
 
     // v0.9.0 — restore the full-range view (full dataset bounds).

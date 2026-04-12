@@ -17,6 +17,112 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 Nothing yet.
 
+## [0.9.2] — 2026-04-12 — TimeBrush adaptive granularity + live commit + Apply button
+
+Three small improvements to the Observatory TimeBrush that make
+sub-year playback actually useful:
+
+1. **Adaptive histogram granularity.** The v0.9.0 brush always
+   rendered year bars regardless of zoom level — at a 3-month
+   zoom the user saw 0-1 bars, a solid useless block. v0.9.2
+   adds month and day bar variants. The brush picks the right
+   granularity automatically based on view span:
+   - View span > 10 years → year bars (126 bars at full range)
+   - View span 1-10 years → month bars (1512 at full range)
+   - View span < 1 year → **day bars** (~46,000 at full range,
+     ~90 visible at a 3-month zoom)
+
+   Cost: one walk of `POINTS.dateDays` per granularity,
+   cached indefinitely. Day histogram is the cheapest of the
+   three (direct integer subtraction per row, no binary
+   search) at ~5-10 ms. Month uses a precomputed monthStarts
+   lookup table and binary search at ~15-20 ms. All cached;
+   zoom changes are O(1) after the first fetch.
+
+2. **Live commit during drag.** v0.9.0 dragged visually only
+   and committed on pointerup, which meant no live map
+   feedback while the user was adjusting the window. v0.9.2
+   adds `_liveCommit()` that calls `UFODeck.setTimeWindow()`
+   directly on every pointermove — the same code path the
+   Play loop uses at 60fps. Bypasses the form-input + URL-hash
+   pipeline (those still run on pointerup) so there's no
+   history churn.
+
+   Result: drag the selection, the map re-tallies
+   continuously. Release, the final commit writes form
+   inputs + hash.
+
+3. **Explicit Apply button** in the brush header next to Reset
+   View. Force-applies the current selection via the full
+   filter pipeline. Useful when the user arrives at the brush
+   via URL hash or programmatic call and the live commit
+   didn't run.
+
+Bonus: the minimum selection window dropped from 30 days to
+7 days so users can set a one-week selection for playback.
+Narrower than that and the histogram becomes visually
+unreadable.
+
+### Added
+
+- **`deck.js` adaptive-granularity histograms**
+  (`getHistogram(granularity)` +
+  `getHistogramForGranularityVisible(granularity)`) returning
+  `[{ startMs, count }]` for `year`/`month`/`day` granularities.
+  Shared builder `_buildHistogram(iter, gran)` branches on
+  granularity; unfiltered results cached in `_histCache`.
+- **`_buildMonthStarts()`** precomputes the month-starts lookup
+  table once per session (~1500 entries) so month-histogram
+  binary search is cheap.
+- **`TimeBrush._pickGranularity()`** — returns
+  `"year"|"month"|"day"` based on `_viewSpan()`.
+- **`TimeBrush._getFullBins(gran)` / `_getFilteredBins(gran)`**
+  — wrap the deck.js helpers with a per-brush cache. Filtered
+  slot cleared on every `retally()`.
+- **`TimeBrush._binsCache`** three-slot cache
+  `{ year: {full, filtered}, month: {...}, day: {...} }`.
+- **`TimeBrush._liveCommit()`** — pushes the current window to
+  `UFODeck.setTimeWindow(dayFrom, dayTo, {dayPrecision:true})`
+  for 60fps live feedback during drag.
+- **`TimeBrush.applyNow()`** — force-commits the current window
+  via `_onChangeRaw`, same path as pointerup. Wired to the new
+  `#brush-apply` button.
+- **`#brush-apply` button** in `index.html` brush header.
+- **`tests/test_v092.py`** — 21 new tests locking the
+  adaptive-granularity contract, live-commit wiring, and Apply
+  button.
+
+### Changed
+
+- **`TimeBrush._draw`** rewritten to pick granularity, fetch
+  bins via `_getFullBins`/`_getFilteredBins`, and iterate
+  `bins[i].startMs` instead of `bins[i].year`. All three
+  granularities route through a single `_viewTimeToPx(startMs)`
+  call so the math is uniform. Falls back to the legacy
+  year-only path when deck.gl helpers aren't available.
+- **`TimeBrush.retally(bins)`** now just sets `_hasActiveFilter`
+  and invalidates the three granularity filtered slots; the
+  `bins` argument is kept for backward compat but no longer
+  read. Next `_draw()` recomputes from the new POINTS.visibleIdx.
+- **`TimeBrush._bindEvents` onPointerMove** calls `_liveCommit()`
+  after `_syncWindow()` for `move`/`l`/`r` drag modes. Pan
+  mode skips the commit (pan only changes the view, not the
+  selection).
+- **Minimum selection window** dropped from 30 days to 7 days
+  in the `l`/`r` handle clamps so sub-year playback works.
+- **`mountQualityRail` / `updateQualityBiasBanner`** — no
+  change, but this is the first v0.9.x release where the bias
+  warning is visible in the wild because users will actually
+  flip the toggle now that filters feel responsive.
+
+### Fixed
+
+- **3-month zoom used to show 0-1 bars.** Now shows ~90 day
+  bars with visible daily variation in sighting counts.
+- **Drag-to-select had no live map feedback.** Users had to
+  release to see what they'd selected. Now updates in real
+  time.
+
 ## [0.9.1] — 2026-04-12 — Correctness hotfix + Insights coverage panels
 
 Informed by a UX agent review and a Science agent review run in
