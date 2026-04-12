@@ -1827,11 +1827,25 @@ function wireObservatoryModeToggle() {
     if (speedSel) {
         speedSel.addEventListener("change", (e) => {
             if (!state.timeBrush) return;
+            // v0.9.3: value is now absolute (days of timeline per
+            // wall-second) instead of a multiplier. Write into the
+            // new field; the step loop reads it every frame so
+            // changes take effect mid-playback.
             const v = parseFloat(e.target.value);
             if (Number.isFinite(v) && v > 0) {
-                state.timeBrush.playSpeed = v;
+                state.timeBrush.playStepDaysPerSec = v;
             }
         });
+        // v0.9.3: sync the brush's default from whatever the
+        // dropdown is currently showing, so future mutations of
+        // the HTML <option selected> propagate without code
+        // changes.
+        if (state.timeBrush) {
+            const v = parseFloat(speedSel.value);
+            if (Number.isFinite(v) && v > 0) {
+                state.timeBrush.playStepDaysPerSec = v;
+            }
+        }
     }
 }
 
@@ -2396,7 +2410,17 @@ class TimeBrush {
         // pipeline. Smooth 60 fps playback instead of 3 fps.
         this.deckFastPath = null;
         this.playMode = "sliding";    // "sliding" | "cumulative"
-        this.playSpeed = 1.0;         // reserved for a future speed toggle
+        // v0.9.3 — playback speed is now absolute: days of
+        // timeline advanced per wall-second. Previously this was
+        // a multiplier relative to a full-range-sweep baseline,
+        // which made narrow-window playback feel way too fast
+        // even at the slowest (0.25×) setting. Default 1 year/sec
+        // gives a ~126-sec sweep over the full range with the
+        // auto-narrow 5-year selection window.
+        this.playStepDaysPerSec = 365;
+        // Legacy alias kept so any external caller that reads
+        // state.timeBrush.playSpeed doesn't crash. Always 1 now.
+        this.playSpeed = 1.0;
         this._cumulativeLeft = null;  // memoised leftEdge during cumulative play
 
         this._bindEvents();
@@ -3104,29 +3128,38 @@ class TimeBrush {
             this._syncWindow();
         }
 
-        // v0.8.1 — base step size = 0.4% of total span per frame ≈
-        // 8 months at the default 1900-2026 range. Multiplied per
-        // frame by this.playSpeed, which the v0.8.2-cleanup-2 speed
-        // dropdown updates live so the user can speed up or slow
-        // down playback mid-sweep without restarting. The arrow
-        // function below preserves `this` lexically, so re-reading
-        // this.playSpeed every frame "just works" — no captured
-        // snapshot needed.
-        const baseStep = span * 0.004;
-        const fastPath = this.deckFastPath;  // snapshot for the hot loop
+        // v0.9.3 — step size is now ABSOLUTE: days of timeline
+        // advanced per wall-second. The dropdown value is in
+        // days-per-second, so each frame advances by
+        // (daysPerSec / 60) days. Convert to ms via × 86400000.
+        //
+        // At 1 year/sec with a 5-year auto-narrow window, the
+        // full 1900-2026 sweep takes ~121 seconds (~2 minutes).
+        // At 1 day/sec the same sweep takes ~46,000 seconds
+        // (~12.8 hours) — but the user would never run it at
+        // full zoom. The dropdown provides 8 options from
+        // 0.5 day/sec to 1 year/sec so users can pick the right
+        // pace for their current zoom level.
+        //
+        // The arrow function preserves `this` lexically, so
+        // re-reading this.playStepDaysPerSec every frame "just
+        // works" when the user changes the dropdown mid-play.
+        const msPerDay = 86400000;
+        const epoch = Date.UTC(1900, 0, 1);
         const legacyOnChange = this.onChange;
 
         const step = () => {
             if (!this.playing) return;
 
-            // Re-read playSpeed every frame so the speed dropdown
-            // takes effect immediately.
-            const stepSize = baseStep * (this.playSpeed || 1.0);
+            // Re-read speed every frame so the dropdown takes
+            // effect immediately.
+            const daysPerSec = this.playStepDaysPerSec || 365;
+            const stepMs = (daysPerSec / 60) * msPerDay;
 
             if (isCumulative) {
                 // Advance only the right edge. Wrap back to the
                 // initial window size when we hit the end.
-                let b = this.window[1] + stepSize;
+                let b = this.window[1] + stepMs;
                 if (b > this.maxT) {
                     b = this._cumulativeLeft + winSpan;
                 }
@@ -3134,7 +3167,7 @@ class TimeBrush {
             } else {
                 // Sliding: slide both edges. Loop back when the
                 // right edge passes maxT.
-                let a = this.window[0] + stepSize;
+                let a = this.window[0] + stepMs;
                 let b = a + winSpan;
                 if (b > this.maxT) {
                     a = this.minT;
@@ -3144,14 +3177,21 @@ class TimeBrush {
             }
             this._syncWindow();
 
-            // v0.8.1 — GPU fast path. Call the deck.js setTimeWindow
-            // helper directly, bypassing the debounced onChange +
-            // applyFilters() pipeline. This is what makes 60 fps
-            // playback possible.
-            if (fastPath) {
-                const y0 = new Date(this.window[0]).getUTCFullYear();
-                const y1 = new Date(this.window[1]).getUTCFullYear();
-                fastPath(y0, y1, isCumulative);
+            // v0.9.3 — GPU fast path. Uses day-precision so
+            // sub-year playback actually filters correctly
+            // (the old v0.8.1 path passed year integers, which
+            // meant a June-August 1997 window showed all of
+            // 1997 regardless of handle position). The
+            // _liveCommit helper wraps the same setTimeWindow
+            // call the brush drag uses — guaranteed cheap at
+            // 60fps.
+            if (window.UFODeck && typeof window.UFODeck.setTimeWindow === "function" && window.UFODeck.isReady && window.UFODeck.isReady()) {
+                const dayFrom = Math.floor((this.window[0] - epoch) / msPerDay);
+                const dayTo = Math.floor((this.window[1] - epoch) / msPerDay);
+                window.UFODeck.setTimeWindow(dayFrom, dayTo, {
+                    dayPrecision: true,
+                    cumulative: isCumulative,
+                });
             } else {
                 // Legacy fallback: debounced onChange → applyFilters
                 // → loadMapMarkers (~3 fps, but still animates).

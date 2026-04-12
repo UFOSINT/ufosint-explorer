@@ -178,9 +178,18 @@ def test_time_brush_play_loop_bypasses_debounce_on_gpu_path():
     end = js.find("    reset() {", start)
     assert end != -1, "reset() method not found after togglePlay()"
     body = js[start:end]
-    assert "fastPath" in body or "deckFastPath" in body, (
-        "togglePlay's step closure must call the deck fast path "
-        "directly for smooth playback"
+    # v0.9.3: the old fastPath indirection was replaced with a
+    # direct call to UFODeck.setTimeWindow with dayPrecision:true.
+    # Both patterns bypass the debounced onChange → applyFilters
+    # pipeline, which is the core invariant this test guards.
+    assert (
+        "fastPath" in body
+        or "deckFastPath" in body
+        or "setTimeWindow" in body
+    ), (
+        "togglePlay's step closure must bypass the debounced onChange "
+        "path — either via the old fastPath or a direct setTimeWindow "
+        "call — for smooth 60fps playback"
     )
     assert "requestAnimationFrame" in body, (
         "playback must be driven by requestAnimationFrame"

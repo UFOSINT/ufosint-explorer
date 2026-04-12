@@ -322,19 +322,31 @@
                          Sliding: the window slides forward at a fixed width.
                          Cumulative: left edge is pinned; only the right edge advances. -->
                     <button id="brush-mode" class="brush-mode-btn" type="button" data-mode="sliding" aria-pressed="false" title="Toggle playback mode: sliding window vs cumulative fill">SLIDING</button>
-                    <!-- v0.8.2-cleanup-2: Playback speed multiplier. The
-                         TimeBrush already accepts a `playSpeed` property
-                         (added in v0.8.1 as a stub); this dropdown wires
-                         it to a UI control. Default 1× = ~4 s sweep
-                         across the full 1900-2026 range. -->
-                    <label class="brush-speed-label" for="brush-speed" title="Playback speed">SPEED</label>
+                    <!-- v0.9.3: Playback speed is now ABSOLUTE (time
+                         of timeline per wall-second) instead of a
+                         multiplier. The old "0.25x" was still too
+                         fast at narrow-window zoom levels because
+                         the multiplier was relative to the full
+                         span. These options work the same at any
+                         zoom level: "1 week/sec" always advances
+                         the selection by exactly 7 days per wall
+                         second regardless of whether the user is
+                         playing a 7-day or a 20-year window.
+                         Value is in days of timeline per wall-
+                         second. Default "1 year/sec" gives a
+                         ~126-second sweep over the 1900-2026
+                         full range with the auto-narrow 5-year
+                         window. -->
+                    <label class="brush-speed-label" for="brush-speed" title="Playback speed (time of timeline per wall-second)">SPEED</label>
                     <select id="brush-speed" class="brush-speed-select" aria-label="Playback speed">
-                        <option value="0.25">0.25×</option>
-                        <option value="0.5">0.5×</option>
-                        <option value="1" selected>1×</option>
-                        <option value="2">2×</option>
-                        <option value="4">4×</option>
-                        <option value="8">8×</option>
+                        <option value="0.5">0.5 day / sec</option>
+                        <option value="1">1 day / sec</option>
+                        <option value="3.5">0.5 week / sec</option>
+                        <option value="7">1 week / sec</option>
+                        <option value="15">0.5 month / sec</option>
+                        <option value="30">1 month / sec</option>
+                        <option value="183">0.5 year / sec</option>
+                        <option value="365" selected>1 year / sec</option>
                     </select>
                     <div class="brush-readout">
                         TIME WINDOW · <strong id="brush-range-label">1947 — 2026</strong>
