@@ -173,6 +173,14 @@
                             <span class="settings-menu-hint">MCP server &amp; API for your own AI client</span>
                         </span>
                     </button>
+                    <div class="settings-menu-divider"></div>
+                    <button class="settings-menu-item" role="menuitem" id="credits-menu-item">
+                        <span class="settings-menu-icon"><svg class="icon icon-md" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
+                        <span>
+                            <span class="settings-menu-label">Credits</span>
+                            <span class="settings-menu-hint">Who built this</span>
+                        </span>
+                    </button>
                     <div class="settings-menu-section">Theme</div>
                     <div class="theme-toggle" role="radiogroup" aria-label="Interface theme">
                         <button class="theme-opt active" data-theme="signal" role="radio" aria-checked="true" type="button">
@@ -1464,6 +1472,34 @@ DATABASE_URL="postgresql://..." python mcp_server.py</code></pre>
                 <button id="modal-close" class="modal-close" aria-label="Close sighting detail">&times;</button>
             </div>
             <div id="modal-body" class="modal-body"></div>
+        </div>
+    </div>
+
+    <!-- v0.11.2: Credits modal -->
+    <div id="credits-overlay" class="credits-overlay" role="dialog" aria-modal="true" aria-label="Credits" hidden>
+        <div class="credits-modal">
+            <button class="credits-close" id="credits-close" aria-label="Close credits">&times;</button>
+            <h2 class="credits-title">UFOSINT Explorer</h2>
+            <p class="credits-subtitle">A collaborative open-source project analyzing 614,505 UFO/UAP sighting records from five major databases.</p>
+
+            <div class="credits-role">
+                <h3>Data Analysis &amp; Research</h3>
+                <a href="https://x.com/ufohackers" target="_blank" rel="noopener" class="credits-handle">@ufohackers</a>
+                <span class="credits-sep">&middot;</span>
+                <a href="https://ufosint.com" target="_blank" rel="noopener" class="credits-link">ufosint.com</a>
+                <p class="credits-desc">Source data curation, deduplication methodology, transformer emotion analysis pipeline, science team coordination</p>
+            </div>
+
+            <div class="credits-role">
+                <h3>Web Design, AI/MCP Pipeline &amp; Layout</h3>
+                <a href="https://x.com/DuelingGroks" target="_blank" rel="noopener" class="credits-handle">@DuelingGroks</a>
+                <p class="credits-desc">Frontend engineering, GPU-accelerated observatory, MCP server integration, AI chat system, deployment infrastructure</p>
+            </div>
+
+            <div class="credits-role">
+                <h3>AI-Assisted Development</h3>
+                <p class="credits-desc">Built with <a href="https://claude.ai/claude-code" target="_blank" rel="noopener">Claude Code</a> (Opus 4.6, 1M context) by Anthropic</p>
+            </div>
         </div>
     </div>
 

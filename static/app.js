@@ -6457,6 +6457,37 @@ function initSettingsMenu() {
             switchTab(tab);
         });
     });
+
+    // v0.11.2 — Credits modal
+    const creditsBtn = document.getElementById("credits-menu-item");
+    if (creditsBtn) {
+        creditsBtn.addEventListener("click", () => {
+            closeMenu();
+            openCreditsModal();
+        });
+    }
+}
+
+function openCreditsModal() {
+    const overlay = document.getElementById("credits-overlay");
+    if (!overlay) return;
+    overlay.hidden = false;
+    // Trigger reflow so the opacity transition plays
+    void overlay.offsetHeight;
+    overlay.classList.add("is-open");
+
+    const closeBtn = document.getElementById("credits-close");
+    const close = () => {
+        overlay.classList.remove("is-open");
+        setTimeout(() => { overlay.hidden = true; }, 200);
+        document.removeEventListener("keydown", escHandler);
+    };
+    const escHandler = (e) => { if (e.key === "Escape") close(); };
+    if (closeBtn) closeBtn.onclick = close;
+    overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) close();
+    });
+    document.addEventListener("keydown", escHandler);
 }
 
 
