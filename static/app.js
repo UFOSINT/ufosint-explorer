@@ -2715,16 +2715,11 @@ class TimeBrush {
         // does, and calling _drawOverview here is cheap (~2ms).
         this._drawOverview();
 
-        // v0.10.0 — if the user is on the Timeline tab, debounce a
-        // refresh of the Timeline cards so they mirror the brush's
-        // zoom level. Without this, the charts stay at full-range
-        // year-level even when the brush is zoomed to a 3-month
-        // window. Debounced at 200ms so scroll-wheel zoom doesn't
-        // thrash Chart.js redraws at 60fps.
-        // v0.11: debounced refresh for both Timeline AND Insights
-        // tabs. When the brush zoom or playback changes, the
-        // charts on whichever tab is active should update. The
-        // 200ms debounce prevents Chart.js thrashing at 60fps.
+        // v0.11: throttle-refresh Timeline + Insights cards when the
+        // brush zoom changes. Uses debounce here (not throttle) because
+        // zoom/pan DOES stop eventually — the timer fires after the
+        // last wheel tick or drag end. This is fine for zoom; the play
+        // loop has its own throttle in the step() function above.
         if (state.activeTab === "timeline" && typeof refreshTimelineCards === "function") {
             clearTimeout(this._timelineRefreshTimer);
             this._timelineRefreshTimer = setTimeout(() => {
@@ -3526,22 +3521,25 @@ class TimeBrush {
                 );
             }
 
-            // v0.11: during playback, debounce-refresh the
+            // v0.11: during playback, THROTTLE-refresh the
             // Timeline or Insights cards so they animate along
-            // with the map. The 250ms debounce keeps Chart.js
-            // from thrashing at 60fps — the charts update ~4
-            // times per second which is visually smooth.
+            // with the map. Uses a throttle (fire at most once
+            // per 250ms) NOT a debounce (fire after updates stop)
+            // — debounce never fires during continuous 60fps
+            // playback because each frame resets the timer before
+            // it triggers. Throttle guarantees ~4 updates/sec.
+            const now = Date.now();
             if (state.activeTab === "timeline" && typeof refreshTimelineCards === "function") {
-                clearTimeout(this._playTimelineTimer);
-                this._playTimelineTimer = setTimeout(() => {
+                if (!this._lastTimelineRefresh || now - this._lastTimelineRefresh > 250) {
+                    this._lastTimelineRefresh = now;
                     refreshTimelineCards();
-                }, 250);
+                }
             }
             if (state.activeTab === "insights" && typeof refreshInsightsClientCards === "function") {
-                clearTimeout(this._playInsightsTimer);
-                this._playInsightsTimer = setTimeout(() => {
+                if (!this._lastInsightsRefresh || now - this._lastInsightsRefresh > 250) {
+                    this._lastInsightsRefresh = now;
                     refreshInsightsClientCards();
-                }, 250);
+                }
             }
 
             this.playRaf = requestAnimationFrame(step);
