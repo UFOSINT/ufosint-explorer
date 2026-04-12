@@ -2785,6 +2785,15 @@ select:focus {
     font-size: var(--fs-12);
     text-align: center;
 }
+.connect-discovery-list {
+    margin: 8px 0 0;
+    padding-left: 20px;
+    font-size: var(--fs-14);
+    line-height: 1.8;
+}
+.connect-discovery-list code {
+    font-size: var(--fs-13);
+}
 
 /* =========================================================================
    Sprint 2 additions — geographic filters, map place search, export,

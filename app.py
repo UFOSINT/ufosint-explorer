@@ -736,6 +736,192 @@ def api_tools_catalog():
     return jsonify({"tools": list_tools_openai()})
 
 
+# =========================================================================
+# v0.11.2: AI-readiness discovery endpoints
+# =========================================================================
+# These files let AI agents, LLMs, and MCP clients discover and understand
+# the UFOSINT tools without manual configuration.
+
+@app.route("/robots.txt")
+def robots_txt():
+    """Allow all AI crawlers and bots."""
+    text = """# UFOSINT Explorer — all bots welcome
+User-agent: *
+Allow: /
+
+# AI-readiness discovery
+# /llms.txt            — LLM site index (Markdown)
+# /llms-full.txt       — Full tool documentation
+# /.well-known/mcp.json — MCP server discovery
+# /mcp                 — MCP endpoint (JSON-RPC 2.0)
+
+Sitemap: https://ufosint-explorer.azurewebsites.net/sitemap.xml
+"""
+    return Response(text, mimetype="text/plain")
+
+
+@app.route("/llms.txt")
+def llms_txt():
+    """Lightweight LLM site index — what the site is and where to find things."""
+    text = """# UFOSINT Explorer
+
+> Interactive research platform for the Unified UFO Sightings Database — 614,505 sighting records from five major UFO/UAP databases (NUFORC, MUFON, UFOCAT, UPDB, UFO-search), deduplicated and cross-referenced. Free, read-only, no authentication required.
+
+The site provides a GPU-accelerated map of 396,158 geocoded sightings, timeline charts, emotion/sentiment analysis from 4 transformer models, and a full methodology section. All data is queryable via MCP tools or a REST API.
+
+## MCP Tools (Model Context Protocol)
+
+- [MCP Endpoint](https://ufosint-explorer.azurewebsites.net/mcp): JSON-RPC 2.0 over HTTPS, 6 read-only tools for searching, filtering, and analyzing UFO sightings
+- [MCP Discovery](https://ufosint-explorer.azurewebsites.net/.well-known/mcp.json): Server discovery manifest
+- [Full Tool Documentation](https://ufosint-explorer.azurewebsites.net/llms-full.txt): Complete tool schemas, parameters, and usage examples
+
+## Available Tools
+
+- `search_sightings`: Free-text + filter search (shape, source, state, country, date range, Hynek class). Up to 200 results.
+- `get_sighting`: Full record for a single sighting by database ID.
+- `get_stats`: Top-level database statistics (totals, per-source counts, date range).
+- `get_timeline`: Sighting counts grouped by year or month, with optional source/shape filter.
+- `find_duplicates_for`: Cross-source duplicate candidates for a given sighting.
+- `count_by`: Top-N rankings by categorical field (shape, hynek, vallee, source, country, state).
+
+## REST API
+
+- [Tool Catalog (OpenAI format)](https://ufosint-explorer.azurewebsites.net/api/tools-catalog): Tool definitions compatible with OpenAI/OpenRouter function calling
+- [Database Stats](https://ufosint-explorer.azurewebsites.net/api/stats): JSON statistics endpoint
+- [Filters](https://ufosint-explorer.azurewebsites.net/api/filters): Available filter values (shapes, sources, countries, etc.)
+
+## Data Sources
+
+Five databases totaling 614,505 deduplicated records:
+- NUFORC (159,320) — National UFO Reporting Center
+- MUFON (138,310) — Mutual UFO Network
+- UFOCAT (197,108) — CUFOS academic catalog
+- UPDB (65,016) — Jacques Vallee's Unified Phenomena Database
+- UFO-search (54,751) — Majestic Timeline historical compilations
+
+## Optional
+
+- [Source Code](https://github.com/UFOSINT/ufosint-explorer): GitHub repository (MIT license pending)
+- [Data Pipeline](https://github.com/UFOSINT/ufo-dedup): ETL and deduplication pipeline
+"""
+    return Response(text, mimetype="text/plain")
+
+
+@app.route("/llms-full.txt")
+def llms_full_txt():
+    """Full tool documentation for LLMs — schemas, parameters, examples."""
+    from tools_catalog import TOOLS
+    lines = [
+        "# UFOSINT Explorer — Full Tool Documentation",
+        "",
+        "> This file contains complete documentation for all 6 MCP tools",
+        "> available at https://ufosint-explorer.azurewebsites.net/mcp.",
+        "> Use this to understand how to call each tool, what parameters",
+        "> they accept, and what they return.",
+        "",
+        "## Connection",
+        "",
+        "MCP endpoint: `https://ufosint-explorer.azurewebsites.net/mcp`",
+        "Protocol: JSON-RPC 2.0 over HTTPS",
+        "Authentication: None required (free, read-only)",
+        "",
+        "### Claude Code",
+        "```",
+        "claude mcp add --transport http ufosint https://ufosint-explorer.azurewebsites.net/mcp",
+        "```",
+        "",
+        "### Claude Desktop",
+        "Add to `claude_desktop_config.json`:",
+        '```json',
+        '{',
+        '  "mcpServers": {',
+        '    "ufosint": {',
+        '      "url": "https://ufosint-explorer.azurewebsites.net/mcp",',
+        '      "transport": "http"',
+        '    }',
+        '  }',
+        '}',
+        '```',
+        "",
+        "---",
+        "",
+        "## Tools",
+        "",
+    ]
+    for t in TOOLS:
+        lines.append(f"### {t['name']}")
+        lines.append("")
+        lines.append(t["description"])
+        lines.append("")
+        params = t["parameters"].get("properties", {})
+        required = t["parameters"].get("required", [])
+        if params:
+            lines.append("**Parameters:**")
+            lines.append("")
+            lines.append("| Name | Type | Required | Description |")
+            lines.append("|------|------|----------|-------------|")
+            for pname, pschema in params.items():
+                ptype = pschema.get("type", "string")
+                preq = "Yes" if pname in required else "No"
+                pdesc = pschema.get("description", "")
+                if "enum" in pschema:
+                    pdesc += f" Allowed: {', '.join(pschema['enum'])}"
+                lines.append(f"| `{pname}` | {ptype} | {preq} | {pdesc} |")
+            lines.append("")
+        else:
+            lines.append("**Parameters:** None")
+            lines.append("")
+        lines.append("---")
+        lines.append("")
+
+    lines.extend([
+        "## Data Overview",
+        "",
+        "- **Total sightings:** 614,505",
+        "- **Mapped (geocoded):** 396,158",
+        "- **With emotion analysis:** 502,985",
+        "- **Date range:** 1900 to 2026 (primary), with scattered records back to antiquity",
+        "- **Sources:** NUFORC, MUFON, UFOCAT, UPDB, UFO-search",
+        "",
+        "## Emotion & Sentiment Models (v0.11)",
+        "",
+        "Four models run on 502,985 sightings with narrative text:",
+        "- RoBERTa 3-class sentiment (positive/negative/neutral)",
+        "- RoBERTa 7-class emotion (anger/disgust/fear/joy/neutral/sadness/surprise)",
+        "- GoEmotions 28-class (admiration through surprise, 28 labels)",
+        "- VADER compound sentiment score (-1 to +1)",
+        "",
+        "These fields are available in `search_sightings` results when present.",
+    ])
+    return Response("\n".join(lines), mimetype="text/plain")
+
+
+@app.route("/.well-known/mcp.json")
+def well_known_mcp():
+    """MCP server discovery manifest."""
+    return jsonify({
+        "mcp_version": "2024-11-05",
+        "server": {
+            "name": "ufosint-mcp",
+            "version": "0.11.2",
+            "description": (
+                "Search and analyze 614,505 UFO sightings from 5 major "
+                "databases (NUFORC, MUFON, UFOCAT, UPDB, UFO-search). "
+                "Read-only, no authentication required."
+            ),
+            "homepage": "https://ufosint-explorer.azurewebsites.net",
+        },
+        "endpoints": [
+            {
+                "url": "https://ufosint-explorer.azurewebsites.net/mcp",
+                "transport": "http",
+                "capabilities": ["tools"],
+            }
+        ],
+        "tools_count": 6,
+    })
+
+
 @app.route("/api/tool/<name>", methods=["POST"])
 def api_tool_call(name):
     """Direct tool invocation for the BYOK chat.

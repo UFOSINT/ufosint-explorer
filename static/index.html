@@ -6,6 +6,41 @@
     <title>UFOSINT Explorer — 614,505 UFO sightings, searchable</title>
     <meta name="description" content="Browse 614,505 deduplicated UFO and UAP sighting records from five major databases on an interactive map, timeline, and full-text search." />
 
+    <!-- v0.11.2: Schema.org structured data for AI discoverability -->
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "Dataset",
+        "name": "Unified UFO Sightings Database",
+        "description": "614,505 deduplicated UFO and UAP sighting records from five major databases (NUFORC, MUFON, UFOCAT, UPDB, UFO-search), cross-referenced and enriched with emotion analysis from 4 transformer models.",
+        "url": "https://ufosint-explorer.azurewebsites.net",
+        "keywords": ["UFO", "UAP", "sightings", "NUFORC", "MUFON", "UFOCAT", "unidentified aerial phenomena"],
+        "temporalCoverage": "1900/2026",
+        "spatialCoverage": { "@type": "Place", "name": "Worldwide" },
+        "variableMeasured": [
+            { "@type": "PropertyValue", "name": "total_sightings", "value": 614505 },
+            { "@type": "PropertyValue", "name": "geocoded_sightings", "value": 396158 },
+            { "@type": "PropertyValue", "name": "emotion_analyzed", "value": 502985 }
+        ],
+        "distribution": [
+            {
+                "@type": "DataDownload",
+                "name": "MCP Server (Model Context Protocol)",
+                "contentUrl": "https://ufosint-explorer.azurewebsites.net/mcp",
+                "encodingFormat": "application/json",
+                "description": "6 read-only tools for searching, filtering, and analyzing sightings via JSON-RPC 2.0"
+            },
+            {
+                "@type": "DataDownload",
+                "name": "REST API (OpenAI function-calling format)",
+                "contentUrl": "https://ufosint-explorer.azurewebsites.net/api/tools-catalog",
+                "encodingFormat": "application/json"
+            }
+        ],
+        "isAccessibleForFree": true
+    }
+    </script>
+
     <!-- Inter font -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -570,7 +605,9 @@
             </div>
         </div>
 
-        <!-- Connect Panel (how to use the data with your own AI client) -->
+        <!-- Connect Panel (how to use the data with your own AI client)
+             v0.11.2: updated with correct CLI commands, Claude Code
+             instructions, and AI-readiness discovery info. -->
         <div id="panel-connect" class="panel">
             <div class="connect-page">
                 <h2>Connect your own AI to the UFOSINT data</h2>
@@ -586,6 +623,14 @@
                     <h3>MCP endpoint</h3>
                     <pre class="connect-code"><code>https://ufosint-explorer.azurewebsites.net/mcp</code></pre>
                     <p>6 tools available: <code>search_sightings</code>, <code>get_sighting</code>, <code>get_stats</code>, <code>get_timeline</code>, <code>find_duplicates_for</code>, <code>count_by</code>.</p>
+                </div>
+
+                <div class="connect-card">
+                    <h3>Claude Code (CLI / Desktop App)</h3>
+                    <p>One command to connect from any project directory:</p>
+                    <pre class="connect-code"><code>claude mcp add --transport http ufosint https://ufosint-explorer.azurewebsites.net/mcp</code></pre>
+                    <p>Restart your Claude Code session. The 6 UFOSINT tools will be available immediately.
+                       Remove later with <code>claude mcp remove ufosint</code>.</p>
                 </div>
 
                 <div class="connect-card">
@@ -605,7 +650,7 @@
 
                 <div class="connect-card">
                     <h3>Cursor / Cline / Continue / Windsurf</h3>
-                    <p>These all support remote MCP servers. Add the same URL above to your client's MCP configuration.
+                    <p>These all support remote MCP servers. Add the same URL to your client's MCP configuration.
                        Each client documents the exact location, but the JSON shape is the same.</p>
                 </div>
 
@@ -642,9 +687,20 @@ Content-Type: application/json
                 </div>
 
                 <div class="connect-card">
+                    <h3>AI Discovery</h3>
+                    <p>This site exposes standard AI-readiness files so agents and LLMs can discover
+                       and understand the UFOSINT tools automatically:</p>
+                    <ul class="connect-discovery-list">
+                        <li><a href="/llms.txt"><code>/llms.txt</code></a> — Lightweight index of the site, tools, and data for LLMs</li>
+                        <li><a href="/llms-full.txt"><code>/llms-full.txt</code></a> — Full tool schemas and documentation in one file</li>
+                        <li><a href="/.well-known/mcp.json"><code>/.well-known/mcp.json</code></a> — MCP server discovery manifest</li>
+                        <li><a href="/robots.txt"><code>/robots.txt</code></a> — All AI crawlers allowed</li>
+                    </ul>
+                </div>
+
+                <div class="connect-card">
                     <h3>Local stdio MCP server</h3>
-                    <p>Prefer to run an MCP server on your own machine (e.g. for privacy, lower latency,
-                       or offline use)? Clone the repo and use the included <code>mcp_server.py</code>:</p>
+                    <p>Prefer to run an MCP server on your own machine? Clone the repo and use <code>mcp_server.py</code>:</p>
                     <pre class="connect-code"><code>git clone https://github.com/UFOSINT/ufosint-explorer
 cd ufosint-explorer
 pip install fastmcp psycopg[binary]
