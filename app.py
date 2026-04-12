@@ -2024,11 +2024,17 @@ def api_timeline():
             print("[api_timeline] mv_timeline_yearly missing, falling back to live query")
             cur = conn.cursor()
 
-    # v0.9.1: same "0019-..." guard on the live path.
+    # v0.9.1: same "0019-..." guard on the live path. Note the
+    # '%%' escape: psycopg uses %s as its format placeholder when
+    # the call passes positional args, so a literal % in the SQL
+    # string has to be doubled. Passing these clauses through
+    # cur.execute(sql, args) where args has entries means every
+    # bare % in the SQL will blow up with "unsupported format
+    # character". Doubling to %% is the psycopg-documented escape.
     clauses = [
         "s.date_event IS NOT NULL",
         "LENGTH(s.date_event) >= 4",
-        "s.date_event NOT LIKE '0019-%'",
+        "s.date_event NOT LIKE '0019-%%'",
     ]
     args = []
 
@@ -2616,11 +2622,13 @@ def api_sentiment_timeline():
     conn = get_db()
     cur = conn.cursor()
 
-    # v0.9.1: exclude the 692 bogus "0019-..." records.
+    # v0.9.1: exclude the 692 bogus "0019-..." records. The %%
+    # is the psycopg literal-% escape — see api_timeline above
+    # for the full explanation.
     clauses = [
         "s.date_event IS NOT NULL",
         "LENGTH(s.date_event) >= 4",
-        "s.date_event NOT LIKE '0019-%'",
+        "s.date_event NOT LIKE '0019-%%'",
     ]
     args = []
     add_common_filters(request.args, clauses, args)

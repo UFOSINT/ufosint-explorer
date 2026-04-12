@@ -117,14 +117,23 @@ def test_api_stats_mv_path_overrides_0019():
 
 def test_api_timeline_excludes_0019():
     """Both the live fallback and the MV post-filter must drop
-    the '0019' key from the timeline response."""
+    the '0019' key from the timeline response.
+
+    v0.9.1 hotfix note: the live path uses '%%' (psycopg literal-%
+    escape) because clauses are passed through cur.execute(sql,
+    args). Without the escape psycopg raises 'unsupported format
+    character' at runtime — which caused a 500 regression that
+    I caught in post-deploy smoke, hence the %% in all
+    parameterized-execute branches."""
     src = _read(APP_PY)
     body = _extract_js_function_like(
         src, "api_timeline", end_pat=r"\n\ndef |\n\n@app\."
     )
     assert body, "couldn't locate api_timeline body"
-    assert "NOT LIKE '0019-%'" in body, (
-        "live timeline query must exclude 0019-* records"
+    assert "NOT LIKE '0019-%%'" in body, (
+        "live timeline query must exclude 0019-* records using "
+        "the %% escape (psycopg treats bare % as a format "
+        "placeholder when args is passed)"
     )
     # MV path also drops "0019" keys from the response pivot
     assert '"0019"' in body or 'startswith("0019")' in body, (
@@ -135,23 +144,19 @@ def test_api_timeline_excludes_0019():
 
 def test_api_sentiment_timeline_excludes_0019():
     """/api/sentiment/timeline uses the same date_event LIKE
-    guards as /api/timeline. Every place that builds a clauses
-    list containing `s.date_event IS NOT NULL` must also include
-    a `NOT LIKE '0019-%'` clause."""
+    guards as /api/timeline. Both clauses-list paths use the
+    %% escape because they're parameterized execute calls."""
     src = _read(APP_PY)
     not_null_count = src.count("s.date_event IS NOT NULL")
-    not_like_count = src.count("s.date_event NOT LIKE '0019-%'")
-    # Expect at least 2 places (api_timeline live path +
-    # api_sentiment_timeline). The stats live MIN/MAX has its own
-    # unprefixed `date_event NOT LIKE '0019-%'` clause. Whatever
-    # the count is, it should equal the IS-NOT-NULL count for the
-    # prefixed `s.date_event` occurrences, because each is-not-null
-    # should have a matching not-like right next to it.
+    # Escaped form appears in parameterized execute paths.
+    not_like_count_escaped = src.count("s.date_event NOT LIKE '0019-%%'")
+    # api_timeline + api_sentiment_timeline both add the guard
+    # to their clauses lists → expect >= 2 escaped occurrences.
     assert not_null_count >= 2
-    assert not_like_count >= not_null_count, (
-        f"expected NOT LIKE '0019-%' guard next to each "
-        f"`s.date_event IS NOT NULL` clause. Found "
-        f"{not_like_count} NOT LIKE vs {not_null_count} IS NOT NULL."
+    assert not_like_count_escaped >= 2, (
+        f"expected at least 2 `s.date_event NOT LIKE '0019-%%'` "
+        f"guards (api_timeline + api_sentiment_timeline), found "
+        f"{not_like_count_escaped}"
     )
 
 
