@@ -3718,6 +3718,36 @@ async function loadTimeline() {
         }
         return;
     }
+
+    // v0.10.0 — wire the Day/Month/Year granularity toggle buttons.
+    // state.timelineGranularity defaults to "year" and persists
+    // across tab switches. Each button click sets the granularity
+    // and refreshes the cards so the stacked chart re-renders at
+    // the new resolution.
+    if (!state._timelineGranWired) {
+        state._timelineGranWired = true;
+        state.timelineGranularity = state.timelineGranularity || "year";
+        document.querySelectorAll(".gran-btn").forEach(btn => {
+            btn.addEventListener("click", () => {
+                const gran = btn.dataset.gran;
+                if (!gran) return;
+                state.timelineGranularity = gran;
+                // Update active state on all buttons
+                document.querySelectorAll(".gran-btn").forEach(b => {
+                    b.classList.toggle("active", b.dataset.gran === gran);
+                });
+                // Destroy the existing chart so it rebuilds with the
+                // right dataset shape (year has source-stacking,
+                // month/day doesn't).
+                if (state.chart) {
+                    state.chart.destroy();
+                    state.chart = null;
+                }
+                refreshTimelineCards();
+            });
+        });
+    }
+
     refreshTimelineCards();
 }
 
@@ -3995,7 +4025,33 @@ function refreshTimelineCards() {
         }
     }
 
-    renderTimelineMainChart(stacked);
+    // v0.10.0: the main stacked chart supports day/month/year
+    // granularity via the toggle buttons. When month or day is
+    // selected, we use the adaptive getHistogram(gran) from
+    // deck.js (which returns {startMs, count} bins, no source
+    // breakdown — source stacking only works at year level).
+    // When year is selected, we use the original stacked-by-source
+    // path. The selected granularity is stored in
+    // state.timelineGranularity.
+    const selectedGran = state.timelineGranularity || "year";
+
+    if (selectedGran === "year") {
+        renderTimelineMainChart(stacked);
+    } else {
+        // Month or day: use the adaptive histogram filtered to
+        // the view range. Single-series (no source stacking).
+        let adaptiveBins = window.UFODeck.getHistogramForGranularityVisible(selectedGran);
+        if (!adaptiveBins) {
+            adaptiveBins = window.UFODeck.getHistogram(selectedGran);
+        }
+        if (adaptiveBins && viewMin && viewMax) {
+            adaptiveBins = adaptiveBins.filter(b =>
+                b.startMs >= viewMin && b.startMs <= viewMax
+            );
+        }
+        renderTimelineMainChartAdaptive(adaptiveBins, selectedGran);
+    }
+
     renderTimelineQualityChart(filteredQuality);
     renderTimelineMovementChart(filteredMovement);
 
@@ -4007,11 +4063,84 @@ function refreshTimelineCards() {
         if (viewMin && viewMax) {
             const d0 = new Date(viewMin);
             const d1 = new Date(viewMax);
-            labelEl.textContent = `${d0.getUTCFullYear()} — ${d1.getUTCFullYear()}`;
+            const pad = (n) => String(n).padStart(2, "0");
+            if (selectedGran === "day") {
+                labelEl.textContent = `${d0.getUTCFullYear()}-${pad(d0.getUTCMonth() + 1)}-${pad(d0.getUTCDate())} — ${d1.getUTCFullYear()}-${pad(d1.getUTCMonth() + 1)}-${pad(d1.getUTCDate())}`;
+            } else if (selectedGran === "month") {
+                labelEl.textContent = `${d0.getUTCFullYear()}-${pad(d0.getUTCMonth() + 1)} — ${d1.getUTCFullYear()}-${pad(d1.getUTCMonth() + 1)}`;
+            } else {
+                labelEl.textContent = `${d0.getUTCFullYear()} — ${d1.getUTCFullYear()}`;
+            }
         } else if (stacked && stacked.years && stacked.years.length) {
             labelEl.textContent = `${stacked.years[0]} — ${stacked.years[stacked.years.length - 1]}`;
         }
     }
+}
+
+// v0.10.0 — render the main Timeline chart with adaptive-
+// granularity bins (month or day). Single-series (no source
+// stacking) because the source breakdown is only computed at
+// year level. Uses the same {startMs, count} bin shape as the
+// TimeBrush's adaptive draw.
+function renderTimelineMainChartAdaptive(bins, gran) {
+    const canvas = document.getElementById("timeline-main-chart");
+    if (!canvas || !bins || bins.length === 0) return;
+
+    const accent = getComputedStyle(document.body).getPropertyValue("--accent").trim() || "#00F0FF";
+    const pad = (n) => String(n).padStart(2, "0");
+
+    // Build labels based on granularity.
+    const labels = bins.map(b => {
+        const d = new Date(b.startMs);
+        if (gran === "day") {
+            return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+        }
+        if (gran === "month") {
+            const monthNames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+            return `${monthNames[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+        }
+        return String(d.getUTCFullYear());
+    });
+    const data = bins.map(b => b.count);
+
+    const datasets = [{
+        label: "Sightings",
+        data,
+        backgroundColor: accent + "BB",
+        borderColor: accent,
+        borderWidth: 1,
+    }];
+
+    if (state.chart) {
+        state.chart.data.labels = labels;
+        state.chart.data.datasets = datasets;
+        state.chart.options.scales.x.ticks.maxTicksLimit = gran === "day" ? 20 : 16;
+        state.chart.update("none");
+        return;
+    }
+    const ctx = canvas.getContext("2d");
+    state.chart = new Chart(ctx, {
+        type: "bar",
+        data: { labels, datasets },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: "index", intersect: false },
+            animation: { duration: 300, easing: "easeOutQuart" },
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: (item) => `${item.parsed.y.toLocaleString()} sightings`,
+                    },
+                },
+            },
+            scales: {
+                x: { ticks: { maxTicksLimit: gran === "day" ? 20 : 16 } },
+                y: { beginAtZero: true },
+            },
+        },
+    });
 }
 
 function renderTimelineMainChart(stacked) {

@@ -146,22 +146,26 @@ def test_hide_progressive_loading_called_in_finally_paths():
     )
 
 
-def test_load_timeline_no_longer_touches_chart_js_destroy():
-    """v0.8.6: loadTimeline renders 3 client-side cards that use
-    chart.update("none") for instant refresh and never call
-    chart.destroy(). The old v0.6 chart.update("active") transition
-    is gone because the new cards animate their own entry via the
-    CSS grid layout instead of Chart.js internal animations."""
+def test_load_timeline_chart_destroy_only_on_granularity_change():
+    """v0.10.0: loadTimeline CAN call state.chart.destroy() when
+    the granularity toggle switches between year/month/day, because
+    the dataset shape changes (year has source-stacking, month/day
+    doesn't). The chart gets rebuilt with the right layout. The old
+    v0.6 test that banned destroy entirely no longer applies — the
+    relevant invariant is that refreshTimelineCards() (the per-frame
+    update path) uses chart.update("none"), not destroy+recreate.
+
+    We still check that refreshTimelineCards does NOT call destroy."""
     content = _read(APP_JS)
-    timeline_section = re.search(
-        r"async function loadTimeline\(\).*?^\}",
+    refresh_section = re.search(
+        r"function refreshTimelineCards\(\).*?^\}",
         content,
         re.DOTALL | re.MULTILINE,
     )
-    assert timeline_section, "couldn't isolate loadTimeline body"
-    assert "state.chart.destroy()" not in timeline_section.group(0), (
-        "loadTimeline must never call destroy — the chart instance "
-        "survives between refreshes so Chart.js can animate changes"
+    assert refresh_section, "couldn't isolate refreshTimelineCards body"
+    assert "state.chart.destroy()" not in refresh_section.group(0), (
+        "refreshTimelineCards must never call destroy — it runs on "
+        "every filter change and should use chart.update instead"
     )
 
 

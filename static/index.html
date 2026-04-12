@@ -438,7 +438,17 @@
             <div class="timeline-hint">All three charts reflect the current Observatory filter state. Change a filter on any tab and these cards re-tally instantly.</div>
             <div class="timeline-grid">
                 <div class="timeline-card timeline-card-wide">
-                    <h3>All sightings by year, stacked by source</h3>
+                    <div class="timeline-card-header">
+                        <h3>All sightings over time</h3>
+                        <!-- v0.10.0 — granularity toggle for the
+                             stacked chart. Matches the brush's
+                             adaptive year/month/day bars. -->
+                        <div class="timeline-gran-toggle" role="radiogroup" aria-label="Bar granularity">
+                            <button class="gran-btn" data-gran="day" type="button">Day</button>
+                            <button class="gran-btn" data-gran="month" type="button">Month</button>
+                            <button class="gran-btn active" data-gran="year" type="button">Year</button>
+                        </div>
+                    </div>
                     <div class="chart-container"><canvas id="timeline-main-chart"></canvas></div>
                 </div>
                 <div class="timeline-card">

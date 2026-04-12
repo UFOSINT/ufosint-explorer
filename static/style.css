@@ -3092,6 +3092,46 @@ select:focus {
     font-weight: 600;
 }
 
+/* v0.10.0 — Timeline card header with granularity toggle */
+.timeline-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+.timeline-card-header h3 {
+    margin-bottom: 0;
+}
+.timeline-gran-toggle {
+    display: flex;
+    gap: 2px;
+    flex-shrink: 0;
+}
+.gran-btn {
+    background: var(--bg-input, var(--bg-card));
+    border: 1px solid var(--border);
+    color: var(--fg-dim, #8A94AD);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 3px 10px;
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.gran-btn:first-child { border-radius: 4px 0 0 4px; }
+.gran-btn:last-child { border-radius: 0 4px 4px 0; }
+.gran-btn:hover {
+    border-color: var(--accent);
+    color: var(--fg);
+}
+.gran-btn.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--bg);
+}
+
 .filter-reset-link {
     font-size: 11px;
     color: var(--fg-dim, #8A94AD);
