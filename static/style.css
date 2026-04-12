@@ -3792,10 +3792,14 @@ body.is-touch .movement-cluster { flex-wrap: nowrap; }
     width: 100%;
     height: 100%;
 }
+/* v0.10.0-fix: left offset bumped from 16px to 52px so the
+   Points/Heatmap/HexBin toggle doesn't overlap Leaflet's
+   +/- zoom controls (which sit at top:10px left:10px and are
+   ~26px wide + ~10px padding). */
 .observatory-topbar {
     position: absolute;
     top: 14px;
-    left: 16px;
+    left: 52px;
     right: 16px;
     display: flex;
     justify-content: space-between;
