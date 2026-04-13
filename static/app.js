@@ -1661,6 +1661,15 @@ function toggleMapMode(mode) {
         btn.classList.toggle("active", btn.dataset.mode === mode);
     });
 
+    // v0.11.3: show/hide points-specific controls (color-by + dot size)
+    const pc = document.getElementById("points-controls");
+    if (pc) pc.hidden = (mode !== "points");
+    // Hide legend when switching away from points
+    if (mode !== "points") {
+        const legend = document.getElementById("color-legend");
+        if (legend) legend.hidden = true;
+    }
+
     // v0.8.0: On the GPU path, swapping modes is a single setProps()
     // call on the deck.gl LeafletLayer. No layer add/remove, no SQL.
     if (state.useDeckGL && window.UFODeck && window.UFODeck.isReady()) {
@@ -1860,6 +1869,57 @@ function loadObservatory() {
     }
 }
 
+// v0.11.3 — Wire the color-by dropdown and dot size slider in
+// the Points topbar controls. Updates deck.gl layer in real time.
+function wirePointsControls() {
+    const select = document.getElementById("color-by-select");
+    const slider = document.getElementById("dot-size-slider");
+    const legend = document.getElementById("color-legend");
+
+    if (select) {
+        select.addEventListener("change", () => {
+            const mode = select.value;
+            if (window.UFODeck && window.UFODeck.setColorByMode) {
+                window.UFODeck.setColorByMode(mode);
+            }
+            _renderColorLegend(legend, mode);
+        });
+    }
+    if (slider) {
+        slider.addEventListener("input", () => {
+            const px = parseFloat(slider.value);
+            if (window.UFODeck && window.UFODeck.setDotSize) {
+                window.UFODeck.setDotSize(px);
+            }
+        });
+    }
+}
+
+function _renderColorLegend(el, mode) {
+    if (!el) return;
+    if (mode === "default" || !window.UFODeck || !window.UFODeck.getColorLegend) {
+        el.hidden = true;
+        return;
+    }
+    const items = window.UFODeck.getColorLegend();
+    if (!items || items.length === 0) {
+        el.hidden = true;
+        return;
+    }
+
+    const title = mode === "source" ? "Source" : mode === "shape" ? "Shape" : "Color";
+    let html = `<div class="color-legend-title">${escapeHtml(title)}</div>`;
+    for (const item of items) {
+        const [r, g, b] = item.color;
+        html += `<div class="color-legend-item">
+            <span class="color-legend-swatch" style="background:rgb(${r},${g},${b})"></span>
+            <span>${escapeHtml(item.label)}${item.count != null ? ` <span style="color:var(--text-faint)">(${item.count.toLocaleString()})</span>` : ""}</span>
+        </div>`;
+    }
+    el.innerHTML = html;
+    el.hidden = false;
+}
+
 function wireObservatoryModeToggle() {
     document.querySelectorAll(".mode-toggle .mode-btn").forEach(btn => {
         btn.addEventListener("click", () => {
@@ -1867,6 +1927,9 @@ function wireObservatoryModeToggle() {
             if (mode) toggleMapMode(mode);
         });
     });
+
+    // v0.11.3 — Points controls: color-by + dot size
+    wirePointsControls();
 
     // v0.8.1 — Sliding / Cumulative toggle for the PLAY button.
     // Clicking cycles between the two modes and updates the button

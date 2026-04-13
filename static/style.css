@@ -4082,6 +4082,88 @@ body[data-hide-brush] .observatory-time-brush {
     gap: 6px;
 }
 .observatory-hud .hud-label { color: var(--text-faint); }
+
+/* v0.11.3 — Points mode controls: color-by + dot size */
+.points-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    padding: 4px 10px;
+    border-radius: var(--r-sm);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+.points-controls[hidden] { display: none; }
+.points-control-label {
+    color: var(--text-faint);
+    font-size: 9px;
+    letter-spacing: 0.12em;
+}
+.points-control-select {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    cursor: pointer;
+}
+.points-control-select:focus { border-color: var(--accent); outline: none; }
+.points-control-slider {
+    width: 60px;
+    height: 4px;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+/* Color legend — bottom-left overlay on the map */
+.color-legend {
+    position: absolute;
+    bottom: 56px;
+    left: 12px;
+    z-index: 600;
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    padding: 8px 10px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-muted);
+    max-height: 240px;
+    overflow-y: auto;
+    pointer-events: auto;
+}
+.color-legend[hidden] { display: none; }
+.color-legend-title {
+    font-size: 9px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: 6px;
+}
+.color-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 1px 0;
+    line-height: 1.4;
+}
+.color-legend-swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+@media (max-width: 700px) {
+    .points-controls { padding: 3px 6px; gap: 4px; }
+    .points-control-slider { width: 40px; }
+    .color-legend { bottom: 48px; max-height: 160px; font-size: 9px; }
+}
 .observatory-hud .hud-pair #hud-lat,
 .observatory-hud .hud-pair #hud-lon { color: var(--accent); font-variant-numeric: tabular-nums; }
 .observatory-hud .hud-sep { color: var(--text-faint); }

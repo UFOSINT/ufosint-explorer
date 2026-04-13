@@ -1204,6 +1204,77 @@
         return THEME_PALETTES[_theme] || THEME_PALETTES.signal;
     }
 
+    // v0.11.3 — color-by mode + dot size for ScatterplotLayer.
+    // Set via setColorByMode() and setDotSize() from app.js.
+    let _colorByMode = "default";   // "default" | "source" | "shape" | "color"
+    let _dotSizePixels = 2.5;       // radiusMinPixels — controlled by slider
+
+    // Color LUTs — categorical palettes for each color-by mode.
+    // Source palette matches the existing --cat-N CSS variables.
+    const _SOURCE_COLORS = [
+        [128, 128, 128, 200],   // 0 = unknown
+        [78, 121, 167, 200],    // 1 = UFOCAT blue
+        [242, 142, 43, 200],    // 2 = NUFORC orange
+        [225, 87, 89, 200],     // 3 = MUFON red
+        [118, 183, 178, 200],   // 4 = UPDB teal
+        [89, 161, 79, 200],     // 5 = UFO-search green
+    ];
+    // Shape palette — 25+ shapes. Top shapes get distinct colors,
+    // rest get a neutral gray. Built lazily from POINTS.shapes.
+    const _SHAPE_BASE_COLORS = [
+        [0, 240, 255],     // 0 — unknown/default cyan
+        [255, 99, 71],     // triangle — red-orange
+        [0, 200, 255],     // light — cyan
+        [255, 215, 0],     // circle — gold
+        [50, 205, 50],     // disk — green
+        [255, 140, 0],     // sphere — orange
+        [147, 112, 219],   // fireball — purple
+        [255, 69, 0],      // oval — red
+        [0, 255, 127],     // cigar — spring green
+        [255, 182, 193],   // formation — pink
+        [100, 149, 237],   // rectangle — cornflower
+        [255, 255, 0],     // diamond — yellow
+        [0, 128, 255],     // chevron — blue
+        [218, 165, 32],    // flash — goldenrod
+        [173, 255, 47],    // changing — green-yellow
+        [255, 105, 180],   // egg — hot pink
+        [64, 224, 208],    // cone — turquoise
+        [255, 160, 122],   // cross — salmon
+        [186, 85, 211],    // boomerang — orchid
+        [127, 255, 212],   // cylinder — aquamarine
+        [240, 128, 128],   // teardrop — light coral
+    ];
+    // Sighting color palette — literal colors from the narrative.
+    const _SIGHTING_COLOR_MAP = {
+        "red": [255, 60, 60], "blue": [60, 120, 255], "green": [60, 200, 60],
+        "white": [240, 240, 240], "orange": [255, 160, 0], "yellow": [255, 230, 0],
+        "silver": [192, 192, 210], "metallic silver": [192, 192, 210],
+        "black": [40, 40, 40], "gray": [140, 140, 140], "grey": [140, 140, 140],
+        "purple": [160, 80, 220], "pink": [255, 150, 180], "brown": [150, 100, 50],
+        "gold": [255, 200, 50], "multicolored": [200, 200, 200],
+        "copper": [180, 100, 50], "dark": [60, 60, 60], "light": [220, 220, 200],
+    };
+
+    function _getPointColor(i) {
+        if (_colorByMode === "source") {
+            const si = POINTS.sourceIdx[i];
+            return _SOURCE_COLORS[si] || _SOURCE_COLORS[0];
+        }
+        if (_colorByMode === "shape") {
+            const si = POINTS.shapeIdx[i];
+            if (si === 0) return [128, 128, 128, 120]; // unknown = dim gray
+            return [...(_SHAPE_BASE_COLORS[si] || [128, 128, 128]), 200];
+        }
+        if (_colorByMode === "color") {
+            const ci = POINTS.colorIdx[i];
+            if (ci === 0) return [128, 128, 128, 120]; // unknown
+            const name = (POINTS.colors[ci] || "").toLowerCase();
+            const rgb = _SIGHTING_COLOR_MAP[name];
+            return rgb ? [...rgb, 200] : [128, 128, 128, 160];
+        }
+        return _activePalette().scatter;
+    }
+
     // -----------------------------------------------------------------
     // deck.gl layer factories
     // -----------------------------------------------------------------
@@ -1216,20 +1287,23 @@
     function makeScatterplotLayer() {
         const d = window.deck;
         const palette = _activePalette();
+        // v0.11.3: color-by mode. "default" uses the theme's static
+        // scatter color; "source"/"shape"/"color" use per-point
+        // indexed color LUTs via _getPointColor. Zero perf cost —
+        // deck.gl resolves the accessor in a single GPU pass.
+        const usePerPoint = _colorByMode !== "default";
+        const fillColor = usePerPoint
+            ? (i) => _getPointColor(i)
+            : palette.scatter;
         return new d.ScatterplotLayer({
             id: "ufosint-points",
             data: POINTS.visibleIdx,
-            // deck.gl can read attributes straight from our typed arrays
-            // via indexed accessors. No per-point object allocation.
             getPosition: (i) => [POINTS.lng[i], POINTS.lat[i]],
             getRadius: 1200,
-            radiusMinPixels: 2.5,
-            radiusMaxPixels: 8,
-            getFillColor: palette.scatter,
+            radiusMinPixels: _dotSizePixels,
+            radiusMaxPixels: Math.max(8, _dotSizePixels * 3),
+            getFillColor: fillColor,
             pickable: true,
-            // v0.11.2: autoHighlight gives visual feedback on hover
-            // so users can see points are clickable. The highlight
-            // color is a brighter version of the scatter color.
             autoHighlight: true,
             highlightColor: [255, 255, 255, 120],
             onClick: (info) => {
@@ -1242,13 +1316,15 @@
                 }
             },
             onHover: (info) => {
-                // Change cursor to pointer when hovering a point
                 const el = info?.layer?.context?.deck?.canvas;
                 if (el) el.style.cursor = info.object != null ? "pointer" : "";
             },
             updateTriggers: {
-                getPosition: POINTS.etag,
-                getFillColor: _theme,  // bust GPU attr cache on theme swap
+                getPosition: _layerDataVersion,
+                // Bust GPU color cache when theme, color-by mode,
+                // or dot size changes.
+                getFillColor: `${_theme}_${_colorByMode}`,
+                getRadius: _dotSizePixels,
             },
         });
     }
@@ -1342,6 +1418,76 @@
         if (name === _theme) return;
         _theme = name;
         refreshActiveLayer();
+    }
+
+    // v0.11.3 — public API for color-by mode and dot size.
+    function setColorByMode(mode) {
+        const valid = ["default", "source", "shape", "color"];
+        if (!valid.includes(mode)) return;
+        if (mode === _colorByMode) return;
+        _colorByMode = mode;
+        refreshActiveLayer();
+    }
+
+    function setDotSize(px) {
+        const v = Math.max(0.5, Math.min(15, Number(px) || 2.5));
+        if (v === _dotSizePixels) return;
+        _dotSizePixels = v;
+        refreshActiveLayer();
+    }
+
+    function getColorByMode() { return _colorByMode; }
+    function getDotSize() { return _dotSizePixels; }
+
+    // Return the legend items for the current color-by mode so
+    // app.js can render a legend overlay without duplicating LUTs.
+    function getColorLegend() {
+        if (_colorByMode === "source") {
+            return (POINTS.sources || []).map((name, i) => ({
+                label: name || "(unknown)",
+                color: _SOURCE_COLORS[i] || _SOURCE_COLORS[0],
+            })).filter(d => d.label !== "(unknown)" || true);
+        }
+        if (_colorByMode === "shape") {
+            // Top 15 shapes by frequency, plus "other"
+            const counts = new Uint32Array(256);
+            const iter = POINTS.visibleIdx;
+            const N = iter ? iter.length : POINTS.count;
+            for (let k = 0; k < N; k++) {
+                counts[POINTS.shapeIdx[iter ? iter[k] : k]]++;
+            }
+            const items = [];
+            for (let si = 1; si < (POINTS.shapes || []).length && si < 21; si++) {
+                if (counts[si] > 0) {
+                    items.push({
+                        label: POINTS.shapes[si],
+                        color: [...(_SHAPE_BASE_COLORS[si] || [128,128,128]), 200],
+                        count: counts[si],
+                    });
+                }
+            }
+            items.sort((a, b) => b.count - a.count);
+            return items.slice(0, 15);
+        }
+        if (_colorByMode === "color") {
+            const counts = new Uint32Array(256);
+            const iter = POINTS.visibleIdx;
+            const N = iter ? iter.length : POINTS.count;
+            for (let k = 0; k < N; k++) {
+                counts[POINTS.colorIdx[iter ? iter[k] : k]]++;
+            }
+            const items = [];
+            for (let ci = 1; ci < (POINTS.colors || []).length; ci++) {
+                if (counts[ci] > 0) {
+                    const name = POINTS.colors[ci] || "";
+                    const rgb = _SIGHTING_COLOR_MAP[name.toLowerCase()] || [128,128,128];
+                    items.push({ label: name, color: [...rgb, 200], count: counts[ci] });
+                }
+            }
+            items.sort((a, b) => b.count - a.count);
+            return items;
+        }
+        return [];
     }
 
     // -----------------------------------------------------------------
@@ -1450,5 +1596,12 @@
         // v0.8.4 — theme API
         setTheme: setDeckTheme,
         getTheme: () => _theme,
+
+        // v0.11.3 — color-by + dot size API
+        setColorByMode,
+        getColorByMode,
+        setDotSize,
+        getDotSize,
+        getColorLegend,
     };
 })();
