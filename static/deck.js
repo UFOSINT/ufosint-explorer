@@ -405,20 +405,35 @@
             srcIdxTarget = POINTS.sources.indexOf(f.sourceName);
             if (srcIdxTarget === -1) { POINTS.visibleIdx = unknownName; return unknownName; }
         }
+        // v0.11.3: __has_data__ sentinel means "any non-zero index"
+        // (i.e., the field has a value defined). Uses -2 as the
+        // target so the hot loop can distinguish "match specific
+        // index" (-1 = no filter, >=0 = exact match) from "match
+        // any non-zero" (-2).
+        const HAS_DATA = "__has_data__";
         let shapeIdxTarget = -1;
         if (f.shapeName) {
-            shapeIdxTarget = POINTS.shapes.indexOf(f.shapeName);
-            if (shapeIdxTarget === -1) { POINTS.visibleIdx = unknownName; return unknownName; }
+            if (f.shapeName === HAS_DATA) { shapeIdxTarget = -2; }
+            else {
+                shapeIdxTarget = POINTS.shapes.indexOf(f.shapeName);
+                if (shapeIdxTarget === -1) { POINTS.visibleIdx = unknownName; return unknownName; }
+            }
         }
         let colorIdxTarget = -1;
         if (f.colorName) {
-            colorIdxTarget = POINTS.colors.indexOf(f.colorName);
-            if (colorIdxTarget === -1) { POINTS.visibleIdx = unknownName; return unknownName; }
+            if (f.colorName === HAS_DATA) { colorIdxTarget = -2; }
+            else {
+                colorIdxTarget = POINTS.colors.indexOf(f.colorName);
+                if (colorIdxTarget === -1) { POINTS.visibleIdx = unknownName; return unknownName; }
+            }
         }
         let emotionIdxTarget = -1;
         if (f.emotionName) {
-            emotionIdxTarget = POINTS.emotions.indexOf(f.emotionName);
-            if (emotionIdxTarget === -1) { POINTS.visibleIdx = unknownName; return unknownName; }
+            if (f.emotionName === HAS_DATA) { emotionIdxTarget = -2; }
+            else {
+                emotionIdxTarget = POINTS.emotions.indexOf(f.emotionName);
+                if (emotionIdxTarget === -1) { POINTS.visibleIdx = unknownName; return unknownName; }
+            }
         }
 
         // v0.8.7 — movement category multi-select filter. `movementCats`
@@ -504,9 +519,10 @@
         let j = 0;
         for (let i = 0; i < N; i++) {
             if (srcIdxTarget     !== -1 && src[i] !== srcIdxTarget)     continue;
-            if (shapeIdxTarget   !== -1 && shp[i] !== shapeIdxTarget)   continue;
-            if (colorIdxTarget   !== -1 && ci[i]  !== colorIdxTarget)   continue;
-            if (emotionIdxTarget !== -1 && ei[i]  !== emotionIdxTarget) continue;
+            // -2 = "has data" (any non-zero index); >=0 = exact match
+            if (shapeIdxTarget   === -2 ? shp[i] === 0 : (shapeIdxTarget !== -1 && shp[i] !== shapeIdxTarget)) continue;
+            if (colorIdxTarget   === -2 ? ci[i]  === 0 : (colorIdxTarget !== -1 && ci[i]  !== colorIdxTarget)) continue;
+            if (emotionIdxTarget === -2 ? ei[i]  === 0 : (emotionIdxTarget !== -1 && ei[i] !== emotionIdxTarget)) continue;
 
             // Score filters. 255-sentinel fails any threshold test,
             // which is the right semantic: a row with unknown quality

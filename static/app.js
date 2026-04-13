@@ -597,7 +597,19 @@ function _populateLookupDropdown(id, values, placeholder) {
     const el = document.getElementById(id);
     if (!el) return;
     const prev = el.value;
+    // v0.11.3: "has data" option lets users filter to rows that
+    // have ANY value for this field (index != 0). Appears between
+    // the "All ..." placeholder and the individual values.
+    const fieldLabel = placeholder.replace(/^All\s*/i, "");
     el.innerHTML = `<option value="">${escapeHtml(placeholder)}</option>`;
+    // Count how many values exist (skip index-0 null)
+    const populated = (values || []).filter(v => !!v);
+    if (populated.length > 0) {
+        const hasDataOpt = document.createElement("option");
+        hasDataOpt.value = "__has_data__";
+        hasDataOpt.textContent = `All — has ${fieldLabel.toLowerCase()} defined`;
+        el.appendChild(hasDataOpt);
+    }
     for (const v of (values || [])) {
         if (!v) continue;  // skip index-0 "unknown" placeholder
         const opt = document.createElement("option");
@@ -606,9 +618,6 @@ function _populateLookupDropdown(id, values, placeholder) {
         el.appendChild(opt);
     }
     if (prev) {
-        // Only restore the previous value if it still exists as
-        // an option — avoids the dropdown silently swapping to
-        // blank on a re-populate.
         const hit = Array.from(el.options).some(o => o.value === prev);
         if (hit) el.value = prev;
     }
