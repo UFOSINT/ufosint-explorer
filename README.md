@@ -194,6 +194,16 @@ See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for the full pipeline breakdown, 
 
 See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md#5-environment-variables-reference) for the full list.
 
+## Feedback & Issues
+
+Found a bug or have an idea? [Open a GitHub Issue](https://github.com/UFOSINT/ufosint-explorer/issues). We read every one.
+
+- **Bug reports** — include your browser, OS, and what you expected vs. what happened
+- **Feature ideas** — describe the use case, not just the solution
+- **Data questions** — if something looks wrong in the database, mention the sighting ID
+
+We're not accepting pull requests at this time — all development is handled internally. But issues and suggestions are very welcome.
+
 ## License
 
 Code in this repo is released under a permissive license (to be finalized — likely MIT). Data sourced from publicly available UFO/UAP databases; see the Methodology tab in the explorer for full attribution and provenance details. Redistribution of the raw source datasets is subject to each source's individual terms.
