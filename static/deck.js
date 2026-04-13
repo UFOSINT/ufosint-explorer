@@ -1580,12 +1580,17 @@
 
             canvas.addEventListener("click", (e) => {
                 const info = _pick(e.clientX, e.clientY, 10);
-                if (info && info.object != null) {
-                    const rowIdx = info.object;
-                    const sid = POINTS.id[rowIdx];
-                    if (sid && typeof window.openDetail === "function") {
-                        window.openDetail(sid);
-                    }
+                if (!info || !info.picked) return;
+                // deck.gl with typed-array data: info.object may be
+                // undefined. The row is at info.index in the data
+                // array (POINTS.visibleIdx). Resolve to the actual
+                // POINTS row index, then look up the sighting ID.
+                const dataIdx = info.index;
+                const iter = POINTS.visibleIdx;
+                const rowIdx = iter ? iter[dataIdx] : dataIdx;
+                const sid = POINTS.id[rowIdx];
+                if (sid && typeof window.openDetail === "function") {
+                    window.openDetail(sid);
                 }
             });
 
@@ -1596,7 +1601,7 @@
                 if (now - _lastHoverPick < 66) return;
                 _lastHoverPick = now;
                 const info = _pick(e.clientX, e.clientY, 5);
-                canvas.style.cursor = (info && info.object != null) ? "pointer" : "";
+                canvas.style.cursor = (info && info.picked) ? "pointer" : "";
             });
 
             console.info("[deck] pick handlers attached, _deck =", _getDeck());
