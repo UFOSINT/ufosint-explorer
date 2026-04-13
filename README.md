@@ -2,7 +2,7 @@
 
 Interactive web interface for browsing the Unified UFO Sightings Database — **614,505 sighting records** from five major UFO/UAP databases, deduplicated and cross-referenced.
 
-**Live:** [ufosint-explorer.azurewebsites.net](https://ufosint-explorer.azurewebsites.net)
+**Live:** [ufosint.com](https://ufosint.com)
 
 > This repo is the successor to `UFOSINT/ufo-explorer`, which was a Railway-hosted proof of concept. Hosting has moved to Azure App Service. The POC repo is archived for reference.
 
@@ -116,7 +116,7 @@ Six read-only tools exposed via `/mcp` (JSON-RPC 2.0) and `/api/tools-catalog` (
 {
   "mcpServers": {
     "ufosint": {
-      "url": "https://ufosint-explorer.azurewebsites.net/mcp",
+      "url": "https://ufosint.com/mcp",
       "transport": "http"
     }
   }
@@ -129,7 +129,7 @@ Six read-only tools exposed via `/mcp` (JSON-RPC 2.0) and `/api/tools-catalog` (
 {
   "mcpServers": {
     "ufosint": {
-      "url": "https://ufosint-explorer.azurewebsites.net/mcp",
+      "url": "https://ufosint.com/mcp",
       "transport": "http"
     }
   }
