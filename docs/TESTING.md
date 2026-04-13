@@ -3,8 +3,9 @@
 The repo ships a pytest suite plus a ruff lint gate. Both run on every
 push to `main` via `.github/workflows/azure-deploy.yml` before the
 build job. The tests are designed to be cheap (whole suite finishes in
-< 1 second locally) and catch the specific class of bug that hit us in
-Sprint 4: HTML/CSS/JS skew, missing cache-busting, broken asset URLs.
+< 2 seconds locally, **506 tests**) and catch structural regressions:
+HTML/CSS/JS skew, missing cache-busting, broken asset URLs, and
+feature invariants for each sprint.
 
 ## Running locally
 
@@ -21,8 +22,8 @@ pytest tests/test_cache_headers.py -v
 # Run a single test
 pytest tests/test_routes.py::test_index_route_substitutes_asset_version -v
 
-# Skip the slower ones (we don't really have any yet)
-pytest -m "not slow"
+# JS syntax check
+node -c static/app.js && node -c static/deck.js
 
 # Lint
 ruff check .
@@ -35,72 +36,49 @@ No database is required — `tests/conftest.py` stubs
 `psycopg_pool.ConnectionPool` with a no-op so the app module imports
 cleanly without a live Postgres server.
 
-## What each file covers
+## Test files
 
-### `tests/conftest.py`
-Session-scoped fixture that stubs the connection pool, then imports the
-app module once. Exposes `flask_app`, `client`, and `asset_version`
-fixtures.
+### Core infrastructure (5 files)
 
-### `tests/test_static_assets.py` (17 tests)
-Pure file-read checks on the frontend:
+| File | Tests | What it covers |
+|------|-------|---------------|
+| `conftest.py` | — | Session-scoped fixture: stubs connection pool, exposes `flask_app`, `client`, `asset_version` |
+| `test_static_assets.py` | 17 | SVG sizing/count, cache-bust pattern, no emoji, design tokens, JS syntax |
+| `test_routes.py` | 5 | Route registration, `{{ASSET_VERSION}}` substitution, content-type, cache-control |
+| `test_cache_headers.py` | 5 | Four-tier Cache-Control policy for static assets vs HTML |
+| `test_mcp_catalog.py` | 7 | Tool catalog invariants: 6 tools, unique names, MCP format, blueprint mounted |
 
-- **SVG sizing** — every inline `<svg>` in `static/index.html` and
-  `static/app.js` must carry explicit `width` and `height` attributes.
-  This is the defensive fallback that prevents the Sprint 4 stale-cache
-  bug from recurring.
-- **SVG count** — locked at 10 in `index.html` so accidental
-  duplication shows up in diffs.
-- **Cache-bust pattern** — `index.html` must reference
-  `style.css?v={{ASSET_VERSION}}` and `app.js?v={{ASSET_VERSION}}`.
-- **No emoji** — Sprint 4 replaced every emoji with an SVG; the allow
-  list is `✓` and `✗` (used as inline feedback on the copy button).
-- **Required design tokens** — `style.css` must define
-  `--text-strong`, `--font-mono`, `--font-sans`, `--cat-1`,
-  `--success`, `--warning`, `--danger`, `--shadow-sm`.
-- **`.icon` base rule** — must exist, must size via `1em`.
-- **No rogue `#6c5ce7` purple** — the Sprint 4 chip unification killed
-  this; a regression means a new chip rule was added without reusing
-  the shared tokens.
-- **JS syntax** — delegates to `node -c static/app.js` when node is on
-  PATH. Skipped on bare-bones dev machines; CI always has node.
+### Sprint-level feature tests (18 files)
 
-### `tests/test_routes.py` (5 tests)
-Flask route registration + HTML shell:
+Each sprint ships a test file that locks its feature invariants so future
+changes don't silently break them. These are static analysis tests —
+they read `app.py`, `app.js`, `deck.js`, `index.html`, and `style.css`
+and assert structural properties (function signatures, CSS rules, HTML
+elements) without running a server.
 
-- Every expected route is in `app.url_map`.
-- `GET /` returns HTML with the `{{ASSET_VERSION}}` placeholder fully
-  substituted (no leakage).
-- `GET /` has `Content-Type: text/html` and `Cache-Control: max-age=60`.
-- `ASSET_VERSION` is a non-empty hex-ish string of reasonable length.
+| File | Tests | Sprint | What it covers |
+|------|-------|--------|---------------|
+| `test_v07.py` | 20 | v0.7 | Observatory tab, theme toggle, settings menu, stats badge |
+| `test_v075_mv.py` | 8 | v0.7.5 | Materialized view, points-bulk etag, year-stats |
+| `test_v080_bulk.py` | 33 | v0.8.0 | 40-byte binary schema, deck.gl layer, scatterplot/heatmap/hex |
+| `test_v081_timeline.py` | 12 | v0.8.1 | TimeBrush playback, speed options, cumulative mode |
+| `test_v082_derived.py` | 25 | v0.8.2 | Derived columns (quality, hoax, richness, emotion, color) |
+| `test_v083_no_raw_text.py` | 8 | v0.8.3 | Public DB strips raw text, has_description flag |
+| `test_v084_theme.py` | 18 | v0.8.4 | Signal/Declass themes, CSS tokens, Carto basemap |
+| `test_v085_movement.py` | 22 | v0.8.5 | Movement categories, bitmask, 10-category taxonomy |
+| `test_v086.py` | 30 | v0.8.6 | Timeline redesign, Insights client-side, Search/Duplicates removed |
+| `test_v087.py` | 15 | v0.8.7 | Filter bar cleanup, movement cluster, quality rail |
+| `test_v088.py` | 28 | v0.8.8 | Emotion cards from POINTS, methodology expansion |
+| `test_v090.py` | 22 | v0.9.0 | TimeBrush zoom/pan, mobile responsive, accordion rail |
+| `test_v091.py` | 18 | v0.9.1 | Coverage strips, year-0019 fix, source null handling |
+| `test_v092.py` | 16 | v0.9.2 | Adaptive granularity, live commit, day/month/year toggle |
+| `test_perf_infra.py` | 12 | v0.8.0+ | Performance invariants: typed arrays, binary packing |
+| `test_loading_system.py` | 10 | v0.8.0+ | Progressive loading, skeleton states |
+| `test_progressive_loading.py` | 8 | v0.8.6+ | Chart.update("none"), no destroy in refresh path |
+| `test_v0111.py` | 19 | v0.11.1 | Playback performance, DQ gear popup, progress bar |
+| `test_v0112.py` | 34 | v0.11.2 | Cinematic intro, guided tour, help button, AI discovery |
 
-### `tests/test_cache_headers.py` (5 tests)
-The four-tier Cache-Control policy from `add_cache_headers`:
-
-| URL pattern               | Expected Cache-Control                    |
-|---------------------------|-------------------------------------------|
-| `/static/style.css?v=x`   | `public, max-age=31536000, immutable`     |
-| `/static/app.js?v=x`      | `public, max-age=31536000, immutable`     |
-| `/static/style.css`       | `public, max-age=3600, must-revalidate`   |
-| `/static/app.js`          | `public, max-age=3600, must-revalidate`   |
-| `/`                       | `public, max-age=60`                      |
-
-If you change these, update both the tests and `docs/ARCHITECTURE.md`
-section 3 in the same commit.
-
-### `tests/test_mcp_catalog.py` (7 tests)
-MCP / BYOK tool-catalog invariants:
-
-- `tools_catalog` module imports cleanly.
-- Exactly 6 tools defined.
-- Every tool has `name`, `description`, `parameters` dict, callable
-  `handler`.
-- Tool names are unique.
-- `/api/tools-catalog` returns the same set of names as
-  `tools_catalog.TOOLS`.
-- `list_tools_mcp()` uses `inputSchema` (camelCase MCP format), not
-  `parameters` (OpenAI function format).
-- `/mcp` blueprint is mounted.
+**Total: 506 tests across 23 files.**
 
 ## Adding a new test
 

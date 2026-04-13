@@ -40,15 +40,19 @@ cold. The goal is to explain *why* things are the way they are, not just
                      └───────────────────────────────────┘
 ```
 
-**Frontend** is vanilla JS + CSS with no build step. Three files in
-`static/`: `index.html`, `app.js` (~2700 lines), `style.css` (~2500
-lines). Libraries come from unpkg/jsdelivr CDNs: Leaflet + markercluster
-+ heat for the map, Chart.js for the timeline, Inter from Google Fonts.
+**Frontend** is vanilla JS + CSS with no build step. Four files in
+`static/`: `index.html` (~1,500 lines), `app.js` (~7,500 lines),
+`deck.js` (~1,400 lines, deck.gl bulk buffer + GPU layer adapter),
+and `style.css` (~5,000 lines). Libraries come from unpkg/jsdelivr
+CDNs: Leaflet + markercluster + heat for the map, deck.gl 9.x for
+GPU-accelerated point/heatmap/hexbin rendering, Chart.js for charts,
+Inter from Google Fonts.
 
-**Backend** is a single Flask module (`app.py`, ~1500 lines) plus two
-adapters: `mcp_http.py` (MCP-over-HTTP JSON-RPC blueprint) and
-`tools_catalog.py` (shared tool definitions for both BYOK chat and
-MCP).
+**Backend** is a single Flask module (`app.py`, ~3,300 lines) plus two
+adapters: `mcp_http.py` (MCP-over-HTTP JSON-RPC blueprint, ~290 lines)
+and `tools_catalog.py` (shared tool definitions for both BYOK chat and
+MCP, ~540 lines). Also serves AI-readiness discovery files (`/llms.txt`,
+`/llms-full.txt`, `/.well-known/mcp.json`, `/robots.txt`).
 
 **DB** is Azure Database for PostgreSQL Flexible Server, Burstable B1ms.
 Read-only from the app's perspective — writes happen out-of-band via

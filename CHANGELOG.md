@@ -17,6 +17,69 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 Nothing yet.
 
+## [0.11.2] — 2026-04-12 — Cinematic landing, AI readiness, mobile fixes, credits
+
+### Added
+- **Cinematic landing animation** — terminal-style counter ticks to 614,505 on first visit, then dissolves to reveal the map
+- **Guided tooltip tour** — 5-step spotlight walkthrough (map, rail, TimeBrush, tabs, stats badge) with clip-path backdrop cutout
+- **Help button** — `?` icon in header replays tour anytime; localStorage prevents repeat on return visits
+- **AI-readiness endpoints** — `/robots.txt`, `/llms.txt`, `/llms-full.txt`, `/.well-known/mcp.json` for agent/LLM discovery
+- **Schema.org JSON-LD** — `Dataset` markup in `<head>` for AI search engine discoverability
+- **Credits modal** — accessible via gear menu; attributes @ufohackers (data/research), @DuelingGroks (engineering), Claude Code (AI-assisted dev)
+- **`--surface-1` / `--surface-2`** CSS tokens for popup backgrounds across all three themes
+
+### Changed
+- **Connect panel** — added Claude Code CLI command (`claude mcp add`), AI Discovery card listing all discovery endpoints
+- **Methodology page** — rewritten intro ("This is not raw data"), added reproducibility statement, full v0.11 emotion analysis section with 4 models documented
+- **README.md** — complete rewrite for v0.11 (features, binary buffer, emotion analysis, MCP setup)
+
+### Fixed
+- **Mobile: header tabs** — horizontal scrolling row instead of vertical stacking; settings gear + help button visible on mobile (were hidden)
+- **Mobile: tour tooltip** — fixed bottom-sheet positioning so Skip/Next buttons are always visible
+- **Mobile: TimeBrush** — `height: auto` + `min-height` so histogram bars visible below wrapped controls
+- **Mobile: modal detail grid** — collapses to 1-column below 600px
+- **Mobile: filter groups** — removed min-width 140px conflict causing overflow at 375px
+- **Mobile: chat popover** — capped height to 60vh on small screens
+- **Mobile: touch targets** — 44px minimum on rail collapse buttons, 32px on tabs, 18px brush handles
+- **Popup readability** — all popups were transparent (--surface-1 undefined); now properly opaque
+
+## [0.11.1] — 2026-04-12 — Playback performance, DQ gear popup, progress bar
+
+### Added
+- **Data Quality gear popup** on Timeline and Insights tab headers — mirrors Observatory rail toggles without switching tabs
+- **Playback progress bar** — thin accent strip on brush header showing sweep position
+- **Badge counter** on gear icons showing active DQ filter count
+
+### Changed
+- **Playback performance** — `refreshTimelineCards(true)` and `refreshInsightsClientCards(true)` skip coverage strip computation (~8ms) and DOM updates (~3ms) during playback animation, cutting per-frame JS from ~20ms to ~8ms
+
+## [0.11.0] — 2026-04-12 — Transformer emotion analysis, shared TimeBrush
+
+### Added
+- **v0.11 emotion data** — 502,985 sightings analyzed by 4 models: RoBERTa 3-class sentiment, RoBERTa 7-class emotion, GoEmotions 28-class, VADER compound
+- **12 new sighting columns** — `emotion_28_dominant`, `emotion_28_group`, `emotion_7_dominant`, `vader_compound`, `roberta_sentiment`, plus score vectors
+- **5 new Insights cards** — Sentiment Polarity, Emotion Distribution (7-class), GoEmotions Detail (28-class with neutral toggle), Sentiment Score Distributions, Emotion Profile by Source
+- **40-byte binary schema** (v011-1) — 5 new uint8 fields packed into the bulk buffer; VADER/RoBERTa scores scaled [-1,+1] → [0,255]
+- **Shared TimeBrush** — moved out of Observatory panel, visible on Observatory + Timeline + Insights tabs
+- **Animated Insights/Timeline** — charts update during playback via throttled refresh (4fps)
+
+### Changed
+- Insights tab reorganized into 3 sections: Emotion & Sentiment (5 cards), Data Quality (2 cards), Movement & Shape (2 cards)
+- Coverage strips on all 9 Insights cards (green/yellow/orange/red pills)
+
+## [0.10.0] — 2026-04-12 — Cross-filtering, zoom-aware charts, live filters
+
+### Added
+- **Cross-filtering** — click any chart segment to filter all other cards to that subset; cyan chip bar shows active filter
+- **Zoom-aware Timeline** — charts mirror TimeBrush zoom range with day/month/year granularity toggle
+- **Live-reactive filters** — selects auto-apply at 250ms debounce, date inputs at 500ms; no Apply button needed
+- **Overview mini-map** — bilinear-scale overview below TimeBrush (15% pre-1900, 85% post-1900)
+
+### Fixed
+- Source dropdown breaking Insights (read `.value` instead of `.selectedOptions[0].text`)
+- Quality rail permanently disabled on first load (removed `dataset.mounted` guard)
+- Filters not flowing through on Timeline/Insights tabs
+
 ## [0.9.2] — 2026-04-12 — TimeBrush adaptive granularity + live commit + Apply button
 
 Three small improvements to the Observatory TimeBrush that make
