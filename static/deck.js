@@ -1222,11 +1222,16 @@
             // deck.gl can read attributes straight from our typed arrays
             // via indexed accessors. No per-point object allocation.
             getPosition: (i) => [POINTS.lng[i], POINTS.lat[i]],
-            getRadius: 1000,
-            radiusMinPixels: 1.2,
-            radiusMaxPixels: 5,
+            getRadius: 1200,
+            radiusMinPixels: 2.5,
+            radiusMaxPixels: 8,
             getFillColor: palette.scatter,
             pickable: true,
+            // v0.11.2: autoHighlight gives visual feedback on hover
+            // so users can see points are clickable. The highlight
+            // color is a brighter version of the scatter color.
+            autoHighlight: true,
+            highlightColor: [255, 255, 255, 120],
             onClick: (info) => {
                 if (info && info.object !== undefined && info.object !== null) {
                     const rowIdx = info.object;
@@ -1235,6 +1240,11 @@
                         window.openDetail(sid);
                     }
                 }
+            },
+            onHover: (info) => {
+                // Change cursor to pointer when hovering a point
+                const el = info?.layer?.context?.deck?.canvas;
+                if (el) el.style.cursor = info.object != null ? "pointer" : "";
             },
             updateTriggers: {
                 getPosition: POINTS.etag,
