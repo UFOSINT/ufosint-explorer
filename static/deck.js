@@ -1528,6 +1528,40 @@
         });
         leafletLayer.addTo(map);
         activeMode = initialMode || "points";
+
+        // v0.11.3: manual click + hover handlers on the canvas.
+        // deck.gl-leaflet creates the Deck with controller:false
+        // which disables deck.gl's internal event manager, so the
+        // layer-level onClick/onHover never fire. We bypass this
+        // by listening on the canvas directly and calling pickObject
+        // ourselves. pickObject IS supported on the LeafletLayer.
+        setTimeout(() => {
+            const canvas = map.getContainer().querySelector("canvas");
+            if (!canvas) return;
+            canvas.addEventListener("click", (e) => {
+                if (!leafletLayer) return;
+                const rect = canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                const info = leafletLayer.pickObject({ x, y, radius: 5 });
+                if (info && info.object != null) {
+                    const rowIdx = info.object;
+                    const sid = POINTS.id[rowIdx];
+                    if (sid && typeof window.openDetail === "function") {
+                        window.openDetail(sid);
+                    }
+                }
+            });
+            canvas.addEventListener("mousemove", (e) => {
+                if (!leafletLayer) return;
+                const rect = canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                const info = leafletLayer.pickObject({ x, y, radius: 3 });
+                canvas.style.cursor = (info && info.object != null) ? "pointer" : "";
+            });
+        }, 500);  // Wait for deck.gl canvas to be ready
+
         return leafletLayer;
     }
 
