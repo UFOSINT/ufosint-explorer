@@ -1533,26 +1533,53 @@
         // deck.gl-leaflet creates the Deck with controller:false
         // which disables deck.gl's internal event manager, so the
         // layer-level onClick/onHover never fire. We bypass this
-        // by listening on the canvas directly and calling the
-        // internal Deck's pickObject via leafletLayer._deck.
+        // by listening on the canvas directly and using the Deck's
+        // pickObject for GPU-based hit testing.
+        //
+        // The Deck instance is accessed via leafletLayer._deck.
+        // We also try leafletLayer.pickObject as a fallback in
+        // case the bridge version exposes it differently.
         setTimeout(() => {
             const canvas = map.getContainer().querySelector("canvas");
-            if (!canvas) return;
-
-            function _pick(e, radius) {
-                // Access the internal Deck instance from the bridge
-                const dk = leafletLayer && leafletLayer._deck;
-                if (!dk || typeof dk.pickObject !== "function") return null;
-                const rect = canvas.getBoundingClientRect();
-                return dk.pickObject({
-                    x: e.clientX - rect.left,
-                    y: e.clientY - rect.top,
-                    radius: radius || 5,
-                });
+            if (!canvas) {
+                console.warn("[deck] no canvas found for pick handlers");
+                return;
             }
 
+            function _getDeck() {
+                if (!leafletLayer) return null;
+                // Try direct _deck access (deck.gl-leaflet internals)
+                if (leafletLayer._deck) return leafletLayer._deck;
+                // Try walking the prototype
+                for (const k of Object.getOwnPropertyNames(leafletLayer)) {
+                    const v = leafletLayer[k];
+                    if (v && typeof v === "object" && typeof v.pickObject === "function") {
+                        return v;
+                    }
+                }
+                return null;
+            }
+
+            function _pick(clientX, clientY, radius) {
+                const dk = _getDeck();
+                if (!dk) return null;
+                const rect = canvas.getBoundingClientRect();
+                try {
+                    return dk.pickObject({
+                        x: clientX - rect.left,
+                        y: clientY - rect.top,
+                        radius: radius || 5,
+                    });
+                } catch (err) {
+                    return null;
+                }
+            }
+
+            // Expose for debugging
+            window._ufoDeckPick = _pick;
+
             canvas.addEventListener("click", (e) => {
-                const info = _pick(e, 8);
+                const info = _pick(e.clientX, e.clientY, 10);
                 if (info && info.object != null) {
                     const rowIdx = info.object;
                     const sid = POINTS.id[rowIdx];
@@ -1562,17 +1589,18 @@
                 }
             });
 
-            // Throttle mousemove picking to avoid GPU reads on
-            // every pixel movement — max ~15 picks/sec.
+            // Throttle mousemove picking to ~15fps
             let _lastHoverPick = 0;
             canvas.addEventListener("mousemove", (e) => {
                 const now = Date.now();
-                if (now - _lastHoverPick < 66) return;  // ~15fps
+                if (now - _lastHoverPick < 66) return;
                 _lastHoverPick = now;
-                const info = _pick(e, 4);
+                const info = _pick(e.clientX, e.clientY, 5);
                 canvas.style.cursor = (info && info.object != null) ? "pointer" : "";
             });
-        }, 1000);  // Wait for deck.gl to fully initialize
+
+            console.info("[deck] pick handlers attached, _deck =", _getDeck());
+        }, 1500);
 
         return leafletLayer;
     }
