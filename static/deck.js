@@ -1533,17 +1533,26 @@
         // deck.gl-leaflet creates the Deck with controller:false
         // which disables deck.gl's internal event manager, so the
         // layer-level onClick/onHover never fire. We bypass this
-        // by listening on the canvas directly and calling pickObject
-        // ourselves. pickObject IS supported on the LeafletLayer.
+        // by listening on the canvas directly and calling the
+        // internal Deck's pickObject via leafletLayer._deck.
         setTimeout(() => {
             const canvas = map.getContainer().querySelector("canvas");
             if (!canvas) return;
-            canvas.addEventListener("click", (e) => {
-                if (!leafletLayer) return;
+
+            function _pick(e, radius) {
+                // Access the internal Deck instance from the bridge
+                const dk = leafletLayer && leafletLayer._deck;
+                if (!dk || typeof dk.pickObject !== "function") return null;
                 const rect = canvas.getBoundingClientRect();
-                const x = e.clientX - rect.left;
-                const y = e.clientY - rect.top;
-                const info = leafletLayer.pickObject({ x, y, radius: 5 });
+                return dk.pickObject({
+                    x: e.clientX - rect.left,
+                    y: e.clientY - rect.top,
+                    radius: radius || 5,
+                });
+            }
+
+            canvas.addEventListener("click", (e) => {
+                const info = _pick(e, 8);
                 if (info && info.object != null) {
                     const rowIdx = info.object;
                     const sid = POINTS.id[rowIdx];
@@ -1552,15 +1561,18 @@
                     }
                 }
             });
+
+            // Throttle mousemove picking to avoid GPU reads on
+            // every pixel movement — max ~15 picks/sec.
+            let _lastHoverPick = 0;
             canvas.addEventListener("mousemove", (e) => {
-                if (!leafletLayer) return;
-                const rect = canvas.getBoundingClientRect();
-                const x = e.clientX - rect.left;
-                const y = e.clientY - rect.top;
-                const info = leafletLayer.pickObject({ x, y, radius: 3 });
+                const now = Date.now();
+                if (now - _lastHoverPick < 66) return;  // ~15fps
+                _lastHoverPick = now;
+                const info = _pick(e, 4);
                 canvas.style.cursor = (info && info.object != null) ? "pointer" : "";
             });
-        }, 500);  // Wait for deck.gl canvas to be ready
+        }, 1000);  // Wait for deck.gl to fully initialize
 
         return leafletLayer;
     }
