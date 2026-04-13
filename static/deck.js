@@ -1578,7 +1578,19 @@
             // Expose for debugging
             window._ufoDeckPick = _pick;
 
+            // Click-vs-drag disambiguation: only open the detail
+            // modal if the mouse didn't move between mousedown and
+            // mouseup (a true click, not a pan drag). Prevents
+            // accidental modal opens in dense point clusters.
+            let _downX = 0, _downY = 0;
+            canvas.addEventListener("pointerdown", (e) => {
+                _downX = e.clientX;
+                _downY = e.clientY;
+            });
             canvas.addEventListener("click", (e) => {
+                const dx = e.clientX - _downX;
+                const dy = e.clientY - _downY;
+                if (dx * dx + dy * dy > 25) return;  // moved >5px = drag
                 const info = _pick(e.clientX, e.clientY, 10);
                 if (!info || !info.picked) return;
                 // deck.gl with typed-array data: info.object may be
