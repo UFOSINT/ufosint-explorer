@@ -499,6 +499,35 @@
             west  = f.bbox[2]; east  = f.bbox[3];
         }
 
+        // v0.11.5 — region shape (polygon/circle) for geofence filters.
+        // The bbox above is the pre-cull; this is the exact point-in-
+        // shape test applied only to points that pass the bbox. Null
+        // for rect (bbox is exact) and when no region filter is set.
+        const regionShape = f.regionShape || null;
+        // Pre-compute circle constants in the outer scope so the hot
+        // loop doesn't redo the math per-iteration.
+        let _circleCenterLat = 0, _circleCenterLng = 0;
+        let _circleDLatMaxSq = 0;  // (radiusKm / 111)^2
+        let _circleLngScale = 1;   // 1 / cos(centerLat)
+        if (regionShape && regionShape.type === "circle") {
+            _circleCenterLat = regionShape.centerLat;
+            _circleCenterLng = regionShape.centerLng;
+            const dLat = regionShape.radiusKm / 111;
+            _circleDLatMaxSq = dLat * dLat;
+            _circleLngScale = 1 / Math.max(0.01, Math.cos(_circleCenterLat * Math.PI / 180));
+        }
+        // Flatten polygon vertices to two typed arrays for the hot loop.
+        let _polyLats = null, _polyLngs = null, _polyN = 0;
+        if (regionShape && regionShape.type === "polygon") {
+            _polyN = regionShape.points.length;
+            _polyLats = new Float64Array(_polyN);
+            _polyLngs = new Float64Array(_polyN);
+            for (let i = 0; i < _polyN; i++) {
+                _polyLats[i] = regionShape.points[i][0];
+                _polyLngs[i] = regionShape.points[i][1];
+            }
+        }
+
         // Snapshot typed-array references for the hot loop (V8 can
         // optimise the property access across iterations this way).
         const lat = POINTS.lat;
@@ -568,6 +597,32 @@
             const la = lat[i];
             const ln = lng[i];
             if (la < south || la > north || ln < west || ln > east) continue;
+
+            // v0.11.5 — exact point-in-shape test for polygon/circle.
+            // Rect shapes skip this (bbox IS the shape). Bbox cull
+            // above already removed most non-candidates, so this
+            // runs on maybe 10% of visibleIdx at most.
+            if (regionShape) {
+                if (regionShape.type === "circle") {
+                    // Approximate degree-based Euclidean distance:
+                    // good to ~1km within normal radii.
+                    const dLat = la - _circleCenterLat;
+                    const dLng = (ln - _circleCenterLng) / _circleLngScale;
+                    if (dLat * dLat + dLng * dLng > _circleDLatMaxSq) continue;
+                } else if (regionShape.type === "polygon") {
+                    // Ray-cast point-in-polygon (horizontal ray east).
+                    let inside = false;
+                    for (let p = 0, q = _polyN - 1; p < _polyN; q = p++) {
+                        const yi = _polyLngs[p], xi = _polyLats[p];
+                        const yj = _polyLngs[q], xj = _polyLats[q];
+                        const intersect = ((yi > ln) !== (yj > ln)) &&
+                            (la < (xj - xi) * (ln - yi) / (yj - yi) + xi);
+                        if (intersect) inside = !inside;
+                    }
+                    if (!inside) continue;
+                }
+            }
+
             out[j++] = i;
         }
         POINTS.visibleIdx = out.subarray(0, j);

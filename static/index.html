@@ -338,21 +338,41 @@
                             <button class="mode-btn" data-mode="hexbin" type="button" role="tab">Hex Bins</button>
                         </div>
                         <!-- v0.11.4 — Region (geofence) draw tool.
-                             Click to enter draw mode, click-drag on the
-                             map to define a bounding box. The drawn
-                             rectangle filters all sightings to that
-                             spatial region across Observatory, Timeline,
-                             and Insights tabs. -->
-                        <button id="region-draw-btn" class="region-draw-btn" type="button" title="Draw a region to filter by area">
-                            <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4">
-                                <rect x="2" y="3" width="10" height="8" rx="1"/>
-                                <circle cx="2" cy="3" r="1.2" fill="currentColor"/>
-                                <circle cx="12" cy="3" r="1.2" fill="currentColor"/>
-                                <circle cx="2" cy="11" r="1.2" fill="currentColor"/>
-                                <circle cx="12" cy="11" r="1.2" fill="currentColor"/>
-                            </svg>
-                            <span>REGION</span>
-                        </button>
+                             Click the REGION button to open a shape
+                             picker (Rectangle / Polygon / Circle),
+                             then draw on the map. Drawn shape filters
+                             sightings across all tabs. -->
+                        <div class="region-draw-wrap">
+                            <button id="region-draw-btn" class="region-draw-btn" type="button" title="Draw a region to filter by area" aria-haspopup="true" aria-expanded="false">
+                                <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4">
+                                    <rect x="2" y="3" width="10" height="8" rx="1"/>
+                                    <circle cx="2" cy="3" r="1.2" fill="currentColor"/>
+                                    <circle cx="12" cy="3" r="1.2" fill="currentColor"/>
+                                    <circle cx="2" cy="11" r="1.2" fill="currentColor"/>
+                                    <circle cx="12" cy="11" r="1.2" fill="currentColor"/>
+                                </svg>
+                                <span>REGION</span>
+                                <span class="region-draw-caret" aria-hidden="true">▾</span>
+                            </button>
+                            <!-- v0.11.5 — shape mode picker -->
+                            <div id="region-mode-menu" class="region-mode-menu" role="menu" hidden>
+                                <button class="region-mode-item" role="menuitem" data-region-mode="rect" type="button">
+                                    <span class="region-mode-icon" aria-hidden="true">▭</span>
+                                    <span class="region-mode-label">Rectangle</span>
+                                    <span class="region-mode-hint">drag corners</span>
+                                </button>
+                                <button class="region-mode-item" role="menuitem" data-region-mode="polygon" type="button">
+                                    <span class="region-mode-icon" aria-hidden="true">⬠</span>
+                                    <span class="region-mode-label">Polygon</span>
+                                    <span class="region-mode-hint">click vertices, double-click to close</span>
+                                </button>
+                                <button class="region-mode-item" role="menuitem" data-region-mode="circle" type="button">
+                                    <span class="region-mode-icon" aria-hidden="true">○</span>
+                                    <span class="region-mode-label">Circle</span>
+                                    <span class="region-mode-hint">drag from center outward</span>
+                                </button>
+                            </div>
+                        </div>
                         <!-- v0.11.3 — Points mode controls: color-by + dot size.
                              Hidden when heatmap or hex bins are active. -->
                         <div class="points-controls" id="points-controls">
@@ -398,6 +418,16 @@
                          positioned inside the canvas wrap; sized/moved
                          during pointerdown/move in app.js. -->
                     <div id="region-drag-rect" class="region-drag-rect" hidden></div>
+                    <!-- v0.11.5 — Polygon/Circle draw overlay. The
+                         initial width/height placeholders are overridden
+                         by _resizeRegionSvg() to match the map container
+                         on each draw session. -->
+                    <svg id="region-draw-svg" class="region-draw-svg" width="100" height="100" hidden aria-hidden="true">
+                        <polyline id="region-draw-line" class="region-draw-line" points=""/>
+                        <polygon id="region-draw-poly" class="region-draw-poly" points="" hidden/>
+                        <circle id="region-draw-circle" class="region-draw-circle" cx="0" cy="0" r="0" hidden/>
+                        <g id="region-draw-vertices"></g>
+                    </svg>
                     <div id="map"></div>
                     <div class="map-place-search">
                         <label class="sr-only" for="place-input">Find a place</label>

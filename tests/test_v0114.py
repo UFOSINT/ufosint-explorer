@@ -151,8 +151,10 @@ def test_region_hash_encode_decode():
     src = _read(APP_JS)
     assert "function _encodeRegionHash(" in src
     assert "function _decodeRegionHash(" in src
-    # Format sentinel
-    assert '"rect:"' in src or "'rect:'" in src
+    # Format sentinels for all three shape types
+    assert "rect:" in src
+    assert "circle:" in src
+    assert "poly:" in src
 
 
 # =============================================================================
@@ -256,11 +258,17 @@ def test_toggle_region_filter_function():
 def test_region_active_flag_respected_in_pipeline():
     """bbox must only flow into the filter when _regionActive is true."""
     src = _read(APP_JS)
-    # The bbox line should check _regionActive
+    # The bbox and regionShape fields should both check _regionActive
+    # so toggling OFF bypasses the entire region filter without
+    # clearing the drawn geometry.
     assert re.search(
-        r"bbox:\s*\(state\.regionFilter\s*&&\s*_regionActive\)",
+        r"bbox:[\s\S]{0,200}_regionActive",
         src,
     ), "bbox field must AND-check _regionActive so toggle OFF bypasses the filter"
+    assert re.search(
+        r"regionShape:[\s\S]{0,200}_regionActive",
+        src,
+    ), "regionShape field must AND-check _regionActive too"
 
 
 def test_region_chip_disabled_state_css():
@@ -298,3 +306,118 @@ def test_timebrush_draw_layer_called_with_both_maxes():
     src = _read(APP_JS)
     assert "drawLayer(ghost," in src and "maxFull" in src
     assert "drawLayer(fg," in src and "maxFiltered" in src
+
+
+# =============================================================================
+# v0.11.5 — Polygon + Circle shape modes
+# =============================================================================
+
+def test_shape_mode_menu_in_html():
+    html = _read(INDEX_HTML)
+    assert 'id="region-mode-menu"' in html
+    # All three shape options present as menu items
+    assert 'data-region-mode="rect"' in html
+    assert 'data-region-mode="polygon"' in html
+    assert 'data-region-mode="circle"' in html
+
+
+def test_region_draw_svg_overlay_exists():
+    html = _read(INDEX_HTML)
+    assert 'id="region-draw-svg"' in html
+    assert 'id="region-draw-line"' in html
+    assert 'id="region-draw-poly"' in html
+    assert 'id="region-draw-circle"' in html
+    assert 'id="region-draw-vertices"' in html
+
+
+def test_shape_mode_menu_css():
+    css = _read(STYLE_CSS)
+    assert ".region-mode-menu" in css
+    assert ".region-mode-item" in css
+    assert ".region-draw-svg" in css
+    assert ".region-draw-poly" in css
+    assert ".region-draw-circle" in css
+    assert ".region-draw-vertex" in css
+
+
+def test_enter_region_draw_mode_accepts_mode():
+    """_enterRegionDrawMode must accept a mode parameter."""
+    src = _read(APP_JS)
+    assert "function _enterRegionDrawMode(mode)" in src
+
+
+def test_polygon_drawing_handlers():
+    src = _read(APP_JS)
+    assert "function _regionPolyClick(" in src
+    assert "function _regionPolyMove(" in src
+    assert "function _regionPolyDblclick(" in src
+    assert "function _closePolygon(" in src
+
+
+def test_circle_uses_same_pointer_handlers():
+    """Circle shares the pointerdown/move/up drag flow with rect —
+    just with different geometry in the update function."""
+    src = _read(APP_JS)
+    assert "function _updateDragCircleVisual(" in src
+
+
+def test_shape_bbox_computed_for_all_types():
+    """_computeShapeBbox must handle rect, polygon, and circle."""
+    src = _read(APP_JS)
+    m = re.search(
+        r"function _computeShapeBbox\([\s\S]*?\n\}",
+        src,
+    )
+    assert m
+    body = m.group(0)
+    assert '"rect"' in body or "'rect'" in body
+    assert '"polygon"' in body or "'polygon'" in body
+    assert '"circle"' in body or "'circle'" in body
+
+
+def test_deck_js_handles_polygon_and_circle():
+    """_rebuildVisible in deck.js must include point-in-polygon
+    and point-in-circle tests."""
+    src = _read(DECK_JS)
+    # Polygon ray-cast idiom
+    assert "regionShape" in src
+    assert 'regionShape.type === "polygon"' in src or "'polygon'" in src
+    assert 'regionShape.type === "circle"' in src or "'circle'" in src
+
+
+def test_chip_label_varies_by_shape():
+    """_renderRegionChip must produce different labels per shape."""
+    src = _read(APP_JS)
+    m = re.search(
+        r"function _renderRegionChip\([\s\S]*?\n\}",
+        src,
+    )
+    assert m
+    body = m.group(0)
+    # Each shape type should be handled
+    assert '"circle"' in body or "'circle'" in body
+    assert '"polygon"' in body or "'polygon'" in body
+
+
+def test_hash_encodes_all_three_shape_types():
+    src = _read(APP_JS)
+    m = re.search(
+        r"function _encodeRegionHash\([\s\S]*?\n\}",
+        src,
+    )
+    assert m
+    body = m.group(0)
+    assert "rect:" in body
+    assert "circle:" in body
+    assert "poly:" in body
+
+
+def test_hash_decodes_all_three_shape_types():
+    src = _read(APP_JS)
+    m = re.search(
+        r"function _decodeRegionHash\([\s\S]*?\n\}",
+        src,
+    )
+    assert m
+    body = m.group(0)
+    assert "rect" in body and "circle" in body and "poly" in body
