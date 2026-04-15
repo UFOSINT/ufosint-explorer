@@ -799,6 +799,15 @@ Five databases totaling 614,505 deduplicated records:
 - UPDB (65,016) — Jacques Vallee's Unified Phenomena Database
 - UFO-search (54,751) — Majestic Timeline historical compilations
 
+## Download the Database
+
+The full 508 MB SQLite snapshot is attached to every tagged release:
+
+- [Latest release download](https://github.com/UFOSINT/ufosint-explorer/releases/latest/download/ufo_public.db) — direct link to ufo_public.db
+- [All releases](https://github.com/UFOSINT/ufosint-explorer/releases) — browse version history
+
+Quick start with the SQLite CLI: `sqlite3 ufo_public.db "SELECT COUNT(*) FROM sighting;"` should return 614505.
+
 ## Optional
 
 - [Source Code](https://github.com/UFOSINT/ufosint-explorer): GitHub repository (MIT license pending)
@@ -875,6 +884,26 @@ def llms_full_txt():
         lines.append("")
 
     lines.extend([
+        "## Download the Database",
+        "",
+        "The full 508 MB SQLite snapshot is available as a GitHub Release asset:",
+        "",
+        "- **Latest:** https://github.com/UFOSINT/ufosint-explorer/releases/latest/download/ufo_public.db",
+        "- **All versions:** https://github.com/UFOSINT/ufosint-explorer/releases",
+        "",
+        "```bash",
+        "# Direct download",
+        "curl -LO https://github.com/UFOSINT/ufosint-explorer/releases/latest/download/ufo_public.db",
+        "",
+        "# Inspect",
+        "sqlite3 ufo_public.db \".tables\"",
+        "sqlite3 ufo_public.db \"SELECT COUNT(*) FROM sighting;\"  # 614505",
+        "```",
+        "",
+        "Privacy note: the public DB has raw narrative text stripped (description / summary / notes",
+        "columns are NULL). All derived columns (emotion, quality, movement) were computed from the",
+        "private corpus before the strip and ship as structured fields.",
+        "",
         "## Data Overview",
         "",
         "- **Total sightings:** 614,505",

@@ -795,6 +795,21 @@ Content-Type: application/json
                 </div>
 
                 <div class="connect-card">
+                    <h3>Download the database (SQLite)</h3>
+                    <p>Want to run your own analysis, train models, or hack on the data offline?
+                       The full 508&nbsp;MB SQLite snapshot is attached to every tagged release on GitHub &mdash;
+                       614,505 deduplicated sightings, 502,985 with emotion analysis, and all derived columns.</p>
+                    <pre class="connect-code"><code>curl -LO https://github.com/UFOSINT/ufosint-explorer/releases/latest/download/ufo_public.db
+
+sqlite3 ufo_public.db "SELECT COUNT(*) FROM sighting;"
+# 614505</code></pre>
+                    <p>See the <a href="#/methodology" class="methodology-link">Methodology tab</a> for the full schema,
+                       derived-column definitions, and per-source licensing.
+                       Browse the <a href="https://github.com/UFOSINT/ufosint-explorer/releases" target="_blank" rel="noopener">releases page</a>
+                       for older versions.</p>
+                </div>
+
+                <div class="connect-card">
                     <h3>AI Discovery</h3>
                     <p>This site exposes standard AI-readiness files so agents and LLMs can discover
                        and understand the UFOSINT tools automatically:</p>
@@ -832,6 +847,14 @@ DATABASE_URL="postgresql://..." python mcp_server.py</code></pre>
 
                 <h2>Unified UFO Sightings Database &mdash; Methodology</h2>
                 <p class="meth-intro"><strong>This is not raw data.</strong> UFOSINT Explorer presents a <strong>processed scientific analysis</strong> of five major UFO/UAP databases &mdash; 614,505 sighting records deduplicated, cross-referenced, quality-scored, movement-classified, and emotion-analyzed using four transformer models. Every step of the pipeline is documented below and can be independently replicated from the source data using the open-source <a href="https://github.com/UFOSINT/ufo-dedup" target="_blank" rel="noopener">ufo-dedup</a> pipeline. The web application source code is at <a href="https://github.com/UFOSINT/ufosint-explorer" target="_blank" rel="noopener">ufosint-explorer</a>.</p>
+
+<div class="meth-download-banner">
+    <strong>Download the full database</strong>
+    The 508&nbsp;MB SQLite snapshot (<code>ufo_public.db</code>) is attached to every tagged release.
+    <a href="https://github.com/UFOSINT/ufosint-explorer/releases/latest/download/ufo_public.db" class="meth-download-link">Download latest</a>
+    &middot;
+    <a href="https://github.com/UFOSINT/ufosint-explorer/releases" target="_blank" rel="noopener">Browse releases</a>
+</div>
 
                 <div class="meth-banner meth-banner-note">
                     <strong>Reproducibility statement.</strong>

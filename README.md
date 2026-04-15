@@ -61,6 +61,42 @@ Total raw records across all sources: ~2.56 million. After removing known overla
 
 All source datasets were paid for / licensed by UFOSINT. This repository contains only code; the raw sources and the built database live outside the repo — see the [`ufo-dedup`](https://github.com/UFOSINT/ufo-dedup) pipeline repo for details.
 
+## Download the Database
+
+The public SQLite snapshot is attached to every versioned release:
+
+**[📦 Latest release download (ufo_public.db, 508 MB)](https://github.com/UFOSINT/ufosint-explorer/releases/latest/download/ufo_public.db)**
+
+Or via the GitHub CLI:
+
+```bash
+gh release download --latest -R UFOSINT/ufosint-explorer -p ufo_public.db
+```
+
+Or direct curl:
+
+```bash
+curl -LO https://github.com/UFOSINT/ufosint-explorer/releases/latest/download/ufo_public.db
+```
+
+What's inside:
+
+- **614,505 deduplicated sightings** from NUFORC, MUFON, UFOCAT, UPDB, UFO-search
+- **502,985 emotion-analyzed** rows (4 transformer models — see next section)
+- **396,158 geocoded** with lat/lng coordinates
+- Derived columns: quality score, richness score, hoax likelihood, movement categorization, standardized shape
+- SQLite format — works with any SQLite client, the `sqlite3` CLI, or Python's built-in `sqlite3`
+
+Quick inspection:
+
+```bash
+sqlite3 ufo_public.db ".tables"
+sqlite3 ufo_public.db "SELECT COUNT(*) FROM sighting;"
+sqlite3 ufo_public.db "SELECT shape, COUNT(*) FROM sighting GROUP BY shape ORDER BY 2 DESC LIMIT 10;"
+```
+
+**Privacy note:** the public database has raw narrative text stripped (description / summary / notes columns are NULL). All derived columns (emotion, quality, movement) were computed from the private corpus before the strip and ship as structured fields. See the [Methodology tab](https://ufosint.com#/methodology) on the live site for the full pipeline.
+
 ## Emotion & Sentiment Analysis (v0.11)
 
 Three transformer models + VADER run against 502,985 sightings with narrative text:
