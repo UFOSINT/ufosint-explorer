@@ -178,10 +178,11 @@ def test_tour_storage_key_defined():
 def test_tour_steps_array():
     src = _read(APP_JS)
     assert "TOUR_STEPS" in src
-    # Must have 5 target selectors
+    # v0.11.7: added #region-draw-btn step. All 6 targets:
     for target in (
         ".observatory-canvas-wrap",
         ".observatory-rail",
+        "#region-draw-btn",
         ".observatory-time-brush",
         ".tabs",
         "#stats-badge",

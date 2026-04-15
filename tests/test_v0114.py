@@ -363,6 +363,30 @@ def test_polygon_vertex_dragging_supported():
     assert "_polyDraggingVertex" in src
 
 
+def test_polygon_vertices_use_leaflet_native_markers():
+    """v0.11.7: vertices render via L.circleMarker so they land
+    in Leaflet's own pane stacking order (visible regardless of
+    z-index fights with the deck.gl canvas or our SVG overlay)."""
+    src = _read(APP_JS)
+    assert "L.circleMarker" in src
+    assert "_polyVertexMarkers" in src
+    assert "_clearPolyVertexMarkers" in src
+
+
+def test_region_vertex_css_leaflet_native():
+    """The native-marker CSS class must target Leaflet's
+    .leaflet-interactive path elements."""
+    css = _read(STYLE_CSS)
+    assert ".leaflet-interactive.region-vertex" in css
+
+
+def test_region_tour_step_exists():
+    """v0.11.7: feature tour must include a step explaining the
+    region draw tool."""
+    src = _read(APP_JS)
+    assert 'target: "#region-draw-btn"' in src
+
+
 def test_ellipse_uses_same_pointer_handlers():
     """Ellipse shares the pointerdown/move/up drag flow with rect —
     just with different geometry in the update function."""

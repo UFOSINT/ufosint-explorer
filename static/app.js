@@ -7349,6 +7349,11 @@ const TOUR_STEPS = [
         position: "right",
     },
     {
+        target: "#region-draw-btn",
+        body: "<strong>Region tool</strong>. Click to pick a shape (Rectangle / Polygon / Ellipse), then draw on the map to filter to a geographic area. The filter applies across Observatory, Timeline, and Insights — and you can toggle it on/off from the TimeBrush bar without losing the shape.",
+        position: "bottom",
+    },
+    {
         target: ".observatory-time-brush",
         body: "The <strong>TimeBrush</strong>. Drag handles to select a time window. Scroll to zoom into a decade or month. Hit Play to animate through history.",
         position: "top",
@@ -7858,6 +7863,8 @@ function _exitRegionDrawMode() {
         if (ell) { ell.setAttribute("rx", "0"); ell.setAttribute("ry", "0"); ell.hidden = true; }
         if (verts) verts.innerHTML = "";
     }
+    // v0.11.7 — tear down Leaflet-native polygon vertex markers
+    _clearPolyVertexMarkers();
     if (wrap) wrap.classList.remove("region-drawing");
 
     if (state.map) {
@@ -8080,17 +8087,25 @@ function _regionPolyDblclick(e) {
     }
 }
 
+// v0.11.7: polygon vertex markers rendered via Leaflet's native SVG
+// renderer (L.circleMarker). This sidesteps z-index issues where
+// our own SVG overlay sat below the Leaflet map stack — Leaflet's
+// own markers always render in the correct pane.
+let _polyVertexMarkers = [];  // L.circleMarker[]
+
 function _updatePolyVisual() {
     const svg = document.getElementById("region-draw-svg");
     const line = document.getElementById("region-draw-line");
     const poly = document.getElementById("region-draw-poly");
-    const verts = document.getElementById("region-draw-vertices");
-    if (!svg || !line || !verts) return;
+    if (!svg || !line || !state.map) return;
     svg.hidden = false;
 
-    // When we have 3+ vertices, show a translucent polygon fill
-    // between them (plus the dashed line to the cursor).
     const pts = _regionPolyPoints;
+
+    // Translucent polygon fill when we have 3+ vertices (still SVG
+    // overlay — it's a whole-shape fill, not individual markers,
+    // and it only appears briefly during drawing so z-index issues
+    // are less critical).
     if (poly) {
         if (pts.length >= 3) {
             poly.hidden = false;
@@ -8101,27 +8116,55 @@ function _updatePolyVisual() {
     }
 
     // Dashed "rubber-band" line from the last vertex to the cursor.
-    // We don't include a segment connecting last→first here — the
-    // closed polygon above handles that visual once closed.
     const segs = pts.slice();
     if (_regionPolyCursor && _polyDraggingVertex < 0) {
         segs.push([_regionPolyCursor.x, _regionPolyCursor.y]);
     }
     line.setAttribute("points", segs.map(p => p.join(",")).join(" "));
 
-    // Vertex dots — bigger + CSS-driven hover/drag states
-    verts.innerHTML = "";
-    pts.forEach((p, i) => {
-        const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-        c.setAttribute("cx", p[0]);
-        c.setAttribute("cy", p[1]);
-        c.setAttribute("r", "7");
-        let cls = "region-draw-vertex";
-        if (i === 0 && pts.length >= 3) cls += " first-vertex";
-        if (i === _polyDraggingVertex) cls += " is-dragging";
-        c.setAttribute("class", cls);
-        verts.appendChild(c);
-    });
+    // --- Vertex markers (Leaflet-native) ---
+    // Sync _polyVertexMarkers to _regionPolyPoints. Reuse existing
+    // markers when possible so we don't churn DOM during drags.
+    const map = state.map;
+    while (_polyVertexMarkers.length > pts.length) {
+        const m = _polyVertexMarkers.pop();
+        if (m) map.removeLayer(m);
+    }
+    for (let i = 0; i < pts.length; i++) {
+        const ll = map.containerPointToLatLng(L.point(pts[i][0], pts[i][1]));
+        const cls = [
+            "region-vertex",
+            (i === 0 && pts.length >= 3) ? "region-vertex-first" : "",
+            (i === _polyDraggingVertex) ? "region-vertex-dragging" : "",
+        ].filter(Boolean).join(" ");
+        const isFirst = i === 0 && pts.length >= 3;
+        if (_polyVertexMarkers[i]) {
+            // Reposition + re-style existing marker
+            _polyVertexMarkers[i].setLatLng(ll);
+            _polyVertexMarkers[i].setRadius(isFirst ? 9 : (i === _polyDraggingVertex ? 10 : 7));
+            _polyVertexMarkers[i].setStyle({ className: cls });
+            // setStyle doesn't propagate className via options on
+            // all Leaflet versions — set it on the path directly.
+            const el = _polyVertexMarkers[i]._path;
+            if (el) el.setAttribute("class", "leaflet-interactive " + cls);
+        } else {
+            const marker = L.circleMarker(ll, {
+                radius: isFirst ? 9 : 7,
+                className: cls,
+                interactive: false,  // we capture events at the container level
+                bubblingMouseEvents: false,
+            }).addTo(map);
+            _polyVertexMarkers.push(marker);
+        }
+    }
+}
+
+function _clearPolyVertexMarkers() {
+    if (!state.map) { _polyVertexMarkers = []; return; }
+    for (const m of _polyVertexMarkers) {
+        if (m) state.map.removeLayer(m);
+    }
+    _polyVertexMarkers = [];
 }
 
 function _closePolygon() {

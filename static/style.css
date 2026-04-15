@@ -5242,13 +5242,15 @@ body[data-hide-brush] .observatory-time-brush {
     grid-column: 2;
 }
 
-/* SVG overlay for polygon + circle drawing.
+/* SVG overlay for polygon + ellipse drawing.
    Sized to match the map container via JS on each pointer event so
-   coordinates line up with Leaflet's container-point space. */
+   coordinates line up with Leaflet's container-point space.
+   v0.11.7: z-index boosted to 1100 (above all Leaflet panes — popup
+   is 700) to guarantee visibility during drawing. */
 .region-draw-svg {
     position: absolute;
     inset: 0;
-    z-index: 620;
+    z-index: 1100;
     pointer-events: none;
     width: 100%;
     height: 100%;
@@ -5299,6 +5301,28 @@ body[data-hide-brush] .observatory-time-brush {
 }
 .region-draw-vertex.first-vertex:hover {
     r: 11;
+}
+
+/* v0.11.7 — Leaflet-native polygon vertex markers. Rendered through
+   Leaflet's SVG renderer so they always land in the correct pane
+   stacking order (marker pane, z-index 600) — no fights with the
+   deck.gl canvas or our own SVG overlay. */
+.leaflet-interactive.region-vertex {
+    fill: var(--accent);
+    fill-opacity: 1;
+    stroke: #fff;
+    stroke-width: 2;
+    cursor: grab;
+}
+.leaflet-interactive.region-vertex:hover {
+    fill-opacity: 0.85;
+}
+.leaflet-interactive.region-vertex-first {
+    stroke-width: 2.5;
+    animation: region-vertex-pulse 1s ease-in-out infinite;
+}
+.leaflet-interactive.region-vertex-dragging {
+    cursor: grabbing;
 }
 @keyframes region-vertex-pulse {
     0%, 100% { fill-opacity: 1; }
