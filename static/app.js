@@ -4015,6 +4015,13 @@ function setTheme(theme) {
         b.setAttribute("aria-checked", String(active));
     });
     try { localStorage.setItem("ufosint-theme", theme); } catch (e) {}
+    // v0.11.11: apply Chart.js default colors + update every existing
+    // chart so labels/ticks use readable colors on both themes. The
+    // Chart.js default is a 50% gray (#666) which fails WCAG on both
+    // our dark cyan-on-void and our cream-on-paper backgrounds. We
+    // pull --text from the CSS token set so both themes get the
+    // right value automatically.
+    _applyChartJsThemeColors();
     // Re-draw the time brush so histogram picks up the new accent color.
     if (state.timeBrush) {
         state.timeBrush._draw();
@@ -4031,6 +4038,79 @@ function setTheme(theme) {
     // Scatterplot/Hexagon/Heatmap layer picks up the new colors.
     if (window.UFODeck && typeof window.UFODeck.setTheme === "function") {
         window.UFODeck.setTheme(theme);
+    }
+}
+
+// v0.11.11 — sync Chart.js defaults + all existing charts with the
+// current theme. Called by setTheme() and at boot (once Chart.js is
+// available). Reads --text and --text-muted from the computed styles
+// so both Dark and Light themes get the right value without us
+// hard-coding per-theme literals.
+function _applyChartJsThemeColors() {
+    if (typeof Chart === "undefined") return;
+    const styles = getComputedStyle(document.body);
+    const text = styles.getPropertyValue("--text").trim() || "#e8edf5";
+    const muted = styles.getPropertyValue("--text-muted").trim() || "#8a96ad";
+    const border = styles.getPropertyValue("--border").trim() || "#2a3346";
+    // Chart.js global defaults (apply to all new charts)
+    Chart.defaults.color = text;
+    Chart.defaults.borderColor = border;
+    if (Chart.defaults.scale) {
+        Chart.defaults.scale.grid = Chart.defaults.scale.grid || {};
+        Chart.defaults.scale.grid.color = border;
+        Chart.defaults.scale.ticks = Chart.defaults.scale.ticks || {};
+        Chart.defaults.scale.ticks.color = text;
+    }
+    // Per-scale-type defaults (Chart.js 4.x splits these)
+    for (const key of ["category", "linear", "logarithmic", "time", "timeseries"]) {
+        const s = Chart.defaults.scales && Chart.defaults.scales[key];
+        if (s) {
+            s.grid = s.grid || {};
+            s.grid.color = border;
+            s.ticks = s.ticks || {};
+            s.ticks.color = text;
+            s.title = s.title || {};
+            s.title.color = text;
+        }
+    }
+    if (Chart.defaults.plugins) {
+        if (Chart.defaults.plugins.legend) {
+            Chart.defaults.plugins.legend.labels = Chart.defaults.plugins.legend.labels || {};
+            Chart.defaults.plugins.legend.labels.color = text;
+        }
+        if (Chart.defaults.plugins.title) {
+            Chart.defaults.plugins.title.color = text;
+        }
+        if (Chart.defaults.plugins.tooltip) {
+            Chart.defaults.plugins.tooltip.titleColor = text;
+            Chart.defaults.plugins.tooltip.bodyColor = text;
+        }
+    }
+    // Update any chart instances already created (walk state for
+    // them). Chart.instances holds the live registry.
+    if (Chart.instances) {
+        for (const id in Chart.instances) {
+            const c = Chart.instances[id];
+            if (!c) continue;
+            try {
+                // Update per-scale ticks + grid on the live chart
+                if (c.options && c.options.scales) {
+                    for (const axisKey in c.options.scales) {
+                        const ax = c.options.scales[axisKey];
+                        if (!ax) continue;
+                        ax.ticks = Object.assign({}, ax.ticks, { color: text });
+                        ax.grid = Object.assign({}, ax.grid, { color: border });
+                        if (ax.title) ax.title.color = text;
+                    }
+                }
+                if (c.options && c.options.plugins) {
+                    if (c.options.plugins.legend && c.options.plugins.legend.labels) {
+                        c.options.plugins.legend.labels.color = text;
+                    }
+                }
+                c.update("none");
+            } catch (e) {}
+        }
     }
 }
 
@@ -4083,6 +4163,12 @@ async function loadHeatmap(signal) {
 // round-trips; filter changes recompute in a few ms.
 
 async function loadTimeline() {
+    // v0.11.11: make sure Chart.js defaults match the current theme
+    // before any charts are instantiated. Idempotent; safe to call
+    // on every tab visit.
+    if (typeof _applyChartJsThemeColors === "function") {
+        _applyChartJsThemeColors();
+    }
     // First visit: bootstrap the chart instances. Subsequent visits and
     // filter changes go through refreshTimelineCards() instead.
     if (!window.UFODeck || !window.UFODeck.POINTS || !window.UFODeck.POINTS.ready) {
@@ -5044,6 +5130,12 @@ function disableButtonWhilePending(btn, loadingLabel) {
 // =========================================================================
 async function loadInsights() {
     const statusEl = document.getElementById("insights-status");
+
+    // v0.11.11: sync Chart.js defaults with current theme before
+    // building chart instances. Idempotent.
+    if (typeof _applyChartJsThemeColors === "function") {
+        _applyChartJsThemeColors();
+    }
 
     // v0.8.8 — all 8 insight cards are now client-side. The
     // /api/sentiment/* endpoints were returning empty data after the
