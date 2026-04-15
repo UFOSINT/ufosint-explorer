@@ -499,22 +499,19 @@
             west  = f.bbox[2]; east  = f.bbox[3];
         }
 
-        // v0.11.5 — region shape (polygon/circle) for geofence filters.
+        // v0.11.5 — region shape (polygon/ellipse) for geofence filters.
         // The bbox above is the pre-cull; this is the exact point-in-
         // shape test applied only to points that pass the bbox. Null
-        // for rect (bbox is exact) and when no region filter is set.
+        // for rect (bbox IS the shape) and when no region filter is set.
         const regionShape = f.regionShape || null;
-        // Pre-compute circle constants in the outer scope so the hot
-        // loop doesn't redo the math per-iteration.
-        let _circleCenterLat = 0, _circleCenterLng = 0;
-        let _circleDLatMaxSq = 0;  // (radiusKm / 111)^2
-        let _circleLngScale = 1;   // 1 / cos(centerLat)
-        if (regionShape && regionShape.type === "circle") {
-            _circleCenterLat = regionShape.centerLat;
-            _circleCenterLng = regionShape.centerLng;
-            const dLat = regionShape.radiusKm / 111;
-            _circleDLatMaxSq = dLat * dLat;
-            _circleLngScale = 1 / Math.max(0.01, Math.cos(_circleCenterLat * Math.PI / 180));
+        // Pre-compute ellipse constants (axis-aligned ellipse in
+        // lat/lng space inscribed in the bbox).
+        let _ellCLat = 0, _ellCLng = 0, _ellRLat = 1, _ellRLng = 1;
+        if (regionShape && regionShape.type === "ellipse") {
+            _ellCLat = (regionShape.north + regionShape.south) / 2;
+            _ellCLng = (regionShape.east + regionShape.west) / 2;
+            _ellRLat = Math.max(1e-9, (regionShape.north - regionShape.south) / 2);
+            _ellRLng = Math.max(1e-9, (regionShape.east - regionShape.west) / 2);
         }
         // Flatten polygon vertices to two typed arrays for the hot loop.
         let _polyLats = null, _polyLngs = null, _polyN = 0;
@@ -598,17 +595,16 @@
             const ln = lng[i];
             if (la < south || la > north || ln < west || ln > east) continue;
 
-            // v0.11.5 — exact point-in-shape test for polygon/circle.
-            // Rect shapes skip this (bbox IS the shape). Bbox cull
-            // above already removed most non-candidates, so this
-            // runs on maybe 10% of visibleIdx at most.
+            // v0.11.5 — exact point-in-shape test for polygon/ellipse.
+            // Rect shapes skip this (bbox IS the shape). The bbox
+            // cull above already removed most non-candidates so this
+            // runs on roughly 10% of visibleIdx per rebuild.
             if (regionShape) {
-                if (regionShape.type === "circle") {
-                    // Approximate degree-based Euclidean distance:
-                    // good to ~1km within normal radii.
-                    const dLat = la - _circleCenterLat;
-                    const dLng = (ln - _circleCenterLng) / _circleLngScale;
-                    if (dLat * dLat + dLng * dLng > _circleDLatMaxSq) continue;
+                if (regionShape.type === "ellipse") {
+                    // Standard ellipse formula: (x/a)^2 + (y/b)^2 <= 1
+                    const nx = (la - _ellCLat) / _ellRLat;
+                    const ny = (ln - _ellCLng) / _ellRLng;
+                    if (nx * nx + ny * ny > 1) continue;
                 } else if (regionShape.type === "polygon") {
                     // Ray-cast point-in-polygon (horizontal ray east).
                     let inside = false;

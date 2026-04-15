@@ -7790,8 +7790,8 @@ function _enterRegionDrawMode(mode) {
         const text = banner.querySelector(".region-banner-text");
         if (text) {
             text.textContent = (
-                mode === "polygon" ? "POLYGON MODE — Click to place vertices. Double-click or click the first vertex to close." :
-                mode === "circle" ? "CIRCLE MODE — Click and drag from the center outward to define the radius." :
+                mode === "polygon" ? "POLYGON MODE — Click to place vertices, drag dots to reposition. Double-click or click the first vertex to close." :
+                mode === "ellipse" ? "ELLIPSE MODE — Click and drag corner-to-corner to define the bounding box." :
                 "RECTANGLE MODE — Click and drag on the map to draw a bounding box."
             );
         }
@@ -7813,11 +7813,16 @@ function _enterRegionDrawMode(mode) {
 
     const mapEl = state.map.getContainer();
     if (mode === "polygon") {
-        mapEl.addEventListener("click", _regionPolyClick, true);
-        mapEl.addEventListener("pointermove", _regionPolyMove, true);
+        // v0.11.5 fix: use pointerdown/up (not click) because
+        // deck.gl's click handler on the canvas eats the event.
+        // pointerdown lands first + we can do our own click-vs-drag
+        // threshold like the rectangle.
+        mapEl.addEventListener("pointerdown", _regionPolyPointerDown, true);
+        mapEl.addEventListener("pointermove", _regionPolyPointerMove, true);
+        mapEl.addEventListener("pointerup", _regionPolyPointerUp, true);
         mapEl.addEventListener("dblclick", _regionPolyDblclick, true);
     } else {
-        // rect + circle use the same pointer-drag pattern
+        // rect + ellipse use the same pointer-drag pattern
         mapEl.addEventListener("pointerdown", _regionPointerDown, true);
         mapEl.addEventListener("pointermove", _regionPointerMove, true);
         mapEl.addEventListener("pointerup", _regionPointerUp, true);
@@ -7844,14 +7849,13 @@ function _exitRegionDrawMode() {
     if (dragRect) dragRect.hidden = true;
     if (svg) {
         svg.hidden = true;
-        // Clear the SVG children
         const line = document.getElementById("region-draw-line");
         const poly = document.getElementById("region-draw-poly");
-        const circ = document.getElementById("region-draw-circle");
+        const ell = document.getElementById("region-draw-ellipse");
         const verts = document.getElementById("region-draw-vertices");
         if (line) line.setAttribute("points", "");
         if (poly) { poly.setAttribute("points", ""); poly.hidden = true; }
-        if (circ) { circ.setAttribute("r", "0"); circ.hidden = true; }
+        if (ell) { ell.setAttribute("rx", "0"); ell.setAttribute("ry", "0"); ell.hidden = true; }
         if (verts) verts.innerHTML = "";
     }
     if (wrap) wrap.classList.remove("region-drawing");
@@ -7863,8 +7867,9 @@ function _exitRegionDrawMode() {
 
         const mapEl = state.map.getContainer();
         if (mode === "polygon") {
-            mapEl.removeEventListener("click", _regionPolyClick, true);
-            mapEl.removeEventListener("pointermove", _regionPolyMove, true);
+            mapEl.removeEventListener("pointerdown", _regionPolyPointerDown, true);
+            mapEl.removeEventListener("pointermove", _regionPolyPointerMove, true);
+            mapEl.removeEventListener("pointerup", _regionPolyPointerUp, true);
             mapEl.removeEventListener("dblclick", _regionPolyDblclick, true);
         } else {
             mapEl.removeEventListener("pointerdown", _regionPointerDown, true);
@@ -7892,8 +7897,8 @@ function _regionPointerDown(e) {
     const rect = state.map.getContainer().getBoundingClientRect();
     _regionDragStart = { x: e.clientX - rect.left, y: e.clientY - rect.top };
     _regionDragCurrent = { ..._regionDragStart };
-    if (_regionMode === "circle") {
-        _updateDragCircleVisual();
+    if (_regionMode === "ellipse") {
+        _updateDragEllipseVisual();
     } else {
         _updateDragRectVisual();
     }
@@ -7904,8 +7909,8 @@ function _regionPointerMove(e) {
     e.preventDefault();
     const rect = state.map.getContainer().getBoundingClientRect();
     _regionDragCurrent = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-    if (_regionMode === "circle") {
-        _updateDragCircleVisual();
+    if (_regionMode === "ellipse") {
+        _updateDragEllipseVisual();
     } else {
         _updateDragRectVisual();
     }
@@ -7921,44 +7926,31 @@ function _regionPointerUp(e) {
     const dx = endX - _regionDragStart.x;
     const dy = endY - _regionDragStart.y;
 
-    // Require a minimum drag distance so a twitch doesn't create a
-    // zero-size shape.
-    if (dx * dx + dy * dy < 100) {  // <10px drag
+    // Minimum 10px drag so a twitch doesn't commit a zero shape.
+    if (dx * dx + dy * dy < 100) {
         _exitRegionDrawMode();
         return;
     }
 
     const map = state.map;
-    if (_regionMode === "circle") {
-        const center = map.containerPointToLatLng(L.point(_regionDragStart.x, _regionDragStart.y));
-        const edge = map.containerPointToLatLng(L.point(endX, endY));
-        // Leaflet's distance() returns meters
-        const radiusKm = map.distance(center, edge) / 1000;
-        _exitRegionDrawMode();
-        applyRegionFilter({
-            type: "circle",
-            centerLat: center.lat,
-            centerLng: center.lng,
-            radiusKm: radiusKm,
-        });
-    } else {
-        // rectangle
-        const p1 = map.containerPointToLatLng(
-            L.point(Math.min(_regionDragStart.x, endX), Math.min(_regionDragStart.y, endY))
-        );
-        const p2 = map.containerPointToLatLng(
-            L.point(Math.max(_regionDragStart.x, endX), Math.max(_regionDragStart.y, endY))
-        );
-        const bbox = {
-            type: "rect",
-            north: Math.max(p1.lat, p2.lat),
-            south: Math.min(p1.lat, p2.lat),
-            west:  Math.min(p1.lng, p2.lng),
-            east:  Math.max(p1.lng, p2.lng),
-        };
-        _exitRegionDrawMode();
-        applyRegionFilter(bbox);
-    }
+    // Both rect and ellipse use corner-to-corner. The only
+    // difference is shape.type — which the deck.js filter + chip
+    // renderer inspect to pick the right math.
+    const p1 = map.containerPointToLatLng(
+        L.point(Math.min(_regionDragStart.x, endX), Math.min(_regionDragStart.y, endY))
+    );
+    const p2 = map.containerPointToLatLng(
+        L.point(Math.max(_regionDragStart.x, endX), Math.max(_regionDragStart.y, endY))
+    );
+    const shape = {
+        type: _regionMode === "ellipse" ? "ellipse" : "rect",
+        north: Math.max(p1.lat, p2.lat),
+        south: Math.min(p1.lat, p2.lat),
+        west:  Math.min(p1.lng, p2.lng),
+        east:  Math.max(p1.lng, p2.lng),
+    };
+    _exitRegionDrawMode();
+    applyRegionFilter(shape);
 }
 
 function _updateDragRectVisual() {
@@ -7975,49 +7967,107 @@ function _updateDragRectVisual() {
     dragRect.style.height = (y2 - y1) + "px";
 }
 
-function _updateDragCircleVisual() {
+function _updateDragEllipseVisual() {
     const svg = document.getElementById("region-draw-svg");
-    const circ = document.getElementById("region-draw-circle");
-    if (!svg || !circ || !_regionDragStart || !_regionDragCurrent) return;
-    const dx = _regionDragCurrent.x - _regionDragStart.x;
-    const dy = _regionDragCurrent.y - _regionDragStart.y;
-    const r = Math.sqrt(dx * dx + dy * dy);
+    const ell = document.getElementById("region-draw-ellipse");
+    if (!svg || !ell || !_regionDragStart || !_regionDragCurrent) return;
+    const cx = (_regionDragStart.x + _regionDragCurrent.x) / 2;
+    const cy = (_regionDragStart.y + _regionDragCurrent.y) / 2;
+    const rx = Math.abs(_regionDragCurrent.x - _regionDragStart.x) / 2;
+    const ry = Math.abs(_regionDragCurrent.y - _regionDragStart.y) / 2;
     svg.hidden = false;
-    circ.hidden = false;
-    circ.setAttribute("cx", _regionDragStart.x);
-    circ.setAttribute("cy", _regionDragStart.y);
-    circ.setAttribute("r", r);
+    ell.hidden = false;
+    ell.setAttribute("cx", cx);
+    ell.setAttribute("cy", cy);
+    ell.setAttribute("rx", rx);
+    ell.setAttribute("ry", ry);
 }
 
-// ---- Polygon drawing: click-to-add vertex, dblclick or click-first-vertex to close ----
+// ---- Polygon drawing ----
+//
+// v0.11.6: uses pointerdown/up pattern (not click) because deck.gl's
+// click handler eats the event. Also supports dragging placed
+// vertices to reposition them — pointerdown that lands within 14px
+// of an existing vertex starts a drag instead of placing a new one.
 
-function _regionPolyClick(e) {
+let _polyDownAt = null;           // {x, y} of pointerdown
+let _polyDraggingVertex = -1;     // index of vertex being repositioned, -1 if placing
+
+function _regionPolyPointerDown(e) {
     if (!_regionDrawing || _regionMode !== "polygon" || !state.map) return;
-    if (e.detail > 1) return;  // double-click handled separately
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = state.map.getContainer().getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    _polyDownAt = { x, y };
+
+    // Hit-test existing vertices (14px radius)
+    _polyDraggingVertex = -1;
+    for (let i = 0; i < _regionPolyPoints.length; i++) {
+        const [vx, vy] = _regionPolyPoints[i];
+        const dx = x - vx, dy = y - vy;
+        if (dx * dx + dy * dy <= 196) {  // 14px
+            _polyDraggingVertex = i;
+            break;
+        }
+    }
+}
+
+function _regionPolyPointerMove(e) {
+    if (!_regionDrawing || _regionMode !== "polygon") return;
+    const rect = state.map.getContainer().getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    if (_polyDraggingVertex >= 0) {
+        // Live vertex drag
+        _regionPolyPoints[_polyDraggingVertex] = [x, y];
+    } else {
+        // Cursor preview for next vertex
+        _regionPolyCursor = { x, y };
+    }
+    _updatePolyVisual();
+}
+
+function _regionPolyPointerUp(e) {
+    if (!_regionDrawing || _regionMode !== "polygon") return;
     e.preventDefault();
     e.stopPropagation();
     const rect = state.map.getContainer().getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
-    // Close on click-near-first-vertex (within 12px) if we have >=3
+    // Vertex drag finalized — just update visual, no placement.
+    if (_polyDraggingVertex >= 0) {
+        _polyDraggingVertex = -1;
+        _polyDownAt = null;
+        _updatePolyVisual();
+        return;
+    }
+
+    if (!_polyDownAt) return;
+    const dx = x - _polyDownAt.x;
+    const dy = y - _polyDownAt.y;
+    _polyDownAt = null;
+
+    // Treat as click only if movement is small (<5px); otherwise
+    // the user was probably trying to pan and we missed it above.
+    if (dx * dx + dy * dy > 25) return;
+
+    // Close on click-near-first-vertex (within 14px) if we have 3+
     if (_regionPolyPoints.length >= 3) {
         const [fx, fy] = _regionPolyPoints[0];
-        const dx = x - fx, dy = y - fy;
-        if (dx * dx + dy * dy < 144) {  // 12px
+        const fdx = x - fx, fdy = y - fy;
+        if (fdx * fdx + fdy * fdy < 196) {  // 14px
             _closePolygon();
             return;
         }
     }
 
+    // Place a new vertex
     _regionPolyPoints.push([x, y]);
-    _updatePolyVisual();
-}
-
-function _regionPolyMove(e) {
-    if (!_regionDrawing || _regionMode !== "polygon") return;
-    const rect = state.map.getContainer().getBoundingClientRect();
-    _regionPolyCursor = { x: e.clientX - rect.left, y: e.clientY - rect.top };
     _updatePolyVisual();
 }
 
@@ -8033,23 +8083,43 @@ function _regionPolyDblclick(e) {
 function _updatePolyVisual() {
     const svg = document.getElementById("region-draw-svg");
     const line = document.getElementById("region-draw-line");
+    const poly = document.getElementById("region-draw-poly");
     const verts = document.getElementById("region-draw-vertices");
     if (!svg || !line || !verts) return;
     svg.hidden = false;
 
-    // Polyline from first vertex through all placed vertices + cursor
-    const segs = _regionPolyPoints.slice();
-    if (_regionPolyCursor) segs.push([_regionPolyCursor.x, _regionPolyCursor.y]);
+    // When we have 3+ vertices, show a translucent polygon fill
+    // between them (plus the dashed line to the cursor).
+    const pts = _regionPolyPoints;
+    if (poly) {
+        if (pts.length >= 3) {
+            poly.hidden = false;
+            poly.setAttribute("points", pts.map(p => p.join(",")).join(" "));
+        } else {
+            poly.hidden = true;
+        }
+    }
+
+    // Dashed "rubber-band" line from the last vertex to the cursor.
+    // We don't include a segment connecting last→first here — the
+    // closed polygon above handles that visual once closed.
+    const segs = pts.slice();
+    if (_regionPolyCursor && _polyDraggingVertex < 0) {
+        segs.push([_regionPolyCursor.x, _regionPolyCursor.y]);
+    }
     line.setAttribute("points", segs.map(p => p.join(",")).join(" "));
 
-    // Vertex dots
+    // Vertex dots — bigger + CSS-driven hover/drag states
     verts.innerHTML = "";
-    _regionPolyPoints.forEach((p, i) => {
+    pts.forEach((p, i) => {
         const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
         c.setAttribute("cx", p[0]);
         c.setAttribute("cy", p[1]);
-        c.setAttribute("r", "4");
-        c.setAttribute("class", i === 0 ? "region-draw-vertex first-vertex" : "region-draw-vertex");
+        c.setAttribute("r", "7");
+        let cls = "region-draw-vertex";
+        if (i === 0 && pts.length >= 3) cls += " first-vertex";
+        if (i === _polyDraggingVertex) cls += " is-dragging";
+        c.setAttribute("class", cls);
         verts.appendChild(c);
     });
 }
@@ -8089,11 +8159,15 @@ function applyRegionFilter(shape) {
     state.regionFilter = shape;
     _regionActive = true;  // new drawing always starts active
 
-    // Paint the persistent Leaflet overlay matching the shape type
-    if (shape.type === "circle") {
-        _regionAppliedLayer = L.circle(
-            [shape.centerLat, shape.centerLng],
-            { radius: shape.radiusKm * 1000, className: "region-applied", interactive: false }
+    // Paint the persistent Leaflet overlay matching the shape type.
+    // Leaflet has no built-in "ellipse in lat/lng" layer, so for
+    // ellipse we approximate with a 64-vertex polygon that matches
+    // the point-in-ellipse test the filter uses.
+    if (shape.type === "ellipse") {
+        const pts = _ellipseToPolygonPoints(shape, 64);
+        _regionAppliedLayer = L.polygon(
+            pts,
+            { className: "region-applied", interactive: false }
         ).addTo(state.map);
     } else if (shape.type === "polygon") {
         _regionAppliedLayer = L.polygon(
@@ -8115,7 +8189,7 @@ function applyRegionFilter(shape) {
 // Compute a [south, north, west, east] bbox for any shape type.
 // Used for fast pre-cull in deck.js's hot loop.
 function _computeShapeBbox(shape) {
-    if (shape.type === "rect") {
+    if (shape.type === "rect" || shape.type === "ellipse") {
         return [shape.south, shape.north, shape.west, shape.east];
     }
     if (shape.type === "polygon") {
@@ -8128,19 +8202,22 @@ function _computeShapeBbox(shape) {
         }
         return [s, n, w, e];
     }
-    if (shape.type === "circle") {
-        // Degree approximation: 111km ≈ 1 degree latitude. Longitude
-        // varies with cos(lat); use the center's cos as a safe bound.
-        const dLat = shape.radiusKm / 111;
-        const dLng = shape.radiusKm / (111 * Math.max(0.01, Math.cos(shape.centerLat * Math.PI / 180)));
-        return [
-            shape.centerLat - dLat,
-            shape.centerLat + dLat,
-            shape.centerLng - dLng,
-            shape.centerLng + dLng,
-        ];
-    }
     return null;
+}
+
+// Convert an ellipse shape to a polygon approximation (for the
+// persistent Leaflet overlay). N vertices traces the ellipse.
+function _ellipseToPolygonPoints(shape, n) {
+    const cLat = (shape.north + shape.south) / 2;
+    const cLng = (shape.east + shape.west) / 2;
+    const rLat = (shape.north - shape.south) / 2;
+    const rLng = (shape.east - shape.west) / 2;
+    const pts = [];
+    for (let i = 0; i < n; i++) {
+        const t = (i / n) * 2 * Math.PI;
+        pts.push([cLat + rLat * Math.sin(t), cLng + rLng * Math.cos(t)]);
+    }
+    return pts;
 }
 
 function clearRegionFilter() {
@@ -8173,9 +8250,11 @@ function _renderRegionChip() {
         return `${abs}°${v >= 0 ? posLabel : negLabel}`;
     };
     let label = "";
-    if (r.type === "circle") {
-        const center = `${fmt(r.centerLat, "N", "S")}, ${fmt(r.centerLng, "E", "W")}`;
-        label = `○ ${center} · ${r.radiusKm.toFixed(0)}km radius`;
+    if (r.type === "ellipse") {
+        const cLat = (r.north + r.south) / 2;
+        const cLng = (r.east + r.west) / 2;
+        const center = `${fmt(cLat, "N", "S")}, ${fmt(cLng, "E", "W")}`;
+        label = `○ ${center} ellipse`;
         if (icon) icon.textContent = "○";
     } else if (r.type === "polygon") {
         label = `⬠ ${r.points.length}-vertex polygon`;
@@ -8194,21 +8273,19 @@ function _renderRegionChip() {
 
 // URL hash encoding formats (2-decimal precision throughout):
 //   rect:south,west;north,east
-//   circle:lat,lng,radiusKm
+//   ellipse:south,west;north,east   (same corners as rect, different math)
 //   poly:lat1,lng1;lat2,lng2;...;latN,lngN
 function _encodeRegionHash() {
     const r = state.regionFilter;
     if (!r) return null;
     const f = (n) => Number(n).toFixed(2);
-    if (r.type === "circle") {
-        return `circle:${f(r.centerLat)},${f(r.centerLng)},${f(r.radiusKm)}`;
-    }
     if (r.type === "polygon") {
         return "poly:" + r.points.map(([lat, lng]) => `${f(lat)},${f(lng)}`).join(";");
     }
-    // rect
+    // rect + ellipse share the same two-corner format
+    const prefix = r.type === "ellipse" ? "ellipse" : "rect";
     const [s, n, w, e] = r.bbox;
-    return `rect:${f(s)},${f(w)};${f(n)},${f(e)}`;
+    return `${prefix}:${f(s)},${f(w)};${f(n)},${f(e)}`;
 }
 function _decodeRegionHash(val) {
     if (!val || typeof val !== "string") return null;
@@ -8217,24 +8294,16 @@ function _decodeRegionHash(val) {
     const kind = val.slice(0, colonIdx);
     const rest = val.slice(colonIdx + 1);
 
-    if (kind === "rect") {
+    if (kind === "rect" || kind === "ellipse") {
         const parts = rest.split(";");
         if (parts.length !== 2) return null;
         const [sw, ne] = parts.map(p => p.split(",").map(Number));
         if (sw.length !== 2 || ne.length !== 2) return null;
         if (sw.some(isNaN) || ne.some(isNaN)) return null;
         return {
-            type: "rect",
+            type: kind,
             south: sw[0], west: sw[1],
             north: ne[0], east: ne[1],
-        };
-    }
-    if (kind === "circle") {
-        const nums = rest.split(",").map(Number);
-        if (nums.length !== 3 || nums.some(isNaN)) return null;
-        return {
-            type: "circle",
-            centerLat: nums[0], centerLng: nums[1], radiusKm: nums[2],
         };
     }
     if (kind === "poly") {

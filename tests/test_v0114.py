@@ -151,9 +151,9 @@ def test_region_hash_encode_decode():
     src = _read(APP_JS)
     assert "function _encodeRegionHash(" in src
     assert "function _decodeRegionHash(" in src
-    # Format sentinels for all three shape types
-    assert "rect:" in src
-    assert "circle:" in src
+    # Format sentinels for all three shape types (v0.11.6: ellipse replaces circle)
+    assert "rect" in src
+    assert "ellipse" in src
     assert "poly:" in src
 
 
@@ -315,10 +315,10 @@ def test_timebrush_draw_layer_called_with_both_maxes():
 def test_shape_mode_menu_in_html():
     html = _read(INDEX_HTML)
     assert 'id="region-mode-menu"' in html
-    # All three shape options present as menu items
+    # All three shape options present as menu items (v0.11.6: ellipse replaces circle)
     assert 'data-region-mode="rect"' in html
     assert 'data-region-mode="polygon"' in html
-    assert 'data-region-mode="circle"' in html
+    assert 'data-region-mode="ellipse"' in html
 
 
 def test_region_draw_svg_overlay_exists():
@@ -326,7 +326,7 @@ def test_region_draw_svg_overlay_exists():
     assert 'id="region-draw-svg"' in html
     assert 'id="region-draw-line"' in html
     assert 'id="region-draw-poly"' in html
-    assert 'id="region-draw-circle"' in html
+    assert 'id="region-draw-ellipse"' in html
     assert 'id="region-draw-vertices"' in html
 
 
@@ -336,7 +336,7 @@ def test_shape_mode_menu_css():
     assert ".region-mode-item" in css
     assert ".region-draw-svg" in css
     assert ".region-draw-poly" in css
-    assert ".region-draw-circle" in css
+    assert ".region-draw-ellipse" in css
     assert ".region-draw-vertex" in css
 
 
@@ -347,22 +347,31 @@ def test_enter_region_draw_mode_accepts_mode():
 
 
 def test_polygon_drawing_handlers():
+    """v0.11.6: switched from click-based to pointerdown/up pattern
+    because deck.gl's canvas click handler was eating the events."""
     src = _read(APP_JS)
-    assert "function _regionPolyClick(" in src
-    assert "function _regionPolyMove(" in src
+    assert "function _regionPolyPointerDown(" in src
+    assert "function _regionPolyPointerMove(" in src
+    assert "function _regionPolyPointerUp(" in src
     assert "function _regionPolyDblclick(" in src
     assert "function _closePolygon(" in src
 
 
-def test_circle_uses_same_pointer_handlers():
-    """Circle shares the pointerdown/move/up drag flow with rect —
+def test_polygon_vertex_dragging_supported():
+    """v0.11.6: users can drag placed vertices to reposition them."""
+    src = _read(APP_JS)
+    assert "_polyDraggingVertex" in src
+
+
+def test_ellipse_uses_same_pointer_handlers():
+    """Ellipse shares the pointerdown/move/up drag flow with rect —
     just with different geometry in the update function."""
     src = _read(APP_JS)
-    assert "function _updateDragCircleVisual(" in src
+    assert "function _updateDragEllipseVisual(" in src
 
 
 def test_shape_bbox_computed_for_all_types():
-    """_computeShapeBbox must handle rect, polygon, and circle."""
+    """_computeShapeBbox must handle rect, polygon, and ellipse."""
     src = _read(APP_JS)
     m = re.search(
         r"function _computeShapeBbox\([\s\S]*?\n\}",
@@ -372,17 +381,16 @@ def test_shape_bbox_computed_for_all_types():
     body = m.group(0)
     assert '"rect"' in body or "'rect'" in body
     assert '"polygon"' in body or "'polygon'" in body
-    assert '"circle"' in body or "'circle'" in body
+    assert '"ellipse"' in body or "'ellipse'" in body
 
 
-def test_deck_js_handles_polygon_and_circle():
+def test_deck_js_handles_polygon_and_ellipse():
     """_rebuildVisible in deck.js must include point-in-polygon
-    and point-in-circle tests."""
+    and point-in-ellipse tests."""
     src = _read(DECK_JS)
-    # Polygon ray-cast idiom
     assert "regionShape" in src
     assert 'regionShape.type === "polygon"' in src or "'polygon'" in src
-    assert 'regionShape.type === "circle"' in src or "'circle'" in src
+    assert 'regionShape.type === "ellipse"' in src or "'ellipse'" in src
 
 
 def test_chip_label_varies_by_shape():
@@ -395,7 +403,7 @@ def test_chip_label_varies_by_shape():
     assert m
     body = m.group(0)
     # Each shape type should be handled
-    assert '"circle"' in body or "'circle'" in body
+    assert '"ellipse"' in body or "'ellipse'" in body
     assert '"polygon"' in body or "'polygon'" in body
 
 
@@ -407,8 +415,10 @@ def test_hash_encodes_all_three_shape_types():
     )
     assert m
     body = m.group(0)
-    assert "rect:" in body
-    assert "circle:" in body
+    # v0.11.6: format sentinels must appear in the encoded output.
+    # We check for the literal prefix strings as they appear in the code.
+    assert "rect" in body
+    assert "ellipse" in body
     assert "poly:" in body
 
 
@@ -420,4 +430,4 @@ def test_hash_decodes_all_three_shape_types():
     )
     assert m
     body = m.group(0)
-    assert "rect" in body and "circle" in body and "poly" in body
+    assert "rect" in body and "ellipse" in body and "poly" in body

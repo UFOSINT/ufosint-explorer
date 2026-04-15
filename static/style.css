@@ -5269,23 +5269,36 @@ body[data-hide-brush] .observatory-time-brush {
     stroke-opacity: 0.95;
 }
 .region-draw-poly[hidden] { display: none; }
-.region-draw-circle {
+.region-draw-ellipse {
     fill: var(--accent);
     fill-opacity: 0.08;
     stroke: var(--accent);
     stroke-width: 2;
 }
-.region-draw-circle[hidden] { display: none; }
+.region-draw-ellipse[hidden] { display: none; }
 .region-draw-vertex {
     fill: var(--accent);
     stroke: #fff;
-    stroke-width: 1.5;
-    r: 4;
+    stroke-width: 2;
+    r: 7;
+    cursor: grab;
+    pointer-events: auto;   /* draggable — override SVG pointer-events:none */
+}
+.region-draw-vertex:hover {
+    r: 9;
+    fill-opacity: 0.9;
+}
+.region-draw-vertex.is-dragging {
+    cursor: grabbing;
+    r: 10;
 }
 .region-draw-vertex.first-vertex {
-    r: 6;
-    stroke-width: 2;
+    r: 9;
+    stroke-width: 2.5;
     animation: region-vertex-pulse 1s ease-in-out infinite;
+}
+.region-draw-vertex.first-vertex:hover {
+    r: 11;
 }
 @keyframes region-vertex-pulse {
     0%, 100% { fill-opacity: 1; }
