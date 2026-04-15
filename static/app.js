@@ -7888,12 +7888,19 @@ function _exitRegionDrawMode() {
 
 function _resizeRegionSvg() {
     const svg = document.getElementById("region-draw-svg");
-    const mapEl = state.map?.getContainer();
-    if (!svg || !mapEl) return;
-    const rect = mapEl.getBoundingClientRect();
-    svg.setAttribute("viewBox", `0 0 ${rect.width} ${rect.height}`);
-    svg.style.width = rect.width + "px";
-    svg.style.height = rect.height + "px";
+    if (!svg) return;
+    // v0.11.8: use the SVG's own parent (observatory-canvas-wrap) for
+    // sizing. The map container may have margins/padding that offset
+    // its rect; the SVG parent is where our inset:0 positioning puts
+    // us, so its bounds are what our pixel coords should match.
+    const parent = svg.parentElement;
+    if (!parent) return;
+    const rect = parent.getBoundingClientRect();
+    const w = Math.max(1, Math.round(rect.width));
+    const h = Math.max(1, Math.round(rect.height));
+    svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+    svg.style.width = w + "px";
+    svg.style.height = h + "px";
 }
 
 function _regionPointerDown(e) {

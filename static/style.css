@@ -5165,14 +5165,17 @@ body[data-hide-brush] .observatory-time-brush {
     background: var(--accent);
 }
 
-/* The rectangle drag overlay — rendered absolutely over the map */
+/* The rectangle drag overlay — rendered absolutely over the map.
+   v0.11.8: z-index boosted to 1100 (matching the SVG overlay) so
+   it's always visible during drag regardless of Leaflet pane stack. */
 .region-drag-rect {
     position: absolute;
-    z-index: 620;
+    z-index: 1100;
     pointer-events: none;
-    background: rgba(0, 240, 255, 0.08);
-    border: 2px solid var(--accent);
-    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+    background: rgba(0, 240, 255, 0.12);
+    border: 2px dashed var(--accent);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4),
+                0 0 12px rgba(0, 240, 255, 0.4);
 }
 .region-drag-rect[hidden] { display: none; }
 
