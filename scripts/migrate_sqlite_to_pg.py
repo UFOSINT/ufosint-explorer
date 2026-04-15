@@ -68,6 +68,13 @@ TABLES = [
         # on pre-v0.8.3 schemas, so an old PG schema still receives the
         # v0.8.2 fields without error.
         "has_movement_mentioned", "movement_categories",
+        # v0.11 — emotion classification. Requires
+        # add_v011_emotion_columns.sql on the PG side. Same column-probe
+        # graceful-skip pattern as above.
+        "emotion_28_dominant", "emotion_28_group",
+        "emotion_7_dominant", "vader_compound", "roberta_sentiment",
+        "emotion_7_surprise", "emotion_7_fear", "emotion_7_neutral",
+        "emotion_7_anger", "emotion_7_disgust", "emotion_7_sadness", "emotion_7_joy",
     ]),
     ("attachment", ["id", "sighting_id", "url", "file_type", "description"]),
     ("sighting_reference", ["sighting_id", "reference_id"]),
