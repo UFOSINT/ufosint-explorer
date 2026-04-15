@@ -7,12 +7,21 @@ to reproduce it in a fresh Azure subscription.
 
 | Resource | SKU | Monthly cost (Apr 2026) | Notes |
 |----------|-----|-------------------------|-------|
-| Azure App Service Plan (Linux) | B1 | ~$13 | 1.75 GB RAM, 1 vCPU |
-| Azure App Service (ufosint-explorer) | — | included | Python 3.12 runtime |
-| Azure Database for PostgreSQL Flexible Server | Burstable B1ms | ~$15 | 2 GB RAM, 1 vCore, 32 GB storage |
-| **Total**                      |     | **~$28/mo**             | |
+| Azure App Service Plan — prod (`plan-ufosint-prod`) | B2 | ~$55 | 3.5 GB RAM, 2 vCPUs |
+| Azure App Service — prod (`ufosint-explorer`) | — | included | Python 3.12 runtime, ufosint.com |
+| Azure App Service Plan — staging (`plan-ufosint-staging`) | B1 | ~$13 | 1.75 GB RAM, 1 vCPU |
+| Azure App Service — staging (`ufosint-explorer-staging`) | — | included | Same runtime, auto-deploys `feature/*` branches |
+| Azure Database for PostgreSQL Flexible Server | Burstable B1ms | ~$15 | 2 GB RAM, 1 vCore, 32 GB storage. Shared between prod + staging. |
+| **Total**                      |     | **~$83/mo**             | |
 
-Resource group: `rg-ufosint-prod`. Region: `centralus`.
+Resource group: `rg-ufosint-prod` (shared). Region: `centralus`.
+
+### Deploy targets
+
+| URL | Branch | Workflow | Purpose |
+|-----|--------|----------|---------|
+| https://ufosint.com | `main`, tags `v*` | `azure-deploy.yml` | Production. Runs full DB migrations + smoke tests. |
+| https://ufosint-explorer-staging.azurewebsites.net | `feature/**` | `azure-deploy-staging.yml` | Feature testing. Skips migrations (shared DB). |
 
 ## 2. One-time setup
 

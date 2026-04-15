@@ -1,0 +1,181 @@
+name: Deploy to Staging
+
+# Triggers on push to any feature/* branch + manual dispatch.
+# Deploys to the B1 staging App Service at:
+#   https://ufosint-explorer-staging.azurewebsites.net
+#
+# Staging shares the production PostgreSQL database (read-only from
+# the app), so no DB migrations run here — the prod deploy workflow
+# owns all schema changes.
+#
+# Pipeline stages:
+#   1. test   — lint + pytest + node -c static/app.js (same as prod)
+#   2. build  — zip the deployment artifact
+#   3. deploy — azure/webapps-deploy@v3 uploads to staging App Service
+#   4. smoke  — minimal health checks against staging URL
+
+on:
+  push:
+    branches:
+      - 'feature/**'
+  workflow_dispatch:
+
+env:
+  AZURE_WEBAPP_NAME: ufosint-explorer-staging
+  PYTHON_VERSION: '3.12'
+  LIVE_URL: https://ufosint-explorer-staging.azurewebsites.net
+
+permissions:
+  contents: read
+
+jobs:
+  # -----------------------------------------------------------------
+  # 1. TEST — must pass before build/deploy runs
+  # -----------------------------------------------------------------
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Set up Node.js (for JS syntax check)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Check JS syntax
+        run: node -c static/app.js && node -c static/deck.js
+
+      - name: Run pytest
+        run: pytest tests/ -v
+
+  # -----------------------------------------------------------------
+  # 2. BUILD — zip the deployment artifact (same pattern as prod)
+  # -----------------------------------------------------------------
+  build:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install production dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Create deployment package
+        run: |
+          zip -r release.zip . \
+            -x "*.git*" \
+            -x "venv/*" \
+            -x ".venv/*" \
+            -x "__pycache__/*" \
+            -x "**/__pycache__/*" \
+            -x "*.pyc" \
+            -x "tests/*" \
+            -x "requirements-dev.txt" \
+            -x "pyproject.toml" \
+            -x "*.db" \
+            -x "*.db-*"
+
+      - name: Upload artifact for deployment job
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-app-staging
+          path: release.zip
+          retention-days: 3
+
+  # -----------------------------------------------------------------
+  # 3. DEPLOY — upload to staging App Service
+  # No DB migrations — staging shares the prod database.
+  # -----------------------------------------------------------------
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    environment:
+      name: Staging
+      url: ${{ steps.deploy-to-webapp.outputs.webapp-url }}
+    steps:
+      - name: Download artifact from build job
+        uses: actions/download-artifact@v4
+        with:
+          name: python-app-staging
+
+      - name: Unzip artifact for deployment
+        run: unzip -o release.zip
+
+      - name: Deploy to Azure Web App (Staging)
+        id: deploy-to-webapp
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_STAGING }}
+
+  # -----------------------------------------------------------------
+  # 4. SMOKE — minimal health check against staging
+  # Less exhaustive than prod smoke — staging is for feature testing,
+  # not a production gate.
+  # -----------------------------------------------------------------
+  smoke:
+    runs-on: ubuntu-latest
+    needs: deploy
+    steps:
+      - name: Wait for container restart
+        run: sleep 45
+
+      - name: Probe /health with retry
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            echo "[$attempt/10] GET $LIVE_URL/health"
+            body=$(curl -sS --max-time 30 "$LIVE_URL/health" || true)
+            if [[ "$body" == *'"status":"ok"'* && "$body" == *'"sightings":'* ]]; then
+              echo "OK: $body"
+              exit 0
+            fi
+            echo "  got: ${body:0:200}"
+            sleep 15
+          done
+          echo "::error::staging /health never returned status=ok after 10 attempts"
+          exit 1
+
+      - name: Probe / for versioned asset URLs
+        shell: bash
+        run: |
+          set -euo pipefail
+          html=""
+          for attempt in 1 2 3 4 5; do
+            echo "[$attempt/5] GET $LIVE_URL/"
+            html=$(curl -sS --max-time 30 "$LIVE_URL/?smoke=$(date +%s)" || true)
+            if [[ "$html" == *"style.css?v="* \
+               && "$html" == *"app.js?v="* \
+               && "$html" != *'{{ASSET_VERSION}}'* ]]; then
+              echo "OK: HTML contains versioned asset URLs"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::staging HTML never contained valid versioned asset URLs"
+          exit 1
