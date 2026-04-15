@@ -7998,6 +7998,7 @@ function _updateDragEllipseVisual() {
             className: "region-preview-shape",
             dashArray: "6, 4",
             interactive: false,
+            renderer: _getRegionRenderer(),
         }).addTo(map);
     }
 }
@@ -8115,6 +8116,24 @@ let _polyVertexMarkers = [];    // L.circleMarker[]
 let _polyLinePreview = null;    // L.polyline (dashed, follows cursor)
 let _polyFillPreview = null;    // L.polygon (shown when 3+ vertices)
 
+// v0.11.10: the Leaflet map is initialised with preferCanvas:true,
+// which means L.polygon / L.circleMarker / L.polyline use a canvas
+// renderer by default. That canvas sits above the deck.gl canvas in
+// DOM order and intercepts pointer events regardless of
+// interactive:false on individual shapes — so clicks on map points
+// stopped working after drawing a region.
+//
+// Force an SVG renderer for all region-related layers. Paths with
+// interactive:false get `pointer-events: none` in SVG, which lets
+// clicks pass through to the deck.gl canvas below.
+let _regionSvgRenderer = null;
+function _getRegionRenderer() {
+    if (!_regionSvgRenderer) {
+        _regionSvgRenderer = L.svg({ padding: 0.1 });
+    }
+    return _regionSvgRenderer;
+}
+
 function _updatePolyVisual() {
     if (!state.map) return;
     const map = state.map;
@@ -8134,6 +8153,7 @@ function _updatePolyVisual() {
                 className: "region-preview-shape",
                 dashArray: null,
                 interactive: false,
+                renderer: _getRegionRenderer(),
             }).addTo(map);
         }
     } else if (_polyFillPreview) {
@@ -8157,6 +8177,7 @@ function _updatePolyVisual() {
                 className: "region-preview-line",
                 dashArray: "6, 4",
                 interactive: false,
+                renderer: _getRegionRenderer(),
             }).addTo(map);
         }
     } else if (_polyLinePreview) {
@@ -8189,6 +8210,7 @@ function _updatePolyVisual() {
                 className: cls,
                 interactive: false,
                 bubblingMouseEvents: false,
+                renderer: _getRegionRenderer(),
             }).addTo(map);
             _polyVertexMarkers.push(marker);
         }
@@ -8250,21 +8272,20 @@ function applyRegionFilter(shape) {
     // Leaflet has no built-in "ellipse in lat/lng" layer, so for
     // ellipse we approximate with a 64-vertex polygon that matches
     // the point-in-ellipse test the filter uses.
+    const _regionLayerOpts = {
+        className: "region-applied",
+        interactive: false,
+        renderer: _getRegionRenderer(),
+    };
     if (shape.type === "ellipse") {
         const pts = _ellipseToPolygonPoints(shape, 64);
-        _regionAppliedLayer = L.polygon(
-            pts,
-            { className: "region-applied", interactive: false }
-        ).addTo(state.map);
+        _regionAppliedLayer = L.polygon(pts, _regionLayerOpts).addTo(state.map);
     } else if (shape.type === "polygon") {
-        _regionAppliedLayer = L.polygon(
-            shape.points,
-            { className: "region-applied", interactive: false }
-        ).addTo(state.map);
+        _regionAppliedLayer = L.polygon(shape.points, _regionLayerOpts).addTo(state.map);
     } else {
         _regionAppliedLayer = L.rectangle(
             [[shape.south, shape.west], [shape.north, shape.east]],
-            { className: "region-applied", interactive: false }
+            _regionLayerOpts
         ).addTo(state.map);
     }
     _renderRegionChip();
