@@ -5139,6 +5139,14 @@ body[data-hide-brush] .observatory-time-brush {
     pointer-events: auto;
 }
 .region-chip[hidden] { display: none; }
+.region-chip.is-disabled {
+    border-color: var(--border);
+    opacity: 0.6;
+}
+.region-chip.is-disabled .region-chip-icon,
+.region-chip.is-disabled .region-chip-text strong {
+    color: var(--text-muted);
+}
 .region-chip-icon { color: var(--accent); font-size: 13px; }
 .region-chip-text strong { color: var(--accent); font-weight: 600; }
 .region-chip-clear {
@@ -5186,10 +5194,49 @@ body[data-hide-brush] .observatory-time-brush {
     fill-opacity: 0.08;
 }
 
+/* Brush-bar REGION toggle — lets users flip the spatial filter
+   on/off from the TimeBrush (visible across all tabs). */
+.brush-region-toggle {
+    background: transparent;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    padding: 5px 10px;
+    border-radius: var(--r-sm);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    transition: background var(--t-fast), color var(--t-fast), opacity var(--t-fast);
+}
+.brush-region-toggle[hidden] { display: none; }
+.brush-region-toggle:hover {
+    background: var(--accent);
+    color: var(--bg);
+}
+.brush-region-toggle[aria-pressed="false"] {
+    opacity: 0.55;
+    border-color: var(--border);
+    color: var(--text-muted);
+}
+.brush-region-toggle[aria-pressed="false"]:hover {
+    background: var(--surface-2);
+    color: var(--text);
+    border-color: var(--text-muted);
+}
+.brush-region-toggle-icon {
+    font-size: 12px;
+    line-height: 1;
+}
+
 @media (max-width: 700px) {
     .region-draw-btn span { display: none; }  /* icon-only on mobile */
     .region-draw-btn { padding: 6px 8px; }
     .region-banner { top: 48px; left: 8px; right: 8px; font-size: 10px; padding: 6px 10px; }
     .region-chip { top: 48px; left: 8px; font-size: 10px; }
+    .brush-region-toggle-text { display: none; }
+    .brush-region-toggle { padding: 5px 8px; }
 }
 

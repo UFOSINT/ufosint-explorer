@@ -1439,6 +1439,15 @@ DATABASE_URL="postgresql://..." python mcp_server.py</code></pre>
                     </div>
                     <button id="brush-reset-view" class="brush-reset-btn" type="button"
                             title="Zoom out to full range (or double-click the timeline)" hidden>RESET VIEW</button>
+                    <!-- v0.11.4 — Region filter toggle. Only visible
+                         when a region is drawn. Click to temporarily
+                         disable the spatial filter without clearing
+                         it. Click again to re-enable. -->
+                    <button id="brush-region-toggle" class="brush-region-toggle" type="button"
+                            title="Toggle region filter on/off" aria-pressed="true" hidden>
+                        <span class="brush-region-toggle-icon" aria-hidden="true">▭</span>
+                        <span class="brush-region-toggle-text">REGION ON</span>
+                    </button>
                     <!-- v0.9.2 — explicit Apply button. Brush drag
                          now commits the filter live via deck.gl's
                          setTimeWindow on every pointermove, so the

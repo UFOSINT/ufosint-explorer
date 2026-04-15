@@ -1788,8 +1788,10 @@ function applyClientFilters() {
         // v0.11.4 — region bbox (geofence) from the REGION draw tool.
         // Array [south, north, west, east] or null. _rebuildVisible's
         // hot loop (deck.js ~line 570) already checks this bbox; we
-        // just pass it through from state.regionFilter.
-        bbox: state.regionFilter
+        // just pass it through from state.regionFilter. When the
+        // TimeBrush toggle is OFF, _regionActive=false makes this
+        // null so the filter is ignored without losing the geometry.
+        bbox: (state.regionFilter && _regionActive)
             ? [state.regionFilter.south, state.regionFilter.north,
                state.regionFilter.west, state.regionFilter.east]
             : null,
@@ -2938,16 +2940,35 @@ class TimeBrush {
         const fg = normaliseBins(fgBins);
         const ghost = normaliseBins(ghostBins);
 
-        // Scale against the in-view unfiltered max so filtered bars
-        // shrink visibly rather than renormalising to fill the pane.
-        // Use the ghost if present (unfiltered full-range data),
-        // otherwise fall back to the foreground.
-        const scaleBins = ghost || fg;
-        let max = 1;
-        for (const b of scaleBins) {
+        // v0.11.4: use INDEPENDENT max values for the gray (ghost/
+        // unfiltered) layer and the bright (fg/filtered) layer.
+        //
+        // The old approach used a single `max = ghost.max` for both
+        // layers, which meant a tight filter (1% of rows) made the
+        // bright bars vanish — the filtered distribution's SHAPE
+        // became invisible because every bright bar was 1% the
+        // height of the gray backdrop.
+        //
+        // The new approach scales each layer to its own in-view
+        // peak, so both distributions fill the vertical space.
+        // Tradeoff: a tall bright bar and a tall gray bar at the
+        // same year no longer represent equal counts — but the
+        // filtered shape is now legible, which is what the user
+        // actually wants from the overlay.
+        let maxFull = 1;
+        let maxFiltered = 1;
+        for (const b of (ghost || [])) {
             if (b.startMs < viewL || b.startMs > viewR) continue;
-            if (b.count > max) max = b.count;
+            if (b.count > maxFull) maxFull = b.count;
         }
+        for (const b of fg) {
+            if (b.startMs < viewL || b.startMs > viewR) continue;
+            if (b.count > maxFiltered) maxFiltered = b.count;
+        }
+        // Without an active filter, `ghost` is null and `fg` is the
+        // full data — reuse maxFiltered for both to keep legacy
+        // behavior (the unfiltered bars normalize to their own peak).
+        if (!ghost) maxFull = maxFiltered;
 
         // Bar width: count visible bins so the bar fills the
         // canvas width without overlap. At year gran ~126 bars;
@@ -2961,21 +2982,24 @@ class TimeBrush {
 
         // Shared draw routine for ghost + foreground layers. Each
         // bar's x-coord is computed via _viewTimeToPx so the math
-        // respects the current zoom level.
-        const drawLayer = (bins, alpha, fill) => {
+        // respects the current zoom level. v0.11.4: maxVal is
+        // per-layer so the bright filtered bars normalize to their
+        // own peak instead of shrinking against the unfiltered
+        // max. See the comment block above for the tradeoff.
+        const drawLayer = (bins, alpha, fill, maxVal) => {
             if (!bins) return;
             ctx.fillStyle = fill;
             ctx.globalAlpha = alpha;
             for (const b of bins) {
                 if (b.startMs < viewL || b.startMs > viewR) continue;
                 const x = this._viewTimeToPx(b.startMs);
-                const hBar = (b.count / max) * (h - 14);
+                const hBar = (b.count / maxVal) * (h - 14);
                 ctx.fillRect(x, h - hBar - 2, Math.max(0.6, barW - 0.4), hBar);
             }
             ctx.globalAlpha = 1;
         };
-        drawLayer(ghost, 0.25, accentDim);
-        drawLayer(fg, 0.85, accent);
+        drawLayer(ghost, 0.25, accentDim, maxFull);
+        drawLayer(fg, 0.85, accent, maxFiltered);
 
         // Baseline
         ctx.strokeStyle = line;
@@ -7629,11 +7653,17 @@ let _regionDrawing = false;
 let _regionDragStart = null;   // {x, y} in container pixels
 let _regionDragCurrent = null; // {x, y}
 let _regionAppliedLayer = null; // L.rectangle on the map while filter is active
+// v0.11.4: when a region is DRAWN but the toggle is disabled, we keep
+// the geometry on state.regionFilter but flag it inactive so the filter
+// pipeline ignores it. Lets users A/B compare "with region" vs "without"
+// without redrawing.
+let _regionActive = true;
 
 function initRegionDrawTool() {
     const btn = document.getElementById("region-draw-btn");
     const cancelBtn = document.getElementById("region-cancel-btn");
     const clearBtn = document.getElementById("region-clear-btn");
+    const toggleBtn = document.getElementById("brush-region-toggle");
     if (!btn) return;
 
     btn.addEventListener("click", () => {
@@ -7650,6 +7680,9 @@ function initRegionDrawTool() {
     if (clearBtn) {
         clearBtn.addEventListener("click", () => clearRegionFilter());
     }
+    if (toggleBtn) {
+        toggleBtn.addEventListener("click", () => toggleRegionFilter());
+    }
 
     // Escape cancels draw mode or clears the active filter.
     document.addEventListener("keydown", (e) => {
@@ -7658,6 +7691,45 @@ function initRegionDrawTool() {
             _exitRegionDrawMode();
         }
     });
+}
+
+// v0.11.4 — toggle the region filter on/off without clearing the
+// drawn geometry. Button on the TimeBrush bar (visible across all
+// tabs) so users can A/B compare data with/without the spatial cut.
+function toggleRegionFilter() {
+    if (!state.regionFilter) return;
+    _regionActive = !_regionActive;
+    _syncRegionToggleUi();
+    // Show or hide the Leaflet rectangle overlay
+    if (state.map) {
+        if (_regionActive) {
+            if (_regionAppliedLayer && !state.map.hasLayer(_regionAppliedLayer)) {
+                _regionAppliedLayer.addTo(state.map);
+            }
+        } else {
+            if (_regionAppliedLayer && state.map.hasLayer(_regionAppliedLayer)) {
+                state.map.removeLayer(_regionAppliedLayer);
+            }
+        }
+    }
+    applyFilters();
+}
+
+// v0.11.4 — reflect _regionActive on the toggle button UI + the
+// region chip. Called on toggle + when the filter is applied/cleared.
+function _syncRegionToggleUi() {
+    const toggleBtn = document.getElementById("brush-region-toggle");
+    const txtEl = toggleBtn?.querySelector(".brush-region-toggle-text");
+    if (toggleBtn) {
+        const hasRegion = !!state.regionFilter;
+        toggleBtn.hidden = !hasRegion;
+        toggleBtn.setAttribute("aria-pressed", String(_regionActive));
+        if (txtEl) txtEl.textContent = _regionActive ? "REGION ON" : "REGION OFF";
+    }
+    const chip = document.getElementById("region-chip");
+    if (chip) {
+        chip.classList.toggle("is-disabled", !_regionActive);
+    }
 }
 
 function _enterRegionDrawMode() {
@@ -7788,22 +7860,26 @@ function applyRegionFilter(bbox) {
         _regionAppliedLayer = null;
     }
     state.regionFilter = bbox;
+    _regionActive = true;  // new drawing always starts active
     _regionAppliedLayer = L.rectangle(
         [[bbox.south, bbox.west], [bbox.north, bbox.east]],
         { className: "region-applied", interactive: false }
     ).addTo(state.map);
     _renderRegionChip();
+    _syncRegionToggleUi();
     applyFilters();  // re-runs applyClientFilters + refreshes timeline/insights
     writeHash();
 }
 
 function clearRegionFilter() {
     state.regionFilter = null;
+    _regionActive = true;  // reset for next time
     if (_regionAppliedLayer && state.map) {
         state.map.removeLayer(_regionAppliedLayer);
     }
     _regionAppliedLayer = null;
     _renderRegionChip();
+    _syncRegionToggleUi();
     applyFilters();
     writeHash();
 }

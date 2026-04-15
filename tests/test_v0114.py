@@ -162,9 +162,11 @@ def test_region_hash_encode_decode():
 def test_region_filter_wired_into_apply_client_filters():
     """The bbox in the filter object must read from state.regionFilter."""
     src = _read(APP_JS)
-    # Expect to find state.regionFilter referenced near the bbox field
+    # Expect to find state.regionFilter referenced in the bbox field.
+    # v0.11.4: also guarded by _regionActive so the TimeBrush toggle
+    # can flip the filter without clearing the drawn geometry.
     m = re.search(
-        r"bbox:\s*state\.regionFilter[\s\S]{0,400}",
+        r"bbox:[\s\S]{0,120}state\.regionFilter",
         src,
     )
     assert m, "bbox field in filter object must read from state.regionFilter"
@@ -226,3 +228,73 @@ def test_deck_hot_loop_still_has_bbox_check():
     src = _read(DECK_JS)
     # Look for the lat/lng range check in _rebuildVisible
     assert "south" in src and "north" in src and "west" in src and "east" in src
+
+
+# =============================================================================
+# v0.11.4 — TimeBrush region toggle button (on/off without clearing)
+# =============================================================================
+
+def test_brush_region_toggle_button_exists():
+    html = _read(INDEX_HTML)
+    assert 'id="brush-region-toggle"' in html
+    assert 'class="brush-region-toggle"' in html
+
+
+def test_brush_region_toggle_css():
+    css = _read(STYLE_CSS)
+    assert ".brush-region-toggle" in css
+    # Disabled state via aria-pressed="false"
+    assert '.brush-region-toggle[aria-pressed="false"]' in css
+
+
+def test_toggle_region_filter_function():
+    src = _read(APP_JS)
+    assert "function toggleRegionFilter(" in src
+    assert "function _syncRegionToggleUi(" in src
+
+
+def test_region_active_flag_respected_in_pipeline():
+    """bbox must only flow into the filter when _regionActive is true."""
+    src = _read(APP_JS)
+    # The bbox line should check _regionActive
+    assert re.search(
+        r"bbox:\s*\(state\.regionFilter\s*&&\s*_regionActive\)",
+        src,
+    ), "bbox field must AND-check _regionActive so toggle OFF bypasses the filter"
+
+
+def test_region_chip_disabled_state_css():
+    css = _read(STYLE_CSS)
+    assert ".region-chip.is-disabled" in css
+
+
+# =============================================================================
+# v0.11.4 — TimeBrush histogram normalization
+# =============================================================================
+
+def test_timebrush_uses_independent_max_for_layers():
+    """The histogram must compute separate max values for the
+    ghost (unfiltered) and fg (filtered) layers so filtered bars
+    normalize to their own peak instead of vanishing."""
+    src = _read(APP_JS)
+    # Both per-layer max values must exist
+    assert "maxFull" in src
+    assert "maxFiltered" in src
+
+
+def test_timebrush_draw_layer_takes_max_param():
+    """drawLayer helper must accept a per-layer max parameter."""
+    src = _read(APP_JS)
+    # Pattern: drawLayer arrow function signature includes maxVal (or similar)
+    m = re.search(
+        r"drawLayer\s*=\s*\([^)]*\bmaxVal\b[^)]*\)\s*=>",
+        src,
+    )
+    assert m, "drawLayer must accept a maxVal parameter"
+
+
+def test_timebrush_draw_layer_called_with_both_maxes():
+    """Both drawLayer calls must pass a distinct max."""
+    src = _read(APP_JS)
+    assert "drawLayer(ghost," in src and "maxFull" in src
+    assert "drawLayer(fg," in src and "maxFiltered" in src
