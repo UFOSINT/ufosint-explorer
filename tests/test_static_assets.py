@@ -77,9 +77,11 @@ def test_index_html_has_expected_svg_count():
     """
     content = _read(INDEX_HTML)
     # v0.11.9: added observatory DQ gear, removed Sources + Shapes
-    # sections, added 3 analytics sections. Actual count: 19.
-    assert len(_SVG_OPEN_RE.findall(content)) == 19, (
-        "Expected 19 inline SVGs in index.html. If this changed "
+    # sections, added 3 analytics sections. Cleanup pass removed
+    # the dead #region-draw-svg overlay (the preview now runs
+    # through Leaflet-native layers). Actual count: 18.
+    assert len(_SVG_OPEN_RE.findall(content)) == 18, (
+        "Expected 18 inline SVGs in index.html. If this changed "
         "intentionally, update the expected count."
     )
 

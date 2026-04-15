@@ -7827,12 +7827,8 @@ function _enterRegionDrawMode(mode) {
     state.map.boxZoom.disable();
     state.map.doubleClickZoom.disable();
 
-    // v0.11.8: SVG overlay is no longer used for preview rendering —
-    // rectangle uses the DOM DIV, ellipse and polygon use Leaflet-
-    // native layers. The SVG stays hidden for now (kept in the DOM
-    // for potential future use but inactive).
-    const svg = document.getElementById("region-draw-svg");
-    if (svg) svg.hidden = true;
+    // v0.11.9: SVG overlay fully removed. Rectangle uses the DOM
+    // DIV overlay, ellipse + polygon use Leaflet-native layers.
 
     const mapEl = state.map.getContainer();
     if (mode === "polygon") {
@@ -7864,26 +7860,13 @@ function _exitRegionDrawMode() {
     const btn = document.getElementById("region-draw-btn");
     const banner = document.getElementById("region-banner");
     const dragRect = document.getElementById("region-drag-rect");
-    const svg = document.getElementById("region-draw-svg");
     const wrap = document.querySelector(".observatory-canvas-wrap");
     if (btn) btn.classList.remove("active");
     if (btn) btn.setAttribute("aria-pressed", "false");
     if (banner) banner.hidden = true;
     if (dragRect) dragRect.hidden = true;
-    if (svg) {
-        svg.hidden = true;
-        const line = document.getElementById("region-draw-line");
-        const poly = document.getElementById("region-draw-poly");
-        const ell = document.getElementById("region-draw-ellipse");
-        const verts = document.getElementById("region-draw-vertices");
-        if (line) line.setAttribute("points", "");
-        if (poly) { poly.setAttribute("points", ""); poly.hidden = true; }
-        if (ell) { ell.setAttribute("rx", "0"); ell.setAttribute("ry", "0"); ell.hidden = true; }
-        if (verts) verts.innerHTML = "";
-    }
-    // v0.11.7 — tear down Leaflet-native polygon vertex markers
+    // Tear down Leaflet-native preview layers
     _clearPolyVertexMarkers();
-    // v0.11.8 — tear down Leaflet-native ellipse preview
     _clearEllipsePreview();
     if (wrap) wrap.classList.remove("region-drawing");
 
@@ -7906,22 +7889,10 @@ function _exitRegionDrawMode() {
     }
 }
 
-function _resizeRegionSvg() {
-    const svg = document.getElementById("region-draw-svg");
-    if (!svg) return;
-    // v0.11.8: use the SVG's own parent (observatory-canvas-wrap) for
-    // sizing. The map container may have margins/padding that offset
-    // its rect; the SVG parent is where our inset:0 positioning puts
-    // us, so its bounds are what our pixel coords should match.
-    const parent = svg.parentElement;
-    if (!parent) return;
-    const rect = parent.getBoundingClientRect();
-    const w = Math.max(1, Math.round(rect.width));
-    const h = Math.max(1, Math.round(rect.height));
-    svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
-    svg.style.width = w + "px";
-    svg.style.height = h + "px";
-}
+// v0.11.9: _resizeRegionSvg was removed along with the SVG overlay —
+// preview rendering moved to Leaflet-native layers. Pointer event
+// coordinates still use state.map.getContainer().getBoundingClientRect()
+// below, which is where the map canvas lives.
 
 function _regionPointerDown(e) {
     if (!_regionDrawing || !state.map) return;

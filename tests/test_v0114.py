@@ -321,23 +321,25 @@ def test_shape_mode_menu_in_html():
     assert 'data-region-mode="ellipse"' in html
 
 
-def test_region_draw_svg_overlay_exists():
+def test_region_preview_layers_use_leaflet_native():
+    """v0.11.9 cleanup: the old #region-draw-svg overlay was
+    removed — preview rendering now flows through Leaflet-native
+    layers (L.polyline + L.polygon + L.circleMarker)."""
     html = _read(INDEX_HTML)
-    assert 'id="region-draw-svg"' in html
-    assert 'id="region-draw-line"' in html
-    assert 'id="region-draw-poly"' in html
-    assert 'id="region-draw-ellipse"' in html
-    assert 'id="region-draw-vertices"' in html
+    assert 'id="region-draw-svg"' not in html
+    # The rectangle drag DIV overlay is still used (it works fine
+    # as a DOM element at z-index 1100).
+    assert 'id="region-drag-rect"' in html
 
 
 def test_shape_mode_menu_css():
     css = _read(STYLE_CSS)
     assert ".region-mode-menu" in css
     assert ".region-mode-item" in css
-    assert ".region-draw-svg" in css
-    assert ".region-draw-poly" in css
-    assert ".region-draw-ellipse" in css
-    assert ".region-draw-vertex" in css
+    # v0.11.9: preview rules moved to Leaflet-interactive selectors
+    assert ".leaflet-interactive.region-preview-shape" in css
+    assert ".leaflet-interactive.region-preview-line" in css
+    assert ".leaflet-interactive.region-vertex" in css
 
 
 def test_enter_region_draw_mode_accepts_mode():

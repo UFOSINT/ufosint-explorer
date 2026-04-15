@@ -17,6 +17,87 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 Nothing yet.
 
+## [0.11.9] — 2026-04-15 — Region (geofence) draw tool + Live Analytics sidebar
+
+Large feature drop spanning v0.11.3 through v0.11.9 on the
+`feature/geofencing` branch. Ships:
+
+### Added
+- **Region (geofence) draw tool** on the Observatory topbar with a
+  shape picker (Rectangle / Polygon / Ellipse). The drawn shape
+  filters all sightings to that spatial region across Observatory,
+  Timeline, and Insights tabs.
+  - **Rectangle** — click-drag corners. Dashed cyan outline with
+    glow during drag; becomes a persistent Leaflet rectangle once
+    applied.
+  - **Polygon** — click each vertex to place, double-click or click
+    the first vertex to close. Vertex markers are draggable mid-
+    draw so you can fine-tune before closing. Minimum 3 vertices.
+  - **Ellipse** — click-drag corner-to-corner. Rendered as a
+    64-vertex polygon approximation that matches the filter math
+    (standard `(x/a)² + (y/b)² ≤ 1` in lat/lng space).
+- **Region ON/OFF toggle** on the TimeBrush bar. Temporarily
+  disables the spatial filter without clearing the geometry, so
+  you can A/B compare data with and without the region.
+- **URL hash persistence** for all three shapes (2-decimal
+  precision): `rect:s,w;n,e`, `ellipse:s,w;n,e`,
+  `poly:lat1,lng1;...;latN,lngN`. Shapes survive page refresh and
+  tab switches.
+- **Observatory Live Analytics sidebar** — replaces the old dead
+  Sources/Shapes rail sections with a dashboard that updates live
+  on every filter change:
+  - Visible count + percentage of total
+  - Top Shapes horizontal bar chart (top 8)
+  - By Source stacked proportional bar + per-source bars
+  - Quality Score Distribution 10-bucket histogram (red / yellow
+    / cyan by score range)
+  - Time window (unchanged)
+- **Observatory Data Quality gear icon** in the topbar matching the
+  pattern already on Timeline + Insights.
+- **Histogram normalization** on the TimeBrush — filtered bars
+  now scale to their own in-view peak instead of the unfiltered
+  max, so the SHAPE of the filtered subset is always legible even
+  at tight filters (1% of rows).
+- **Feature tour step** for the REGION tool.
+
+### Changed
+- Polygon vertex markers switched to Leaflet-native `L.circleMarker`
+  (previously custom SVG overlay that had z-index issues with the
+  Leaflet pane stack and was invisible during drawing).
+- Ellipse + polygon preview shapes switched to Leaflet-native
+  layers (`L.polygon`, `L.polyline`). Rectangle kept as a DOM DIV
+  overlay since it always worked.
+- `applyClientFilters` now passes `bbox` and `regionShape` fields;
+  `_rebuildVisible` in deck.js runs the bbox cull first (cheap)
+  then exact point-in-shape tests (ray-cast for polygon, standard
+  ellipse formula) only on points that pass.
+
+### Fixed
+- Polygon click-to-place was being eaten by deck.gl's canvas
+  handler; switched to `pointerdown`/`pointerup` pattern with a
+  5px movement threshold.
+- Rectangle drag preview was invisible because its DIV overlay
+  was at z-index 620, below Leaflet's marker/tooltip panes.
+  Raised to 1100 (above the popup pane at 700).
+- Accidental point clicks while panning — now suppressed if the
+  mouse moved >5px between mousedown and mouseup.
+
+### Removed
+- Dead SVG overlay (`#region-draw-svg` and related) — superseded
+  by Leaflet-native preview layers.
+- Observatory rail Sources + Shapes sections (duplicated the top
+  filter bar and the per-source checkboxes had broken semantics).
+- `window._ufoDeckPick` debug handle.
+
+### Infra
+- New staging App Service at
+  `ufosint-explorer-staging.azurewebsites.net` (B1 tier, shared
+  Postgres with prod). Feature branches auto-deploy to staging
+  via `.github/workflows/azure-deploy-staging.yml` so production
+  is never touched until a merge to `main`.
+
+Tests: 570 total (+64 new for v0.11.4–v0.11.9 features).
+
 ## [0.11.2] — 2026-04-12 — Cinematic landing, AI readiness, mobile fixes, credits
 
 ### Added

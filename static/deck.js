@@ -1642,8 +1642,6 @@
                 }
             }
 
-            // Expose for debugging
-            window._ufoDeckPick = _pick;
 
             // Click-vs-drag disambiguation: only open the detail
             // modal if the mouse didn't move between mousedown and
