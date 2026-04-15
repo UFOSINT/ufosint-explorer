@@ -263,49 +263,14 @@
              The Leaflet #map node lives inside this panel. -->
         <div id="panel-observatory" class="panel active">
             <div class="observatory-stage">
-                <aside class="observatory-rail" aria-label="Observatory filters">
-                    <!-- v0.8.2 — Data Quality rail. mountQualityRail()
-                         renders four toggles and greys out any whose
-                         derived column isn't populated yet.
-                         v0.9.0 — each .rail-section now has a
-                         clickable header so the body collapses into
-                         an accordion on touch / narrow viewports.
-                         On desktop the buttons are still there but
-                         the chevron is hidden and sections are
-                         always expanded. -->
-                    <section class="rail-section rail-quality">
-                        <button class="rail-collapse-btn" aria-expanded="true" type="button">
-                            <span>Data Quality</span>
-                            <svg class="rail-chevron" width="10" height="10" viewBox="0 0 12 12" aria-hidden="true">
-                                <path d="M3 4 L6 8 L9 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                            </svg>
-                        </button>
-                        <div class="rail-body">
-                            <ul id="rail-quality-list" class="rail-list rail-toggle-list"></ul>
-                        </div>
-                    </section>
-                    <section class="rail-section">
-                        <button class="rail-collapse-btn" aria-expanded="true" type="button">
-                            <span>Sources</span>
-                            <svg class="rail-chevron" width="10" height="10" viewBox="0 0 12 12" aria-hidden="true">
-                                <path d="M3 4 L6 8 L9 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                            </svg>
-                        </button>
-                        <div class="rail-body">
-                            <ul id="rail-source-list" class="rail-list"></ul>
-                        </div>
-                    </section>
-                    <section class="rail-section">
-                        <button class="rail-collapse-btn" aria-expanded="true" type="button">
-                            <span>Shapes</span>
-                            <svg class="rail-chevron" width="10" height="10" viewBox="0 0 12 12" aria-hidden="true">
-                                <path d="M3 4 L6 8 L9 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                            </svg>
-                        </button>
-                        <div class="rail-body">
-                            <ul id="rail-shape-list" class="rail-list"></ul>
-                        </div>
-                    </section>
+                <aside class="observatory-rail" aria-label="Observatory live analytics">
+                    <!-- v0.11.9 — Live Analytics sidebar. Replaces the
+                         old dead Sources/Shapes filter sections with
+                         a live dashboard that mirrors the current
+                         visibleIdx. Data Quality controls moved to a
+                         gear-icon popup in the topbar. All analytics
+                         render client-side from POINTS.visibleIdx so
+                         they update instantly on every filter change. -->
                     <section class="rail-section rail-meta">
                         <button class="rail-collapse-btn" aria-expanded="true" type="button">
                             <span>Visible</span>
@@ -315,7 +280,53 @@
                         </button>
                         <div class="rail-body">
                             <div id="rail-visible-count" class="rail-big-count">—</div>
-                            <div class="rail-sub">of <span id="rail-total-count">614,505</span> in view</div>
+                            <div class="rail-sub">of <span id="rail-total-count">614,505</span> <span id="rail-visible-pct" class="rail-sub-pct"></span></div>
+                        </div>
+                    </section>
+                    <!-- v0.11.9 — keep this hidden list in the DOM so
+                         mountQualityRail() still has somewhere to
+                         render its toggles (the gear popup reads the
+                         same state, so the two stay in sync). -->
+                    <section class="rail-section rail-quality" hidden aria-hidden="true">
+                        <ul id="rail-quality-list" class="rail-list rail-toggle-list"></ul>
+                    </section>
+                    <section class="rail-section rail-analytics">
+                        <button class="rail-collapse-btn" aria-expanded="true" type="button">
+                            <span>Top Shapes</span>
+                            <svg class="rail-chevron" width="10" height="10" viewBox="0 0 12 12" aria-hidden="true">
+                                <path d="M3 4 L6 8 L9 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                            </svg>
+                        </button>
+                        <div class="rail-body">
+                            <ul id="rail-shapes-chart" class="rail-mini-chart"></ul>
+                        </div>
+                    </section>
+                    <section class="rail-section rail-analytics">
+                        <button class="rail-collapse-btn" aria-expanded="true" type="button">
+                            <span>By Source</span>
+                            <svg class="rail-chevron" width="10" height="10" viewBox="0 0 12 12" aria-hidden="true">
+                                <path d="M3 4 L6 8 L9 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                            </svg>
+                        </button>
+                        <div class="rail-body">
+                            <div id="rail-sources-stacked" class="rail-stacked-bar"></div>
+                            <ul id="rail-sources-chart" class="rail-mini-chart rail-mini-chart-sources"></ul>
+                        </div>
+                    </section>
+                    <section class="rail-section rail-analytics">
+                        <button class="rail-collapse-btn" aria-expanded="true" type="button">
+                            <span>Quality Distribution</span>
+                            <svg class="rail-chevron" width="10" height="10" viewBox="0 0 12 12" aria-hidden="true">
+                                <path d="M3 4 L6 8 L9 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                            </svg>
+                        </button>
+                        <div class="rail-body">
+                            <div id="rail-quality-histogram" class="rail-histogram"></div>
+                            <div class="rail-histogram-scale">
+                                <span>0</span>
+                                <span>50</span>
+                                <span>100</span>
+                            </div>
                         </div>
                     </section>
                     <section class="rail-section rail-meta">
@@ -394,6 +405,22 @@
                             <span class="hud-pair"><span class="hud-label">LON</span> <span id="hud-lon">—</span></span>
                             <span class="hud-sep">·</span>
                             <span id="hud-status" class="hud-status">READY</span>
+                        </div>
+                        <!-- v0.11.9 — Data Quality gear popup on Observatory.
+                             Same pattern as Timeline + Insights. -->
+                        <div class="dq-gear-wrap">
+                            <button class="dq-gear-btn" id="observatory-dq-gear" type="button"
+                                    title="Data Quality filters"
+                                    aria-expanded="false" aria-haspopup="true">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <circle cx="12" cy="12" r="3"/>
+                                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                                </svg>
+                            </button>
+                            <div class="dq-gear-popup" id="observatory-dq-popup" hidden>
+                                <div class="dq-gear-title">Data Quality Filters</div>
+                                <ul class="dq-gear-list" id="observatory-dq-list"></ul>
+                            </div>
                         </div>
                     </div>
                     <!-- v0.11.3 — Color legend overlay. Shown when

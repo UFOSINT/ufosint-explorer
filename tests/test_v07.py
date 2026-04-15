@@ -243,9 +243,12 @@ def test_index_html_has_observatory_tab_and_panel():
 
 
 def test_observatory_has_rail_and_topbar():
+    """v0.11.9: the old rail-source-list and rail-shape-list were
+    removed in favor of the Live Analytics sidebar + DQ gear popup.
+    The rail still shows a visible count and the topbar still has
+    the three render modes. Analytics sections are asserted in
+    test_v0119_rail_analytics instead."""
     content = _read(INDEX_HTML)
-    assert 'id="rail-source-list"' in content
-    assert 'id="rail-shape-list"' in content
     assert 'id="rail-visible-count"' in content
     assert 'class="mode-toggle"' in content
     # Three render modes

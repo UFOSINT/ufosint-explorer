@@ -5306,6 +5306,130 @@ body[data-hide-brush] .observatory-time-brush {
     r: 11;
 }
 
+/* =========================================================================
+   v0.11.9: Observatory Live Analytics sidebar
+   ========================================================================= */
+
+/* Section heading padding for the analytics sections (less cramped
+   than the old filter sections). */
+.rail-section.rail-analytics {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 10px;
+}
+.rail-section.rail-analytics:last-child {
+    border-bottom: none;
+}
+
+/* "Visible 396,158" giant count + % sub */
+.rail-big-count {
+    font-family: var(--font-mono);
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 0.02em;
+    line-height: 1.1;
+}
+.rail-sub-pct {
+    color: var(--text-muted);
+}
+
+/* Mini horizontal-bar chart for Top Shapes / Sources */
+.rail-mini-chart {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.rail-mini-chart li {
+    display: grid;
+    grid-template-columns: 70px 1fr 38px;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text);
+}
+.rail-mini-chart-label {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.rail-mini-chart-bar {
+    position: relative;
+    height: 8px;
+    background: var(--surface-1);
+    border-radius: 2px;
+    overflow: hidden;
+}
+.rail-mini-chart-fill {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    background: var(--accent);
+    border-radius: 2px;
+    transition: width var(--t-fast);
+}
+.rail-mini-chart-count {
+    text-align: right;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+}
+
+/* Sources chart tints each bar with its categorical color */
+.rail-mini-chart-sources .rail-mini-chart-fill[data-src="ufocat"]      { background: var(--cat-1); }
+.rail-mini-chart-sources .rail-mini-chart-fill[data-src="nuforc"]      { background: var(--cat-2); }
+.rail-mini-chart-sources .rail-mini-chart-fill[data-src="mufon"]       { background: var(--cat-3); }
+.rail-mini-chart-sources .rail-mini-chart-fill[data-src="updb"]        { background: var(--cat-4); }
+.rail-mini-chart-sources .rail-mini-chart-fill[data-src="ufo-search"]  { background: var(--cat-5); }
+
+/* Stacked-bar at the top of the Sources section showing the
+   full split as a single proportional bar */
+.rail-stacked-bar {
+    display: flex;
+    height: 10px;
+    border-radius: 2px;
+    overflow: hidden;
+    background: var(--surface-1);
+    margin-bottom: 8px;
+}
+.rail-stacked-bar-seg {
+    transition: flex var(--t-fast);
+    min-width: 1px;
+}
+
+/* Quality score histogram (10 buckets 0-100) */
+.rail-histogram {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 48px;
+}
+.rail-histogram-bar {
+    flex: 1;
+    background: var(--accent);
+    min-width: 3px;
+    border-radius: 1px 1px 0 0;
+    transition: height var(--t-fast);
+}
+.rail-histogram-bar.is-low { background: var(--danger); }
+.rail-histogram-bar.is-mid { background: var(--warning); }
+.rail-histogram-bar.is-high { background: var(--accent); }
+.rail-histogram-scale {
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--text-faint);
+    margin-top: 4px;
+    letter-spacing: 0.05em;
+}
+
 /* v0.11.8 — Leaflet-native preview shapes for ellipse (L.polygon
    approximation) and polygon drawing. Uses Leaflet's own SVG
    renderer so they sit in the overlay pane correctly. */

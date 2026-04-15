@@ -1834,6 +1834,12 @@ function applyClientFilters() {
         refreshInsightsClientCards();
     }
 
+    // v0.11.9 — refresh the Observatory sidebar live analytics.
+    // Cheap aggregate over POINTS.visibleIdx; ~3ms for 396k rows.
+    if (typeof refreshRailAnalytics === "function") {
+        refreshRailAnalytics();
+    }
+
     return true;
 }
 
@@ -1894,7 +1900,16 @@ function loadObservatory() {
     if (!state.observatoryMounted) {
         mountObservatoryRail();
         wireObservatoryModeToggle();
+        // v0.11.9 — wire the Observatory Data Quality gear popup
+        if (typeof initObservatoryDqGear === "function") {
+            initObservatoryDqGear();
+        }
         state.observatoryMounted = true;
+    }
+
+    // v0.11.9 — refresh the sidebar live analytics on every visit
+    if (typeof refreshRailAnalytics === "function") {
+        refreshRailAnalytics();
     }
 
     // Initialize the time brush lazily on first Observatory visit.
@@ -2045,15 +2060,19 @@ function wireObservatoryModeToggle() {
 // First version supports single-select (matches the existing <select>
 // semantics); multi-select is a future improvement.
 function mountObservatoryRail() {
+    // v0.11.9: the Sources + Shapes rail lists were removed in favor
+    // of the Live Analytics sidebar. Those mounts are skipped but the
+    // quality rail + accordion still need to run below, so we no
+    // longer early-return here. Each section block bails gracefully
+    // if its target list element is missing.
     const srcList = document.getElementById("rail-source-list");
     const shapeList = document.getElementById("rail-shape-list");
-    if (!srcList || !shapeList) return;
 
     // Source list: read options from #filter-source (already populated
     // at boot from /api/filters).
     const srcSelect = document.getElementById("filter-source");
-    srcList.innerHTML = "";
-    if (srcSelect) {
+    if (srcList) srcList.innerHTML = "";
+    if (srcList && srcSelect) {
         for (const opt of srcSelect.options) {
             if (!opt.value) continue;  // skip "All"
             const li = document.createElement("li");
@@ -2084,8 +2103,8 @@ function mountObservatoryRail() {
 
     // Shape list: same story for shapes.
     const shapeSelect = document.getElementById("filter-shape");
-    shapeList.innerHTML = "";
-    if (shapeSelect) {
+    if (shapeList) shapeList.innerHTML = "";
+    if (shapeList && shapeSelect) {
         for (const opt of shapeSelect.options) {
             if (!opt.value) continue;
             const li = document.createElement("li");
@@ -8412,3 +8431,179 @@ function _decodeRegionHash(val) {
     return null;
 }
 
+
+
+// =========================================================================
+// v0.11.9: Observatory sidebar Live Analytics
+// =========================================================================
+//
+// Replaces the old dead Sources/Shapes/Data Quality rail sections with
+// a live dashboard that updates every time filters change. All render
+// functions aggregate over POINTS.visibleIdx — zero server round-trips.
+// Updates from applyClientFilters() -> refreshRailAnalytics().
+
+const _RAIL_SOURCE_COLORS = {
+    1: "#4e79a7",  // UFOCAT blue
+    2: "#f28e2b",  // NUFORC orange
+    3: "#e15759",  // MUFON red
+    4: "#76b7b2",  // UPDB teal
+    5: "#59a14f",  // UFO-search green
+};
+const _RAIL_SOURCE_KEYS = {
+    "UFOCAT": "ufocat",
+    "NUFORC": "nuforc",
+    "MUFON": "mufon",
+    "UPDB": "updb",
+    "UFO-search": "ufo-search",
+};
+
+function refreshRailAnalytics() {
+    if (!window.UFODeck || !window.UFODeck.POINTS || !window.UFODeck.POINTS.ready) return;
+    const P = window.UFODeck.POINTS;
+    const iter = P.visibleIdx;
+    const N = iter ? iter.length : P.count;
+
+    // 1) Visible count + %
+    const countEl = document.getElementById("rail-visible-count");
+    const totalEl = document.getElementById("rail-total-count");
+    const pctEl = document.getElementById("rail-visible-pct");
+    if (countEl) countEl.textContent = N.toLocaleString();
+    if (totalEl) totalEl.textContent = P.count.toLocaleString();
+    if (pctEl) {
+        const pct = P.count > 0 ? (N / P.count) * 100 : 0;
+        pctEl.textContent = `· ${pct.toFixed(1)}%`;
+    }
+
+    if (N === 0) {
+        _clearRailChart("rail-shapes-chart");
+        _clearRailChart("rail-sources-chart");
+        const stacked = document.getElementById("rail-sources-stacked");
+        if (stacked) stacked.innerHTML = "";
+        _clearRailHistogram();
+        return;
+    }
+
+    // 2) Aggregate shape, source, quality in a single pass
+    const shapeCounts = new Uint32Array(256);
+    const sourceCounts = new Uint32Array(16);
+    const qualBuckets = new Uint32Array(10);  // 0-10, 10-20, ..., 90-100
+    let qualCount = 0;
+    const qs = P.qualityScore;
+    const si = P.shapeIdx;
+    const src = P.sourceIdx;
+    const UNK = 255;
+    for (let k = 0; k < N; k++) {
+        const i = iter ? iter[k] : k;
+        shapeCounts[si[i]]++;
+        sourceCounts[src[i]]++;
+        const q = qs[i];
+        if (q !== UNK) {
+            let b = Math.min(9, Math.floor(q / 10));
+            qualBuckets[b]++;
+            qualCount++;
+        }
+    }
+
+    // 3) Render Top Shapes (skip index 0 = unknown)
+    const shapeItems = [];
+    const shapes = P.shapes || [];
+    for (let i = 1; i < shapes.length && i < 256; i++) {
+        if (shapeCounts[i] > 0 && shapes[i]) {
+            shapeItems.push({ label: shapes[i], count: shapeCounts[i] });
+        }
+    }
+    shapeItems.sort((a, b) => b.count - a.count);
+    _renderRailChart("rail-shapes-chart", shapeItems.slice(0, 8));
+
+    // 4) Render Sources (stacked bar + list)
+    const sourceItems = [];
+    const sources = P.sources || [];
+    for (let i = 1; i < sources.length && i < 16; i++) {
+        if (sourceCounts[i] > 0 && sources[i]) {
+            sourceItems.push({
+                label: sources[i],
+                count: sourceCounts[i],
+                key: _RAIL_SOURCE_KEYS[sources[i]] || `src-${i}`,
+                color: _RAIL_SOURCE_COLORS[i] || "#888",
+            });
+        }
+    }
+    sourceItems.sort((a, b) => b.count - a.count);
+    _renderRailStackedBar("rail-sources-stacked", sourceItems);
+    _renderRailChart("rail-sources-chart", sourceItems);
+
+    // 5) Render Quality histogram (10 buckets)
+    _renderRailHistogram(qualBuckets, qualCount);
+}
+
+function _renderRailChart(elementId, items) {
+    const el = document.getElementById(elementId);
+    if (!el) return;
+    if (!items || items.length === 0) {
+        el.innerHTML = `<li class="rail-mini-chart-empty" style="grid-template-columns:1fr;text-align:center;color:var(--text-faint);padding:4px">no data</li>`;
+        return;
+    }
+    const max = items[0].count;
+    el.innerHTML = items.map(it => {
+        const pct = max > 0 ? (it.count / max) * 100 : 0;
+        const dataSrc = it.key ? ` data-src="${escapeHtml(it.key)}"` : "";
+        return `<li>
+            <span class="rail-mini-chart-label" title="${escapeHtml(it.label)}">${escapeHtml(it.label)}</span>
+            <span class="rail-mini-chart-bar"><span class="rail-mini-chart-fill"${dataSrc} style="width:${pct.toFixed(1)}%"></span></span>
+            <span class="rail-mini-chart-count">${it.count.toLocaleString()}</span>
+        </li>`;
+    }).join("");
+}
+
+function _clearRailChart(elementId) {
+    const el = document.getElementById(elementId);
+    if (el) el.innerHTML = "";
+}
+
+function _renderRailStackedBar(elementId, items) {
+    const el = document.getElementById(elementId);
+    if (!el) return;
+    const total = items.reduce((a, b) => a + b.count, 0);
+    if (total === 0) { el.innerHTML = ""; return; }
+    el.innerHTML = items.map(it => {
+        const pct = (it.count / total) * 100;
+        return `<span class="rail-stacked-bar-seg"
+                      style="flex:${pct.toFixed(2)};background:${it.color}"
+                      title="${escapeHtml(it.label)}: ${it.count.toLocaleString()}"></span>`;
+    }).join("");
+}
+
+function _renderRailHistogram(buckets, total) {
+    const el = document.getElementById("rail-quality-histogram");
+    if (!el) return;
+    if (total === 0) { el.innerHTML = `<div style="color:var(--text-faint);font-size:10px;text-align:center;width:100%">no quality data</div>`; return; }
+    // Find max for scaling
+    let max = 1;
+    for (let i = 0; i < buckets.length; i++) {
+        if (buckets[i] > max) max = buckets[i];
+    }
+    const bars = [];
+    for (let i = 0; i < buckets.length; i++) {
+        const h = (buckets[i] / max) * 100;
+        const lo = i * 10, hi = lo + 10;
+        let cls = "rail-histogram-bar";
+        if (i < 3) cls += " is-low";
+        else if (i < 6) cls += " is-mid";
+        else cls += " is-high";
+        bars.push(`<div class="${cls}" style="height:${h.toFixed(1)}%"
+                        title="${lo}-${hi}: ${buckets[i].toLocaleString()} sightings"></div>`);
+    }
+    el.innerHTML = bars.join("");
+}
+function _clearRailHistogram() {
+    const el = document.getElementById("rail-quality-histogram");
+    if (el) el.innerHTML = "";
+}
+
+// v0.11.9 — wire up the Observatory DQ gear popup. Reuses the same
+// _mountDqGearPopup pattern Timeline + Insights already use.
+function initObservatoryDqGear() {
+    if (typeof _mountDqGearPopup === "function") {
+        _mountDqGearPopup("observatory-dq-gear", "observatory-dq-popup", "observatory-dq-list");
+    }
+}
