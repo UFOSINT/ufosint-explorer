@@ -5306,6 +5306,23 @@ body[data-hide-brush] .observatory-time-brush {
     r: 11;
 }
 
+/* v0.11.8 — Leaflet-native preview shapes for ellipse (L.polygon
+   approximation) and polygon drawing. Uses Leaflet's own SVG
+   renderer so they sit in the overlay pane correctly. */
+.leaflet-interactive.region-preview-shape {
+    fill: var(--accent);
+    fill-opacity: 0.10;
+    stroke: var(--accent);
+    stroke-width: 2;
+    stroke-opacity: 0.95;
+}
+.leaflet-interactive.region-preview-line {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 2;
+    stroke-opacity: 0.9;
+}
+
 /* v0.11.7 — Leaflet-native polygon vertex markers. Rendered through
    Leaflet's SVG renderer so they always land in the correct pane
    stacking order (marker pane, z-index 600) — no fights with the

@@ -7808,13 +7808,12 @@ function _enterRegionDrawMode(mode) {
     state.map.boxZoom.disable();
     state.map.doubleClickZoom.disable();
 
-    // Make the SVG overlay visible (used by polygon + circle; rect
-    // uses the DOM div overlay instead).
+    // v0.11.8: SVG overlay is no longer used for preview rendering —
+    // rectangle uses the DOM DIV, ellipse and polygon use Leaflet-
+    // native layers. The SVG stays hidden for now (kept in the DOM
+    // for potential future use but inactive).
     const svg = document.getElementById("region-draw-svg");
-    if (svg) {
-        svg.hidden = (mode === "rect");
-        _resizeRegionSvg();
-    }
+    if (svg) svg.hidden = true;
 
     const mapEl = state.map.getContainer();
     if (mode === "polygon") {
@@ -7865,6 +7864,8 @@ function _exitRegionDrawMode() {
     }
     // v0.11.7 — tear down Leaflet-native polygon vertex markers
     _clearPolyVertexMarkers();
+    // v0.11.8 — tear down Leaflet-native ellipse preview
+    _clearEllipsePreview();
     if (wrap) wrap.classList.remove("region-drawing");
 
     if (state.map) {
@@ -7981,20 +7982,41 @@ function _updateDragRectVisual() {
     dragRect.style.height = (y2 - y1) + "px";
 }
 
+// v0.11.8: ellipse preview uses a Leaflet-native L.polygon (64-vertex
+// ellipse approximation). The SVG overlay approach had z-index /
+// coordinate-space issues that made it invisible in some browsers.
+// Leaflet-native renders in its own pane stack correctly.
+let _ellipsePreviewLayer = null;
+
 function _updateDragEllipseVisual() {
-    const svg = document.getElementById("region-draw-svg");
-    const ell = document.getElementById("region-draw-ellipse");
-    if (!svg || !ell || !_regionDragStart || !_regionDragCurrent) return;
-    const cx = (_regionDragStart.x + _regionDragCurrent.x) / 2;
-    const cy = (_regionDragStart.y + _regionDragCurrent.y) / 2;
-    const rx = Math.abs(_regionDragCurrent.x - _regionDragStart.x) / 2;
-    const ry = Math.abs(_regionDragCurrent.y - _regionDragStart.y) / 2;
-    svg.hidden = false;
-    ell.hidden = false;
-    ell.setAttribute("cx", cx);
-    ell.setAttribute("cy", cy);
-    ell.setAttribute("rx", rx);
-    ell.setAttribute("ry", ry);
+    if (!state.map || !_regionDragStart || !_regionDragCurrent) return;
+    const map = state.map;
+    const p1 = map.containerPointToLatLng(L.point(_regionDragStart.x, _regionDragStart.y));
+    const p2 = map.containerPointToLatLng(L.point(_regionDragCurrent.x, _regionDragCurrent.y));
+    const shape = {
+        type: "ellipse",
+        north: Math.max(p1.lat, p2.lat),
+        south: Math.min(p1.lat, p2.lat),
+        west:  Math.min(p1.lng, p2.lng),
+        east:  Math.max(p1.lng, p2.lng),
+    };
+    const latLngs = _ellipseToPolygonPoints(shape, 64);
+    if (_ellipsePreviewLayer) {
+        _ellipsePreviewLayer.setLatLngs(latLngs);
+    } else {
+        _ellipsePreviewLayer = L.polygon(latLngs, {
+            className: "region-preview-shape",
+            dashArray: "6, 4",
+            interactive: false,
+        }).addTo(map);
+    }
+}
+
+function _clearEllipsePreview() {
+    if (_ellipsePreviewLayer && state.map) {
+        state.map.removeLayer(_ellipsePreviewLayer);
+    }
+    _ellipsePreviewLayer = null;
 }
 
 // ---- Polygon drawing ----
@@ -8096,69 +8118,86 @@ function _regionPolyDblclick(e) {
 
 // v0.11.7: polygon vertex markers rendered via Leaflet's native SVG
 // renderer (L.circleMarker). This sidesteps z-index issues where
-// our own SVG overlay sat below the Leaflet map stack — Leaflet's
-// own markers always render in the correct pane.
-let _polyVertexMarkers = [];  // L.circleMarker[]
+// our own SVG overlay sat below the Leaflet map stack.
+// v0.11.8: extended the same Leaflet-native approach to the in-
+// progress line (L.polyline) and fill (L.polygon) previews.
+let _polyVertexMarkers = [];    // L.circleMarker[]
+let _polyLinePreview = null;    // L.polyline (dashed, follows cursor)
+let _polyFillPreview = null;    // L.polygon (shown when 3+ vertices)
 
 function _updatePolyVisual() {
-    const svg = document.getElementById("region-draw-svg");
-    const line = document.getElementById("region-draw-line");
-    const poly = document.getElementById("region-draw-poly");
-    if (!svg || !line || !state.map) return;
-    svg.hidden = false;
-
+    if (!state.map) return;
+    const map = state.map;
     const pts = _regionPolyPoints;
 
-    // Translucent polygon fill when we have 3+ vertices (still SVG
-    // overlay — it's a whole-shape fill, not individual markers,
-    // and it only appears briefly during drawing so z-index issues
-    // are less critical).
-    if (poly) {
-        if (pts.length >= 3) {
-            poly.hidden = false;
-            poly.setAttribute("points", pts.map(p => p.join(",")).join(" "));
+    // Convert placed pixel points to lat/lng (Leaflet layers need ll)
+    const vertexLLs = pts.map(([x, y]) =>
+        map.containerPointToLatLng(L.point(x, y))
+    );
+
+    // --- Translucent fill (3+ vertices) ---
+    if (pts.length >= 3) {
+        if (_polyFillPreview) {
+            _polyFillPreview.setLatLngs(vertexLLs);
         } else {
-            poly.hidden = true;
+            _polyFillPreview = L.polygon(vertexLLs, {
+                className: "region-preview-shape",
+                dashArray: null,
+                interactive: false,
+            }).addTo(map);
         }
+    } else if (_polyFillPreview) {
+        map.removeLayer(_polyFillPreview);
+        _polyFillPreview = null;
     }
 
-    // Dashed "rubber-band" line from the last vertex to the cursor.
-    const segs = pts.slice();
+    // --- Dashed rubber-band line (vertices + cursor preview) ---
+    const lineLLs = vertexLLs.slice();
     if (_regionPolyCursor && _polyDraggingVertex < 0) {
-        segs.push([_regionPolyCursor.x, _regionPolyCursor.y]);
+        const cursorLL = map.containerPointToLatLng(
+            L.point(_regionPolyCursor.x, _regionPolyCursor.y)
+        );
+        lineLLs.push(cursorLL);
     }
-    line.setAttribute("points", segs.map(p => p.join(",")).join(" "));
+    if (lineLLs.length >= 2) {
+        if (_polyLinePreview) {
+            _polyLinePreview.setLatLngs(lineLLs);
+        } else {
+            _polyLinePreview = L.polyline(lineLLs, {
+                className: "region-preview-line",
+                dashArray: "6, 4",
+                interactive: false,
+            }).addTo(map);
+        }
+    } else if (_polyLinePreview) {
+        map.removeLayer(_polyLinePreview);
+        _polyLinePreview = null;
+    }
 
-    // --- Vertex markers (Leaflet-native) ---
-    // Sync _polyVertexMarkers to _regionPolyPoints. Reuse existing
-    // markers when possible so we don't churn DOM during drags.
-    const map = state.map;
+    // --- Vertex markers (Leaflet-native circle markers) ---
     while (_polyVertexMarkers.length > pts.length) {
         const m = _polyVertexMarkers.pop();
         if (m) map.removeLayer(m);
     }
     for (let i = 0; i < pts.length; i++) {
-        const ll = map.containerPointToLatLng(L.point(pts[i][0], pts[i][1]));
+        const ll = vertexLLs[i];
+        const isFirst = i === 0 && pts.length >= 3;
+        const isDragging = i === _polyDraggingVertex;
         const cls = [
             "region-vertex",
-            (i === 0 && pts.length >= 3) ? "region-vertex-first" : "",
-            (i === _polyDraggingVertex) ? "region-vertex-dragging" : "",
+            isFirst ? "region-vertex-first" : "",
+            isDragging ? "region-vertex-dragging" : "",
         ].filter(Boolean).join(" ");
-        const isFirst = i === 0 && pts.length >= 3;
         if (_polyVertexMarkers[i]) {
-            // Reposition + re-style existing marker
             _polyVertexMarkers[i].setLatLng(ll);
-            _polyVertexMarkers[i].setRadius(isFirst ? 9 : (i === _polyDraggingVertex ? 10 : 7));
-            _polyVertexMarkers[i].setStyle({ className: cls });
-            // setStyle doesn't propagate className via options on
-            // all Leaflet versions — set it on the path directly.
+            _polyVertexMarkers[i].setRadius(isFirst ? 9 : (isDragging ? 10 : 7));
             const el = _polyVertexMarkers[i]._path;
             if (el) el.setAttribute("class", "leaflet-interactive " + cls);
         } else {
             const marker = L.circleMarker(ll, {
                 radius: isFirst ? 9 : 7,
                 className: cls,
-                interactive: false,  // we capture events at the container level
+                interactive: false,
                 bubblingMouseEvents: false,
             }).addTo(map);
             _polyVertexMarkers.push(marker);
@@ -8167,11 +8206,19 @@ function _updatePolyVisual() {
 }
 
 function _clearPolyVertexMarkers() {
-    if (!state.map) { _polyVertexMarkers = []; return; }
+    if (!state.map) {
+        _polyVertexMarkers = [];
+        _polyLinePreview = null;
+        _polyFillPreview = null;
+        return;
+    }
+    const map = state.map;
     for (const m of _polyVertexMarkers) {
-        if (m) state.map.removeLayer(m);
+        if (m) map.removeLayer(m);
     }
     _polyVertexMarkers = [];
+    if (_polyLinePreview) { map.removeLayer(_polyLinePreview); _polyLinePreview = null; }
+    if (_polyFillPreview) { map.removeLayer(_polyFillPreview); _polyFillPreview = null; }
 }
 
 function _closePolygon() {
