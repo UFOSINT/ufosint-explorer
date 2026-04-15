@@ -5029,3 +5029,167 @@ body[data-hide-brush] .observatory-time-brush {
     /* Observatory rail: enable scrolling if content overflows */
     .observatory-rail { overflow-y: auto; }
 }
+
+/* =========================================================================
+   v0.11.4: Region (geofence) draw tool
+   ========================================================================= */
+
+/* REGION button in the topbar */
+.region-draw-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--surface-1);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 5px 10px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    border-radius: var(--r-sm);
+    cursor: pointer;
+    transition: color var(--t-fast), background var(--t-fast), border-color var(--t-fast);
+    pointer-events: auto;
+}
+.region-draw-btn:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+}
+.region-draw-btn.active,
+.region-draw-btn[aria-pressed="true"] {
+    background: var(--accent);
+    color: var(--bg);
+    border-color: var(--accent);
+}
+.region-draw-btn svg { flex-shrink: 0; }
+
+/* Instruction banner — shown while in drawing mode */
+.region-banner {
+    position: absolute;
+    top: 56px;
+    left: 52px;
+    right: 16px;
+    z-index: 700;
+    background: var(--accent);
+    color: var(--bg);
+    padding: 8px 14px;
+    border-radius: var(--r-sm);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+    pointer-events: auto;
+    animation: region-banner-pulse 2s ease-in-out infinite;
+}
+.region-banner[hidden] { display: none; }
+.region-banner-icon {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    line-height: 1;
+}
+.region-banner-text {
+    flex: 1;
+    font-weight: 500;
+}
+.region-banner-cancel {
+    background: transparent;
+    color: var(--bg);
+    border: 1px solid rgba(0, 0, 0, 0.3);
+    padding: 3px 10px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: background var(--t-fast);
+}
+.region-banner-cancel:hover {
+    background: rgba(0, 0, 0, 0.15);
+}
+@keyframes region-banner-pulse {
+    0%, 100% { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35), 0 0 0 0 rgba(0, 240, 255, 0.6); }
+    50%      { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35), 0 0 0 6px rgba(0, 240, 255, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .region-banner { animation: none; }
+}
+
+/* Active region chip — shown under the topbar while filter is applied */
+.region-chip {
+    position: absolute;
+    top: 56px;
+    left: 52px;
+    z-index: 650;
+    background: var(--surface-1);
+    color: var(--text);
+    border: 1px solid var(--accent);
+    padding: 5px 10px 5px 12px;
+    border-radius: 14px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+    pointer-events: auto;
+}
+.region-chip[hidden] { display: none; }
+.region-chip-icon { color: var(--accent); font-size: 13px; }
+.region-chip-text strong { color: var(--accent); font-weight: 600; }
+.region-chip-clear {
+    background: transparent;
+    color: var(--text-muted);
+    border: none;
+    cursor: pointer;
+    font-size: 18px;
+    line-height: 1;
+    padding: 0 4px;
+    border-radius: 50%;
+    transition: color var(--t-fast), background var(--t-fast);
+}
+.region-chip-clear:hover {
+    color: var(--bg);
+    background: var(--accent);
+}
+
+/* The rectangle drag overlay — rendered absolutely over the map */
+.region-drag-rect {
+    position: absolute;
+    z-index: 620;
+    pointer-events: none;
+    background: rgba(0, 240, 255, 0.08);
+    border: 2px solid var(--accent);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+}
+.region-drag-rect[hidden] { display: none; }
+
+/* While in draw mode, crosshair cursor over the canvas. */
+.observatory-canvas-wrap.region-drawing,
+.observatory-canvas-wrap.region-drawing canvas,
+.observatory-canvas-wrap.region-drawing .leaflet-container {
+    cursor: crosshair !important;
+}
+
+/* Persistent rectangle (the applied filter) drawn on the map layer.
+   Leaflet renders this via L.rectangle — these rules target the SVG
+   path element so the border matches our accent and the fill is
+   intentionally subtle. */
+.leaflet-interactive.region-applied {
+    stroke: var(--accent);
+    stroke-width: 2;
+    fill: var(--accent);
+    fill-opacity: 0.08;
+}
+
+@media (max-width: 700px) {
+    .region-draw-btn span { display: none; }  /* icon-only on mobile */
+    .region-draw-btn { padding: 6px 8px; }
+    .region-banner { top: 48px; left: 8px; right: 8px; font-size: 10px; padding: 6px 10px; }
+    .region-chip { top: 48px; left: 8px; font-size: 10px; }
+}
+

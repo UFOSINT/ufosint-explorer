@@ -337,6 +337,22 @@
                             <button class="mode-btn" data-mode="heatmap" type="button" role="tab">Heatmap</button>
                             <button class="mode-btn" data-mode="hexbin" type="button" role="tab">Hex Bins</button>
                         </div>
+                        <!-- v0.11.4 — Region (geofence) draw tool.
+                             Click to enter draw mode, click-drag on the
+                             map to define a bounding box. The drawn
+                             rectangle filters all sightings to that
+                             spatial region across Observatory, Timeline,
+                             and Insights tabs. -->
+                        <button id="region-draw-btn" class="region-draw-btn" type="button" title="Draw a region to filter by area">
+                            <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4">
+                                <rect x="2" y="3" width="10" height="8" rx="1"/>
+                                <circle cx="2" cy="3" r="1.2" fill="currentColor"/>
+                                <circle cx="12" cy="3" r="1.2" fill="currentColor"/>
+                                <circle cx="2" cy="11" r="1.2" fill="currentColor"/>
+                                <circle cx="12" cy="11" r="1.2" fill="currentColor"/>
+                            </svg>
+                            <span>REGION</span>
+                        </button>
                         <!-- v0.11.3 — Points mode controls: color-by + dot size.
                              Hidden when heatmap or hex bins are active. -->
                         <div class="points-controls" id="points-controls">
@@ -363,6 +379,25 @@
                     <!-- v0.11.3 — Color legend overlay. Shown when
                          color-by is active (source/shape/color). -->
                     <div id="color-legend" class="color-legend" hidden></div>
+                    <!-- v0.11.4 — Region draw instruction banner.
+                         Shown while the user is in "draw rectangle" mode.
+                         Hidden once a rectangle is drawn or canceled. -->
+                    <div id="region-banner" class="region-banner" hidden>
+                        <span class="region-banner-icon" aria-hidden="true">▭</span>
+                        <span class="region-banner-text">RECTANGLE MODE — Click and drag on the map to draw a bounding box.</span>
+                        <button id="region-cancel-btn" class="region-banner-cancel" type="button">Cancel</button>
+                    </div>
+                    <!-- v0.11.4 — Active region chip. Shown when a region
+                         filter is active; click × to clear. -->
+                    <div id="region-chip" class="region-chip" hidden>
+                        <span class="region-chip-icon" aria-hidden="true">▭</span>
+                        <span class="region-chip-text">Region: <strong id="region-chip-bounds">—</strong></span>
+                        <button id="region-clear-btn" class="region-chip-clear" type="button" aria-label="Clear region filter">&times;</button>
+                    </div>
+                    <!-- v0.11.4 — Rectangle drag overlay. Absolutely
+                         positioned inside the canvas wrap; sized/moved
+                         during pointerdown/move in app.js. -->
+                    <div id="region-drag-rect" class="region-drag-rect" hidden></div>
                     <div id="map"></div>
                     <div class="map-place-search">
                         <label class="sr-only" for="place-input">Find a place</label>

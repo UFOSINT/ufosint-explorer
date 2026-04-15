@@ -216,6 +216,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     // Init map
     initMap();
 
+    // v0.11.4: Region (geofence) draw tool — must come after initMap()
+    // because it attaches pointer listeners to state.map's container.
+    initRegionDrawTool();
+    // If the hash carried a region= param, apply it now that state.map
+    // exists. applyHashToFilters() stashed the parsed bbox on
+    // state.pendingRegionFilter.
+    _applyPendingRegionFilter();
+
     // v0.7: Observatory is the default tab. switchTab() validates the
     // name against VALID_TABS, aliases map → observatory, and falls
     // back to observatory for any garbage (including a polluted
@@ -989,6 +997,12 @@ function writeHash() {
     // comma-separated `movement` param when any are checked.
     const movs = _readMovementCats();
     if (movs.length) params.set("movement", movs.join(","));
+    // v0.11.4: region (geofence) filter. Encoded as
+    // `region=rect:south,west;north,east` with 2-decimal precision.
+    if (typeof _encodeRegionHash === "function") {
+        const rh = _encodeRegionHash();
+        if (rh) params.set("region", rh);
+    }
     // v0.8.6: no per-tab search state to serialise. The Observatory
     // owns all filter state via FILTER_FIELDS above, and there's no
     // free-text `q` or pagination to persist anymore.
@@ -1034,11 +1048,36 @@ function applyHashToFilters(params) {
         } else {
             state.pendingMovementFilter = null;
         }
+        // v0.11.4 — region (geofence) filter deep-link restore.
+        // Parses `rect:south,west;north,east` and applies to
+        // state.regionFilter. _applyPendingRegionFilter below paints
+        // the Leaflet rectangle once the map is ready.
+        const regionParam = params.get("region");
+        if (regionParam && typeof _decodeRegionHash === "function") {
+            const r = _decodeRegionHash(regionParam);
+            if (r) {
+                state.pendingRegionFilter = r;
+            }
+        } else {
+            state.pendingRegionFilter = null;
+        }
         // v0.8.6: the legacy `q`, `page`, and `sort` URL params
         // belonged to the removed Search tab. Silently ignored so
         // pre-v0.8.6 deep links don't throw.
     } finally {
         state.hashLoading = false;
+    }
+}
+
+// v0.11.4 — called after initMap() to restore a region filter from
+// the URL hash. The L.rectangle needs state.map to exist; the hash
+// parsing runs earlier in DOMContentLoaded.
+function _applyPendingRegionFilter() {
+    if (!state.pendingRegionFilter || !state.map) return;
+    const r = state.pendingRegionFilter;
+    state.pendingRegionFilter = null;
+    if (typeof applyRegionFilter === "function") {
+        applyRegionFilter(r);
     }
 }
 
@@ -1746,7 +1785,14 @@ function applyClientFilters() {
         movementCats: _readMovementCats(),
         yearFrom:   _parseYearFilter(document.getElementById("filter-date-from")?.value),
         yearTo:     _parseYearFilter(document.getElementById("filter-date-to")?.value),
-        bbox: null,  // deck.gl clips by viewport automatically, skip the CPU cull
+        // v0.11.4 — region bbox (geofence) from the REGION draw tool.
+        // Array [south, north, west, east] or null. _rebuildVisible's
+        // hot loop (deck.js ~line 570) already checks this bbox; we
+        // just pass it through from state.regionFilter.
+        bbox: state.regionFilter
+            ? [state.regionFilter.south, state.regionFilter.north,
+               state.regionFilter.west, state.regionFilter.east]
+            : null,
         qualityMin:  q.highQuality ? (q.qualityThreshold || 60) : null,
         hoaxMax:     q.hideHoaxes   ? (q.hoaxThreshold || 50)    : null,
         hasDescription: q.hasDescription,
@@ -7559,3 +7605,249 @@ function initHelpTourButton() {
         startTour(true);
     });
 }
+
+
+// =========================================================================
+// v0.11.4: Region (geofence) draw tool
+// =========================================================================
+//
+// Click the REGION button in the topbar to enter draw mode. Click-drag on
+// the map to define a bounding box. Release to apply as a spatial filter
+// across Observatory / Timeline / Insights. The drawn rectangle persists
+// on the map as a Leaflet L.rectangle until cleared.
+//
+// State lives on state.regionFilter:
+//   null                      — no region filter active
+//   { south, north, west, east } — bounding box in WGS84 degrees
+//
+// The rectangle bbox flows through applyClientFilters() -> UFODeck's
+// _rebuildVisible hot loop which already has lat/lng bbox culling built in.
+// No server round-trip.
+
+// Internal state for the drawing interaction (pre-apply).
+let _regionDrawing = false;
+let _regionDragStart = null;   // {x, y} in container pixels
+let _regionDragCurrent = null; // {x, y}
+let _regionAppliedLayer = null; // L.rectangle on the map while filter is active
+
+function initRegionDrawTool() {
+    const btn = document.getElementById("region-draw-btn");
+    const cancelBtn = document.getElementById("region-cancel-btn");
+    const clearBtn = document.getElementById("region-clear-btn");
+    if (!btn) return;
+
+    btn.addEventListener("click", () => {
+        if (_regionDrawing) {
+            _exitRegionDrawMode();
+        } else {
+            _enterRegionDrawMode();
+        }
+    });
+
+    if (cancelBtn) {
+        cancelBtn.addEventListener("click", () => _exitRegionDrawMode());
+    }
+    if (clearBtn) {
+        clearBtn.addEventListener("click", () => clearRegionFilter());
+    }
+
+    // Escape cancels draw mode or clears the active filter.
+    document.addEventListener("keydown", (e) => {
+        if (e.key !== "Escape") return;
+        if (_regionDrawing) {
+            _exitRegionDrawMode();
+        }
+    });
+}
+
+function _enterRegionDrawMode() {
+    if (!state.map) return;
+    _regionDrawing = true;
+    const btn = document.getElementById("region-draw-btn");
+    const banner = document.getElementById("region-banner");
+    const wrap = document.querySelector(".observatory-canvas-wrap");
+    if (btn) btn.classList.add("active");
+    if (btn) btn.setAttribute("aria-pressed", "true");
+    if (banner) banner.hidden = false;
+    if (wrap) wrap.classList.add("region-drawing");
+
+    // Disable Leaflet pan + other map interactions during draw so the
+    // click-drag paints a rectangle instead of panning the map.
+    state.map.dragging.disable();
+    state.map.boxZoom.disable();
+    state.map.doubleClickZoom.disable();
+
+    // Listen for pointer events on the deck.gl canvas (it's above
+    // Leaflet's tile pane). We use capture so we beat the existing
+    // deck.gl pick handlers.
+    const mapEl = state.map.getContainer();
+    mapEl.addEventListener("pointerdown", _regionPointerDown, true);
+    mapEl.addEventListener("pointermove", _regionPointerMove, true);
+    mapEl.addEventListener("pointerup", _regionPointerUp, true);
+}
+
+function _exitRegionDrawMode() {
+    _regionDrawing = false;
+    _regionDragStart = null;
+    _regionDragCurrent = null;
+    const btn = document.getElementById("region-draw-btn");
+    const banner = document.getElementById("region-banner");
+    const dragRect = document.getElementById("region-drag-rect");
+    const wrap = document.querySelector(".observatory-canvas-wrap");
+    if (btn) btn.classList.remove("active");
+    if (btn) btn.setAttribute("aria-pressed", "false");
+    if (banner) banner.hidden = true;
+    if (dragRect) dragRect.hidden = true;
+    if (wrap) wrap.classList.remove("region-drawing");
+
+    if (state.map) {
+        state.map.dragging.enable();
+        state.map.boxZoom.enable();
+        state.map.doubleClickZoom.enable();
+
+        const mapEl = state.map.getContainer();
+        mapEl.removeEventListener("pointerdown", _regionPointerDown, true);
+        mapEl.removeEventListener("pointermove", _regionPointerMove, true);
+        mapEl.removeEventListener("pointerup", _regionPointerUp, true);
+    }
+}
+
+function _regionPointerDown(e) {
+    if (!_regionDrawing || !state.map) return;
+    if (e.button !== 0) return;  // left-click only
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = state.map.getContainer().getBoundingClientRect();
+    _regionDragStart = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    _regionDragCurrent = { ..._regionDragStart };
+    _updateDragRectVisual();
+}
+
+function _regionPointerMove(e) {
+    if (!_regionDrawing || !_regionDragStart) return;
+    e.preventDefault();
+    const rect = state.map.getContainer().getBoundingClientRect();
+    _regionDragCurrent = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    _updateDragRectVisual();
+}
+
+function _regionPointerUp(e) {
+    if (!_regionDrawing || !_regionDragStart || !state.map) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = state.map.getContainer().getBoundingClientRect();
+    const endX = e.clientX - rect.left;
+    const endY = e.clientY - rect.top;
+
+    // Require a minimum drag distance so a tiny twitch during the
+    // REGION button click doesn't create a zero-size rectangle.
+    const dx = endX - _regionDragStart.x;
+    const dy = endY - _regionDragStart.y;
+    if (dx * dx + dy * dy < 100) {  // <10px drag
+        _exitRegionDrawMode();
+        return;
+    }
+
+    // Convert the two pixel corners to lat/lng via Leaflet's API.
+    const p1 = state.map.containerPointToLatLng(
+        L.point(Math.min(_regionDragStart.x, endX), Math.min(_regionDragStart.y, endY))
+    );
+    const p2 = state.map.containerPointToLatLng(
+        L.point(Math.max(_regionDragStart.x, endX), Math.max(_regionDragStart.y, endY))
+    );
+    // Leaflet's y-axis grows downward, so p1 = top-left = north, p2 = bottom-right = south
+    const bbox = {
+        north: Math.max(p1.lat, p2.lat),
+        south: Math.min(p1.lat, p2.lat),
+        west:  Math.min(p1.lng, p2.lng),
+        east:  Math.max(p1.lng, p2.lng),
+    };
+    _exitRegionDrawMode();
+    applyRegionFilter(bbox);
+}
+
+function _updateDragRectVisual() {
+    const dragRect = document.getElementById("region-drag-rect");
+    if (!dragRect || !_regionDragStart || !_regionDragCurrent) return;
+    const x1 = Math.min(_regionDragStart.x, _regionDragCurrent.x);
+    const y1 = Math.min(_regionDragStart.y, _regionDragCurrent.y);
+    const x2 = Math.max(_regionDragStart.x, _regionDragCurrent.x);
+    const y2 = Math.max(_regionDragStart.y, _regionDragCurrent.y);
+    dragRect.hidden = false;
+    dragRect.style.left = x1 + "px";
+    dragRect.style.top = y1 + "px";
+    dragRect.style.width = (x2 - x1) + "px";
+    dragRect.style.height = (y2 - y1) + "px";
+}
+
+function applyRegionFilter(bbox) {
+    if (!bbox || !state.map) return;
+    // Replace any existing region
+    if (_regionAppliedLayer) {
+        state.map.removeLayer(_regionAppliedLayer);
+        _regionAppliedLayer = null;
+    }
+    state.regionFilter = bbox;
+    _regionAppliedLayer = L.rectangle(
+        [[bbox.south, bbox.west], [bbox.north, bbox.east]],
+        { className: "region-applied", interactive: false }
+    ).addTo(state.map);
+    _renderRegionChip();
+    applyFilters();  // re-runs applyClientFilters + refreshes timeline/insights
+    writeHash();
+}
+
+function clearRegionFilter() {
+    state.regionFilter = null;
+    if (_regionAppliedLayer && state.map) {
+        state.map.removeLayer(_regionAppliedLayer);
+    }
+    _regionAppliedLayer = null;
+    _renderRegionChip();
+    applyFilters();
+    writeHash();
+}
+// Expose for CSS onclick fallbacks + hash restore.
+window.clearRegionFilter = clearRegionFilter;
+
+function _renderRegionChip() {
+    const chip = document.getElementById("region-chip");
+    const bounds = document.getElementById("region-chip-bounds");
+    if (!chip || !bounds) return;
+    if (!state.regionFilter) {
+        chip.hidden = true;
+        return;
+    }
+    const r = state.regionFilter;
+    // Compact degree-only summary: "37.2°N, 112.5°W → 42.8°N, 71.0°W"
+    const fmt = (v, posLabel, negLabel) => {
+        const abs = Math.abs(v).toFixed(1);
+        return `${abs}°${v >= 0 ? posLabel : negLabel}`;
+    };
+    const sw = `${fmt(r.south, "N", "S")}, ${fmt(r.west, "E", "W")}`;
+    const ne = `${fmt(r.north, "N", "S")}, ${fmt(r.east, "E", "W")}`;
+    bounds.textContent = `${sw} → ${ne}`;
+    chip.hidden = false;
+}
+
+// URL hash encoding: region=rect:south,west;north,east
+function _encodeRegionHash() {
+    const r = state.regionFilter;
+    if (!r) return null;
+    const f = (n) => n.toFixed(2);
+    return `rect:${f(r.south)},${f(r.west)};${f(r.north)},${f(r.east)}`;
+}
+function _decodeRegionHash(val) {
+    if (!val || typeof val !== "string") return null;
+    if (!val.startsWith("rect:")) return null;
+    const parts = val.slice(5).split(";");
+    if (parts.length !== 2) return null;
+    const [sw, ne] = parts.map(p => p.split(",").map(Number));
+    if (sw.length !== 2 || ne.length !== 2) return null;
+    if (sw.some(isNaN) || ne.some(isNaN)) return null;
+    return {
+        south: sw[0], west: sw[1],
+        north: ne[0], east: ne[1],
+    };
+}
+
