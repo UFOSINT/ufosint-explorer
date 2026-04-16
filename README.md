@@ -185,6 +185,7 @@ Add to `.claude/settings.json` or your global Claude Code MCP config.
 |-----|-----|
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | App structure, request flow, cache strategy, DB access patterns, tool catalog, conventions. |
 | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Azure infrastructure, environment variables, CI/CD pipeline, release procedures. |
+| [`docs/OPERATIONS.md`](docs/OPERATIONS.md) | Known failure modes, runbook for restart / rollback / PG recovery, incident log. |
 | [`docs/TESTING.md`](docs/TESTING.md) | Test suite coverage, how to run locally, how to add new tests. |
 | [`CHANGELOG.md`](CHANGELOG.md) | Release history (SemVer). |
 

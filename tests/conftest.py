@@ -49,6 +49,17 @@ class _FakePool:
         raise RuntimeError("Tests should not hit the database through the pool")
         yield  # unreachable, makes Python treat this as a generator
 
+    @staticmethod
+    def check_connection(conn):
+        """Stub of psycopg_pool.ConnectionPool.check_connection.
+
+        The real method runs `SELECT 1` to verify the connection is
+        alive; app.py passes it as the `check=` kwarg to the pool
+        constructor. The stub just needs to exist as an attribute so
+        the import line `check=ConnectionPool.check_connection` resolves.
+        """
+        return None
+
 
 @pytest.fixture(scope="session", autouse=True)
 def _stub_database_and_load_app():

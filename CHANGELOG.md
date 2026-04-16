@@ -17,6 +17,28 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 Nothing yet.
 
+## [0.12.1] — 2026-04-16 — Pool self-healing (prod resilience)
+
+Prevents the 2026-04-16 prod incident (see
+[`docs/OPERATIONS.md`](docs/OPERATIONS.md) §4) from recurring.
+
+### Fixed
+- **Wedged `psycopg_pool`** when connections go idle longer than
+  Azure's network-path timeout. Every `getconn()` was handing out
+  zombie sockets, queries hung 30 s, `PoolTimeout` cascaded into
+  an `/api/*` 500-storm.
+  - `check=ConnectionPool.check_connection` — ping each connection
+    before handing it out; dead ones are discarded and replaced.
+  - `max_idle=300` — close connections idle > 5 min.
+  - `max_lifetime=3600` — recycle every hour as defense in depth.
+- `tests/conftest.py` — `_FakePool` gains a `check_connection`
+  staticmethod stub so the import line resolves without the real
+  `psycopg_pool` class.
+
+### Added
+- `docs/OPERATIONS.md` — runbook, incident log, known failure
+  modes. Cross-linked from README docs table and CLAUDE.md.
+
 ## [0.12.0] — 2026-04-15 — UAP Gerb curated overlay (Crashes + Nuclear + Facilities)
 
 Ships the `feature/gerb-overlay` branch — curated research data from the

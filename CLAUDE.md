@@ -24,6 +24,7 @@ isn't confused by website-specific state.
 |-----------|-------|
 | How the app fits together (request flow, cache, DB access, conventions) | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
 | How to deploy, env vars, Azure setup, rollback | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) |
+| Known failure modes, restart runbook, incident log | [`docs/OPERATIONS.md`](docs/OPERATIONS.md) |
 | How to run + extend the test suite | [`docs/TESTING.md`](docs/TESTING.md) |
 | What shipped when (SemVer history) | [`CHANGELOG.md`](CHANGELOG.md) |
 | Feature-sprint plan docs | `docs/V08*_PLAN.md` |

@@ -155,12 +155,27 @@ if not DATABASE_URL:
 # thread. Procfile uses 2 workers x 4 threads = 8 concurrent slots, so
 # max_size=8 leaves one connection per slot. Burstable B1ms has a small
 # max_connections (~50) so we stay well under the per-server cap.
+#
+# Resilience — prevents the 2026-04-16 incident from recurring.
+# See docs/OPERATIONS.md for the full post-mortem.
+#   - `check`: ping each connection before handing it out. Dead conns
+#     get discarded and a replacement is opened. Kills the "wedged
+#     pool" failure mode where a stale TCP connection sits in the pool
+#     forever, timing out every request that tries to use it.
+#   - `max_idle`: close connections idle >5 min. Azure's network path
+#     silently drops long-idle PG connections; without this, a quiet
+#     hour overnight leaves the pool full of half-dead sockets.
+#   - `max_lifetime`: recycle every hour as defense in depth against
+#     slow memory or handle leaks on either end of the connection.
 _pool = ConnectionPool(
     DATABASE_URL,
     min_size=1,
     max_size=8,
     open=True,
     timeout=30,
+    max_idle=300,       # 5 min
+    max_lifetime=3600,  # 1 hour
+    check=ConnectionPool.check_connection,
     kwargs={
         # Read-only workload: autocommit avoids the BEGIN/COMMIT overhead
         # on every query, and default_transaction_read_only is a safety
