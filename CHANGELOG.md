@@ -48,6 +48,19 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
   dissolve. The `#map-status` panel had "READY" as its HTML default
   value which persisted until something wrote over it. Default is
   now empty + a `.panel-status:empty { display: none }` rule. See §4.
+- **Phone header overflow.** The "UFOSINT Explorer" title was
+  wrapping to 2 lines in the mobile header and eating horizontal
+  space from the tab bar, forcing Methodology / Insights to scroll
+  off the right edge. Title is now `display: none` below 720 px;
+  the Observatory tab + page `<title>` still identify the site.
+- **TimeBrush bottom-edge gestures.** Handles sat 4-8 px from the
+  viewport edges, so aiming for them on iOS Safari triggered the
+  browser's swipe-back (left), swipe-forward (right), and home
+  indicator (bottom) gestures instead. Bumped horizontal padding
+  to 18 px, added `padding-bottom: calc(12px + safe-area-inset-bottom)`
+  so handles sit clear of the edge-gesture zones + iPhone X notch.
+  Also `overscroll-behavior-x: contain` as a belt-and-suspenders
+  guard against horizontal gesture chaining.
 
 ## [0.12.1] — 2026-04-16 — Pool self-healing (prod resilience)
 

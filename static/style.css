@@ -2293,7 +2293,16 @@ select:focus {
         gap: var(--s-2);
         flex: 0 0 auto;
     }
-    .header-left h1 { font-size: 14px; }
+    /* v0.13 follow-up — hide the "UFOSINT Explorer" title on phone
+       viewports. It was wrapping to 2 lines in the mobile header and
+       eating horizontal space from the tab bar, forcing Methodology /
+       Insights to scroll off the right edge. The <h1> stays in the DOM
+       for SEO + screen readers; `display: none` keeps crawlers happy
+       and removes it from the accessibility tree, which is fine since
+       the page <title> already identifies the site.
+       The Observatory tab serves the same "go home" affordance that
+       clicking the title used to. */
+    .header-left h1 { display: none; }
     .stats-badge { display: none; }
     /* v0.11.2 — show settings gear + help button on mobile but
        hide the theme pill (accessible via gear menu). */
@@ -3913,7 +3922,19 @@ body.is-touch .rail-section.rail-quality.is-collapsed .rail-chevron {
     .observatory-time-brush {
         height: auto;
         min-height: 140px;
-        padding: 4px 8px;
+        /* v0.13 follow-up — bump horizontal + bottom padding so the
+           TimeBrush handles sit clear of iOS Safari's swipe-back edge
+           zone (left) / forward zone (right) and the bottom home
+           indicator. Previously 4px/8px let users trigger browser-
+           level gestures while aiming for the handles. safe-area-
+           inset-bottom accounts for iPhone X-style notches. */
+        padding: 8px 18px;
+        padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    }
+    /* Prevent horizontal overscroll gestures originating inside the
+       brush from chaining to the browser's back/forward navigation. */
+    .observatory-time-brush {
+        overscroll-behavior-x: contain;
     }
     /* Brush canvas needs an explicit min-height when the
        container switches to height:auto so flex:1 has
@@ -3932,7 +3953,16 @@ body.is-touch .rail-section.rail-quality.is-collapsed .rail-chevron {
     .tabs::-webkit-scrollbar { display: none; }
 }
 
-body.is-touch .observatory-time-brush { height: auto; min-height: 140px; }
+body.is-touch .observatory-time-brush {
+    height: auto;
+    min-height: 140px;
+    /* Same edge-safe padding as the @media branch — see v0.13
+       follow-up comment above. Applies to any touch-primary device
+       regardless of viewport width (iPads, 2-in-1s). */
+    padding: 8px 18px;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    overscroll-behavior-x: contain;
+}
 body.is-touch .brush-wrap { min-height: 50px; }
 body.is-touch .brush-handle {
     width: 14px;
