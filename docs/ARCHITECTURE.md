@@ -37,6 +37,10 @@ cold. The goal is to explain *why* things are the way they are, not just
                      │    source_collection (3)          │
                      │    duplicate_candidate (126,730)  │
                      │    sighting_sentiment             │
+                     │  v0.12 UAP Gerb overlay:          │
+                     │    crash_retrieval     (14)       │
+                     │    nuclear_encounter   (35)       │
+                     │    facility            (75)       │
                      └───────────────────────────────────┘
 ```
 
@@ -90,7 +94,7 @@ Four tiers, matched top-to-bottom by `add_cache_headers`:
 |------|----------------------------------|-----------------------------------------------------|-----|
 | 1    | `/static/*?v=<any>`              | `public, max-age=31536000, immutable`               | Versioned URL; content-addressed by `?v=`, can never go stale. |
 | 2    | `/static/*` (no `?v=`)           | `public, max-age=3600, must-revalidate`             | Safety net: if something direct-links an unversioned URL, it can be at most one hour behind a deploy. |
-| 3    | `/api/stats`, `/api/filters`, `/api/map`, `/api/heatmap`, `/api/timeline`, `/api/search`, `/api/sentiment/*`, `/api/duplicates` | `public, max-age=300` | Browser + CDN can cache for 5 minutes during a pan/zoom session. Server-side `flask_caching.SimpleCache` with the same 300s TTL backs it up. |
+| 3    | `/api/stats`, `/api/filters`, `/api/map`, `/api/heatmap`, `/api/timeline`, `/api/search`, `/api/sentiment/*`, `/api/duplicates`, `/api/overlay` | `public, max-age=300` (overlay: 600) | Browser + CDN can cache for 5 minutes during a pan/zoom session. Server-side `flask_caching.SimpleCache` with the same 300s TTL backs it up. `/api/overlay` uses a 10-minute TTL since the curated Gerb data changes only on pipeline reload. |
 | 4    | `/`                              | `public, max-age=60`                                | HTML shell is tiny; a 60s cache lets deploys propagate the new version string fast. |
 | —    | everything else (`/health`, `/api/sighting/<id>`, `/mcp`) | no header set | Flask default; browsers will not cache aggressively. |
 
@@ -258,8 +262,9 @@ ufosint-explorer/
 │   └── style.css                # ~2500 lines, design tokens + components
 │
 ├── scripts/
-│   ├── pg_schema.sql            # canonical PostgreSQL DDL
-│   └── migrate_sqlite_to_pg.py  # SQLite → Postgres loader
+│   ├── pg_schema.sql                    # canonical PostgreSQL DDL
+│   ├── migrate_sqlite_to_pg.py          # SQLite → Postgres loader
+│   └── add_v012_gerb_nrc_columns.sql    # v0.12 overlay DDL (idempotent)
 │
 ├── tests/
 │   ├── conftest.py              # stubs psycopg pool, loads app once

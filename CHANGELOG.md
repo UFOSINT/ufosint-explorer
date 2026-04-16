@@ -17,6 +17,56 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 Nothing yet.
 
+## [0.12.0] — 2026-04-15 — UAP Gerb curated overlay (Crashes + Nuclear + Facilities)
+
+Ships the `feature/gerb-overlay` branch — curated research data from the
+UAP Gerb project layered over the sighting corpus for proximity analysis
+and visual correlation.
+
+### Added
+- **`/api/overlay` endpoint** returning three curated datasets as a
+  single JSON payload (~30 KB, cached 10 minutes): 14 crash retrievals,
+  35 nuclear encounters, 75 facilities.
+- **Three toggleable map layers** on Observatory — Crashes, Nuclear,
+  Facilities. Each marker opens a detail popup with the curated
+  metadata (craft type, recovery status, weapon system, sensor
+  confirmation, etc.).
+- **Timeline annotation stems** on the TimeBrush for crash + nuclear
+  events. Labels appear at higher zoom levels; text-stroke outlines
+  make them readable against the histogram. De-overlap logic skips
+  colliding labels (stems stay; hover for tooltip).
+- **Nuclear proximity on every sighting** — `distance_to_nearest_nuclear_site_km`
+  and `nearest_nuclear_site_name` columns computed by `gerb_overlay.py`
+  via haversine against 50 nuclear-relevant facilities (396k populated).
+- **NRC Lexicon word-counts** — 10 new sighting columns
+  (`nrc_joy`, `nrc_fear`, `nrc_anger`, `nrc_sadness`, `nrc_surprise`,
+  `nrc_disgust`, `nrc_trust`, `nrc_anticipation`, `nrc_positive`,
+  `nrc_negative`) denormalized from the sentiment analysis so raw
+  emotion counts stay queryable on the public DB after
+  `sentiment_analysis` is dropped in the export.
+
+### Changed
+- `scripts/migrate_sqlite_to_pg.py` extended with the v0.12 column
+  list and the three new overlay tables.
+- `/llms.txt` and `docs/ARCHITECTURE.md` updated with the new endpoint
+  and tables.
+
+### Fixed
+- **TimeBrush NaN freeze** when dragging selection handles past the
+  dataset bounds. Three guards: drag handler bails on NaN/Infinity,
+  pan handler same, and `_syncWindow` auto-recovers to the full range
+  instead of staying frozen.
+- **Overlay markers blocking point clicks** — same `preferCanvas` bug
+  as the region-shape regression. Overlay layers now don't steal
+  pointer events from the sighting markers underneath.
+- **Ruff B905** in `api_overlay` — `strict=False` on `zip()`.
+
+### Schema
+- 3 new PG tables (`crash_retrieval`, `nuclear_encounter`, `facility`).
+- 12 new `sighting` columns (10 NRC + 2 nuclear proximity).
+- Applied to prod via `scripts/add_v012_gerb_nrc_columns.sql`
+  (idempotent, safe to re-run).
+
 ## [0.11.9] — 2026-04-15 — Region (geofence) draw tool + Live Analytics sidebar
 
 Large feature drop spanning v0.11.3 through v0.11.9 on the

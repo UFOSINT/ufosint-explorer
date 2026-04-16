@@ -12,6 +12,11 @@ Interactive web interface for browsing the Unified UFO Sightings Database — **
 - **GPU-accelerated map** — 396,158 geocoded sightings rendered via deck.gl on a Leaflet base. Points, heatmap, and hex-bin views. Click any sighting for a full detail modal.
 - **Data Quality rail** — Five toggles (high quality, narrative red flags, has description, has media, has movement) filter the map in real time. Bias warning when the high-quality subset is active.
 - **Live filters** — Shape, color, source, emotion, date range, and 10 movement-category checkboxes. No Apply button — selections take effect at 250ms debounce.
+- **UAP Gerb overlays** (v0.12) — Three toggleable curated layers on top of the sighting map:
+  - **Crashes** — 14 documented crash-retrieval events with craft type, recovery status, and biologics flags.
+  - **Nuclear** — 35 nuclear-weapon encounters with weapon system, sensor confirmation, and witness credibility.
+  - **Facilities** — 75 nuclear-relevant facilities (bases, labs, storage sites) used to compute proximity for every sighting.
+  Click any overlay marker for a detail popup. Crash + nuclear events also appear as annotation stems on the TimeBrush so you can spot temporal clusters.
 
 ### TimeBrush
 - **Shared across all tabs** — a zoomable, pannable histogram of sightings over time (1900 — present). Scroll to zoom; drag to pan; drag handles to select a playback window.

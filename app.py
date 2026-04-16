@@ -789,6 +789,7 @@ The site provides a GPU-accelerated map of 396,158 geocoded sightings, timeline 
 - [Tool Catalog (OpenAI format)](https://ufosint-explorer.azurewebsites.net/api/tools-catalog): Tool definitions compatible with OpenAI/OpenRouter function calling
 - [Database Stats](https://ufosint-explorer.azurewebsites.net/api/stats): JSON statistics endpoint
 - [Filters](https://ufosint-explorer.azurewebsites.net/api/filters): Available filter values (shapes, sources, countries, etc.)
+- [UAP Gerb overlay](https://ufosint-explorer.azurewebsites.net/api/overlay): Curated crash retrievals (14), nuclear encounters (35), and facilities (75) as a single JSON payload. Not part of the main sighting corpus — these are research-grade overlay datasets.
 
 ## Data Sources
 
@@ -798,6 +799,11 @@ Five databases totaling 614,505 deduplicated records:
 - UFOCAT (197,108) — CUFOS academic catalog
 - UPDB (65,016) — Jacques Vallee's Unified Phenomena Database
 - UFO-search (54,751) — Majestic Timeline historical compilations
+
+Plus three curated overlay tables (UAP Gerb research project, v0.12):
+- `crash_retrieval` (14) — documented crash/retrieval events with craft type, recovery status, biologics
+- `nuclear_encounter` (35) — nuclear-weapon incidents with weapon system and sensor confirmation
+- `facility` (75) — nuclear-relevant facilities used to compute per-sighting proximity
 
 ## Download the Database
 
