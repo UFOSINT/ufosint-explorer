@@ -3920,22 +3920,56 @@ body.is-touch .rail-section.rail-quality.is-collapsed .rail-chevron {
     .stats-badge .stats-chip-optional { display: none; }
 
     .observatory-time-brush {
+        /* Bigger min-height on phone so the brush-header (which wraps
+           to 2-3 rows on narrow widths) + brush canvas + overview
+           mini-map all fit. Previously 140 was too tight and the
+           overview got pushed off the bottom of the flex container. */
         height: auto;
-        min-height: 140px;
+        min-height: 190px;
         /* v0.13 follow-up — bump horizontal + bottom padding so the
            TimeBrush handles sit clear of iOS Safari's swipe-back edge
            zone (left) / forward zone (right) and the bottom home
-           indicator. Previously 4px/8px let users trigger browser-
-           level gestures while aiming for the handles. safe-area-
-           inset-bottom accounts for iPhone X-style notches. */
+           indicator. 22 px fallback covers non-notched iOS Safari's
+           bottom tab bar; env(safe-area-inset-bottom) stacks on top
+           of it when the device has a home indicator. */
         padding: 8px 18px;
-        padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+        padding-bottom: calc(22px + env(safe-area-inset-bottom, 0px));
     }
     /* Prevent horizontal overscroll gestures originating inside the
        brush from chaining to the browser's back/forward navigation. */
     .observatory-time-brush {
         overscroll-behavior-x: contain;
     }
+    /* Brush-header has many controls (PLAY, SLIDING, SPEED select,
+       TIME WINDOW readout, APPLY, RESET). On narrow viewports they
+       need to wrap or a single row overflows horizontally. */
+    .brush-header {
+        flex-wrap: wrap;
+        gap: 6px 10px;
+        row-gap: 6px;
+    }
+
+    /* v0.13 follow-up — Observatory topbar overflow fix.
+       The agent UX review flagged this: Points/Heatmap/Hex +
+       Crashes/Nuclear/Facilities + REGION + COLOR/SIZE + HUD + gear
+       all crammed into a single absolute-positioned row that
+       overflows horizontally on phone (~885 scrollWidth vs
+       ~303 viewport). Users couldn't see the right half.
+       Fix: allow wrap, tighten edges, hide the LAT/LON/READY HUD
+       (not useful on a thumb-on-map phone workflow — reclaims the
+       widest single element in the row).
+       See docs/V013_UX_POLISH_PLAN.md §10 (partial — covers phone
+       portrait; tablet landscape still wraps differently but the
+       worst case is resolved). */
+    .observatory-topbar {
+        left: 6px;
+        right: 6px;
+        top: 6px;
+        flex-wrap: wrap;
+        justify-content: flex-start;
+        gap: 6px;
+    }
+    .observatory-topbar .observatory-hud { display: none; }
     /* Brush canvas needs an explicit min-height when the
        container switches to height:auto so flex:1 has
        something to resolve against. */
@@ -3955,14 +3989,28 @@ body.is-touch .rail-section.rail-quality.is-collapsed .rail-chevron {
 
 body.is-touch .observatory-time-brush {
     height: auto;
-    min-height: 140px;
+    min-height: 190px;
     /* Same edge-safe padding as the @media branch — see v0.13
        follow-up comment above. Applies to any touch-primary device
        regardless of viewport width (iPads, 2-in-1s). */
     padding: 8px 18px;
-    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: calc(22px + env(safe-area-inset-bottom, 0px));
     overscroll-behavior-x: contain;
 }
+body.is-touch .brush-header {
+    flex-wrap: wrap;
+    gap: 6px 10px;
+    row-gap: 6px;
+}
+body.is-touch .observatory-topbar {
+    left: 6px;
+    right: 6px;
+    top: 6px;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: 6px;
+}
+body.is-touch .observatory-topbar .observatory-hud { display: none; }
 body.is-touch .brush-wrap { min-height: 50px; }
 body.is-touch .brush-handle {
     width: 14px;

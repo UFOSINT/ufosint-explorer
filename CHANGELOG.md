@@ -57,10 +57,27 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
   viewport edges, so aiming for them on iOS Safari triggered the
   browser's swipe-back (left), swipe-forward (right), and home
   indicator (bottom) gestures instead. Bumped horizontal padding
-  to 18 px, added `padding-bottom: calc(12px + safe-area-inset-bottom)`
+  to 18 px, added `padding-bottom: calc(22px + safe-area-inset-bottom)`
   so handles sit clear of the edge-gesture zones + iPhone X notch.
   Also `overscroll-behavior-x: contain` as a belt-and-suspenders
   guard against horizontal gesture chaining.
+- **`viewport-fit=cover`** added to the viewport meta tag so iOS
+  actually resolves `env(safe-area-inset-*)` to non-zero on notched
+  devices. Without this the above `calc()` was effectively just the
+  22 px fallback on every iPhone.
+- **Observatory topbar overflowed horizontally on phone.** Points /
+  Heatmap / Hex + Crashes / Nuclear / Facilities + REGION + COLOR /
+  SIZE + LAT/LON HUD + gear were all on one absolute-positioned row
+  that ran off the right edge (~885 scrollWidth vs ~303 viewport).
+  Now `flex-wrap: wrap` on mobile, with the LAT/LON/READY HUD hidden
+  (not useful on thumb-on-map workflow, and the widest single element
+  was the biggest space-waster). Partial fix for
+  `docs/V013_UX_POLISH_PLAN.md` §10.
+- **TimeBrush overview mini-map pushed off the bottom on phone.**
+  The brush-header wrapped to 2-3 rows at narrow widths and the
+  140 px `min-height` wasn't enough to fit header + histogram +
+  overview. Bumped to 190 px on mobile and added `flex-wrap` to
+  the brush-header so layout is deterministic.
 
 ## [0.12.1] — 2026-04-16 — Pool self-healing (prod resilience)
 

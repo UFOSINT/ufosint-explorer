@@ -2,7 +2,12 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- v0.13 follow-up: `viewport-fit=cover` is required on iOS for
+         env(safe-area-inset-*) to resolve to non-zero values. Without
+         it the TimeBrush's padding-bottom: calc(12px + env(...)) was
+         effectively just 12px on notched iPhones, pushing the overview
+         mini-map under the home indicator / Safari bottom chrome. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>UFOSINT Explorer — 614,505 UFO sightings, searchable</title>
     <meta name="description" content="Browse 614,505 deduplicated UFO and UAP sighting records from five major databases on an interactive map, timeline, and full-text search." />
 
