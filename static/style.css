@@ -5533,3 +5533,134 @@ body[data-hide-brush] .observatory-time-brush {
     .brush-region-toggle { padding: 5px 8px; }
 }
 
+
+/* =========================================================================
+   v0.12: UAP Gerb curated overlay
+   ========================================================================= */
+
+/* Toggle buttons in the Observatory topbar */
+.overlay-toggles {
+    display: inline-flex;
+    gap: 2px;
+    padding: 3px;
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    pointer-events: auto;
+}
+.overlay-toggle-btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 4px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: color var(--t-fast), background var(--t-fast);
+}
+.overlay-toggle-btn:hover { color: var(--text); }
+.overlay-toggle-btn.active {
+    background: var(--surface-2);
+    color: var(--text);
+}
+.overlay-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+/* Overlay detail popup (opens on marker click) */
+.overlay-popup {
+    min-width: 280px;
+    max-width: 360px;
+    font-family: var(--font-mono);
+}
+.overlay-popup-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+.overlay-popup-badge {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #fff;
+    flex-shrink: 0;
+}
+.overlay-popup-badge.crash { background: #ef4444; }
+.overlay-popup-badge.nuclear { background: #f59e0b; color: #000; }
+.overlay-popup-badge.facility { background: #3b82f6; }
+.overlay-popup-badge.documented { background: #22c55e; }
+.overlay-popup-badge.contested { background: #eab308; color: #000; }
+.overlay-popup-badge.disputed { background: #f97316; }
+.overlay-popup-badge.folkloric { background: #a855f7; }
+.overlay-popup-badge.biologics { background: #22c55e; }
+.overlay-popup-badge.no-biologics { background: #6b7280; }
+.overlay-popup-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    line-height: 1.3;
+}
+.overlay-popup-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+    letter-spacing: 0.04em;
+}
+.overlay-popup-meta strong { color: var(--text); }
+.overlay-popup-summary {
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--text);
+    max-height: 180px;
+    overflow-y: auto;
+}
+.overlay-popup-confidence {
+    display: inline-flex;
+    gap: 4px;
+    font-size: 9px;
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid var(--border);
+    color: var(--text-muted);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+/* Leaflet popup override for dark theme */
+.leaflet-popup-content-wrapper {
+    background: var(--surface-1) !important;
+    color: var(--text) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 8px !important;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.5) !important;
+}
+.leaflet-popup-tip { background: var(--surface-1) !important; }
+.leaflet-popup-close-button {
+    color: var(--text-muted) !important;
+}
+.leaflet-popup-close-button:hover {
+    color: var(--text) !important;
+}
+
+@media (max-width: 700px) {
+    .overlay-toggles { gap: 1px; padding: 2px; }
+    .overlay-toggle-btn { font-size: 9px; padding: 3px 5px; }
+    .overlay-toggle-btn span:not(.overlay-dot) { display: none; }
+}

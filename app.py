@@ -951,6 +951,67 @@ def well_known_mcp():
     })
 
 
+# =========================================================================
+# v0.12: UAP Gerb overlay — curated crash + nuclear encounter data
+# =========================================================================
+# Three new PG tables from the science team's v0.12 reload:
+#   crash_retrieval (14), nuclear_encounter (35), facility (75)
+# Plus 2 new sighting columns: distance_to_nearest_nuclear_site_km,
+# nearest_nuclear_site_name (396k populated). This endpoint returns
+# all three tables as a single lightweight JSON payload (~30KB).
+# Cached 10 minutes since the data changes only on reload.
+
+@app.route("/api/overlay")
+@cache.cached(timeout=600)
+def api_overlay():
+    """UAP Gerb curated overlay: crashes, nuclear encounters, facilities."""
+    conn = get_db()
+    with conn.cursor() as cur:
+        # Crashes (14 rows)
+        cur.execute("""
+            SELECT id, page_name, year, date_event,
+                   city, region, country, latitude, longitude,
+                   precision, craft_type, craft_size_m,
+                   recovery_status, has_biologics, crew_count,
+                   evidence_quality, source_confidence,
+                   short_summary
+            FROM crash_retrieval
+            ORDER BY year, page_name
+        """)
+        crash_cols = [d[0] for d in cur.description]
+        crashes = [dict(zip(crash_cols, row)) for row in cur.fetchall()]
+
+        # Nuclear encounters (35 rows)
+        cur.execute("""
+            SELECT id, page_name, year, date_event,
+                   base, city, region, country, latitude, longitude,
+                   weapon_system, incident_type, missiles_affected,
+                   sensor_confirmation, witness_credibility,
+                   evidence_quality, source_confidence,
+                   summary
+            FROM nuclear_encounter
+            ORDER BY year, page_name
+        """)
+        nuclear_cols = [d[0] for d in cur.description]
+        nuclear = [dict(zip(nuclear_cols, row)) for row in cur.fetchall()]
+
+        # Facilities (75 rows, filtered to geocoded)
+        cur.execute("""
+            SELECT id, name, facility_type, latitude, longitude
+            FROM facility
+            WHERE latitude IS NOT NULL
+            ORDER BY name
+        """)
+        fac_cols = [d[0] for d in cur.description]
+        facilities = [dict(zip(fac_cols, row)) for row in cur.fetchall()]
+
+    return jsonify({
+        "crashes": crashes,
+        "nuclear_encounters": nuclear,
+        "facilities": facilities,
+    })
+
+
 @app.route("/api/tool/<name>", methods=["POST"])
 def api_tool_call(name):
     """Direct tool invocation for the BYOK chat.

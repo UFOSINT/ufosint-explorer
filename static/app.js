@@ -1904,6 +1904,10 @@ function loadObservatory() {
         if (typeof initObservatoryDqGear === "function") {
             initObservatoryDqGear();
         }
+        // v0.12 — wire overlay toggle buttons (crashes/nuclear/facilities)
+        if (typeof initOverlayToggles === "function") {
+            initOverlayToggles();
+        }
         state.observatoryMounted = true;
     }
 
@@ -8690,4 +8694,188 @@ function initObservatoryDqGear() {
     if (typeof _mountDqGearPopup === "function") {
         _mountDqGearPopup("observatory-dq-gear", "observatory-dq-popup", "observatory-dq-list");
     }
+}
+
+
+// =========================================================================
+// v0.12: UAP Gerb curated overlay
+// =========================================================================
+//
+// Fetches crash-retrieval, nuclear-encounter, and facility data from
+// /api/overlay and renders them as always-visible Leaflet markers on
+// the Observatory map. Three toggleable layer groups, each with
+// distinct color. Click a marker -> Leaflet popup with case info.
+
+const _OVERLAY_COLORS = {
+    crash:    "#ef4444",
+    nuclear:  "#f59e0b",
+    facility: "#3b82f6",
+};
+
+function initOverlayToggles() {
+    const container = document.getElementById("overlay-toggles");
+    if (!container) return;
+    container.querySelectorAll(".overlay-toggle-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+            btn.classList.toggle("active");
+            const layer = btn.dataset.overlay;
+            _toggleOverlayLayer(layer, btn.classList.contains("active"));
+        });
+    });
+}
+
+let _overlayData = null;
+let _overlayLayers = {};
+let _overlayFetched = false;
+
+async function loadOverlayData() {
+    if (_overlayFetched) return _overlayData;
+    try {
+        const resp = await fetch("/api/overlay");
+        if (!resp.ok) throw new Error("overlay fetch failed: " + resp.status);
+        _overlayData = await resp.json();
+        _overlayFetched = true;
+        _buildOverlayLayers();
+        return _overlayData;
+    } catch (e) {
+        console.warn("[overlay] failed to load:", e);
+        return null;
+    }
+}
+
+function _buildOverlayLayers() {
+    if (!_overlayData || !state.map) return;
+
+    // Crash layer (14 records, red, radius 10)
+    const crashMarkers = (_overlayData.crashes || []).map(c => {
+        if (!c.latitude || !c.longitude) return null;
+        const m = L.circleMarker([c.latitude, c.longitude], {
+            radius: 10,
+            fillColor: _OVERLAY_COLORS.crash,
+            color: "#fff",
+            weight: 2,
+            fillOpacity: 0.9,
+            pane: "markerPane",
+        });
+        m.bindPopup(() => _renderCrashPopup(c), { maxWidth: 380, className: "overlay-popup-wrap" });
+        return m;
+    }).filter(Boolean);
+    _overlayLayers.crashes = L.layerGroup(crashMarkers);
+
+    // Nuclear encounter layer (35 records, orange, radius 7)
+    const nuclearMarkers = (_overlayData.nuclear_encounters || []).map(n => {
+        if (!n.latitude || !n.longitude) return null;
+        const m = L.circleMarker([n.latitude, n.longitude], {
+            radius: 7,
+            fillColor: _OVERLAY_COLORS.nuclear,
+            color: "#fff",
+            weight: 1.5,
+            fillOpacity: 0.9,
+            pane: "markerPane",
+        });
+        m.bindPopup(() => _renderNuclearPopup(n), { maxWidth: 380, className: "overlay-popup-wrap" });
+        return m;
+    }).filter(Boolean);
+    _overlayLayers.nuclear = L.layerGroup(nuclearMarkers);
+
+    // Facility layer (75 records, blue, radius 4)
+    const facilityMarkers = (_overlayData.facilities || []).map(f => {
+        if (!f.latitude || !f.longitude) return null;
+        const m = L.circleMarker([f.latitude, f.longitude], {
+            radius: 4,
+            fillColor: _OVERLAY_COLORS.facility,
+            color: "#fff",
+            weight: 1,
+            fillOpacity: 0.7,
+            pane: "markerPane",
+        });
+        m.bindPopup(() => _renderFacilityPopup(f), { maxWidth: 300, className: "overlay-popup-wrap" });
+        return m;
+    }).filter(Boolean);
+    _overlayLayers.facilities = L.layerGroup(facilityMarkers);
+}
+
+function _toggleOverlayLayer(name, show) {
+    if (!state.map) return;
+    if (!_overlayFetched) {
+        loadOverlayData().then(() => _toggleOverlayLayer(name, show));
+        return;
+    }
+    const group = _overlayLayers[name];
+    if (!group) return;
+    if (show) {
+        group.addTo(state.map);
+    } else {
+        state.map.removeLayer(group);
+    }
+}
+
+// ---- Popup renderers ----
+
+function _renderCrashPopup(c) {
+    var title = (c.page_name || "").replace(/^\d{4}\s+/, "");
+    var badges = '<span class="overlay-popup-badge crash">CRASH ' + (c.year || "") + '</span>';
+    if (c.has_biologics) {
+        badges += ' <span class="overlay-popup-badge biologics">BIOLOGICS ALLEGED</span>';
+    }
+    if (c.source_confidence) {
+        badges += ' <span class="overlay-popup-badge ' + escapeHtml(c.source_confidence) + '">' + escapeHtml(c.source_confidence) + '</span>';
+    }
+    var meta = "";
+    if (c.city || c.country) meta += "<strong>Location:</strong> " + escapeHtml([c.city, c.region, c.country].filter(Boolean).join(", ")) + " ";
+    if (c.date_event) meta += "<strong>Date:</strong> " + escapeHtml(c.date_event) + " ";
+    if (c.craft_type) meta += "<strong>Craft:</strong> " + escapeHtml(c.craft_type) + " ";
+    if (c.recovery_status) meta += "<strong>Recovery:</strong> " + escapeHtml(c.recovery_status) + " ";
+
+    var html = '<div class="overlay-popup">';
+    html += '<div class="overlay-popup-header">' + badges + '</div>';
+    html += '<div class="overlay-popup-title">' + escapeHtml(title) + '</div>';
+    html += '<div class="overlay-popup-meta">' + meta + '</div>';
+    if (c.short_summary) {
+        html += '<div class="overlay-popup-summary">' + escapeHtml(c.short_summary).slice(0, 500) + '</div>';
+    }
+    html += '<div class="overlay-popup-confidence">';
+    html += '<span>Evidence: ' + escapeHtml(c.evidence_quality || "n/a") + '</span>';
+    html += ' <span>Confidence: ' + escapeHtml(c.source_confidence || "n/a") + '</span>';
+    html += '</div></div>';
+    return html;
+}
+
+function _renderNuclearPopup(n) {
+    var title = (n.page_name || "").replace(/^\d{4}\s+/, "");
+    var badges = '<span class="overlay-popup-badge nuclear">NUCLEAR ' + (n.year || "") + '</span>';
+    if (n.incident_type) {
+        badges += ' <span class="overlay-popup-badge nuclear">' + escapeHtml(n.incident_type.replace(/_/g, " ")) + '</span>';
+    }
+    var meta = "";
+    if (n.base) meta += "<strong>Base:</strong> " + escapeHtml(n.base) + " ";
+    if (n.city || n.country) meta += "<strong>Location:</strong> " + escapeHtml([n.city, n.region, n.country].filter(Boolean).join(", ")) + " ";
+    if (n.date_event) meta += "<strong>Date:</strong> " + escapeHtml(n.date_event) + " ";
+    if (n.weapon_system) meta += "<strong>Weapon:</strong> " + escapeHtml(n.weapon_system) + " ";
+    if (n.missiles_affected) meta += "<strong>Missiles affected:</strong> " + n.missiles_affected + " ";
+    if (n.witness_credibility) meta += "<strong>Witnesses:</strong> " + escapeHtml(n.witness_credibility) + " ";
+
+    var html = '<div class="overlay-popup">';
+    html += '<div class="overlay-popup-header">' + badges + '</div>';
+    html += '<div class="overlay-popup-title">' + escapeHtml(title) + '</div>';
+    html += '<div class="overlay-popup-meta">' + meta + '</div>';
+    if (n.summary) {
+        html += '<div class="overlay-popup-summary">' + escapeHtml(n.summary).slice(0, 500) + '</div>';
+    }
+    html += '<div class="overlay-popup-confidence">';
+    html += '<span>Evidence: ' + escapeHtml(n.evidence_quality || "n/a") + '</span>';
+    html += ' <span>Confidence: ' + escapeHtml(n.source_confidence || "n/a") + '</span>';
+    html += '</div></div>';
+    return html;
+}
+
+function _renderFacilityPopup(f) {
+    var ftype = (f.facility_type || "facility").replace(/_/g, " ");
+    var html = '<div class="overlay-popup">';
+    html += '<div class="overlay-popup-header"><span class="overlay-popup-badge facility">' + escapeHtml(ftype) + '</span></div>';
+    html += '<div class="overlay-popup-title">' + escapeHtml(f.name || "Unknown facility") + '</div>';
+    html += '<div class="overlay-popup-meta">';
+    if (f.latitude) html += '<span>' + f.latitude.toFixed(3) + ', ' + f.longitude.toFixed(3) + '</span>';
+    html += '</div></div>';
+    return html;
 }

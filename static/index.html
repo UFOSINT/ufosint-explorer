@@ -348,6 +348,22 @@
                             <button class="mode-btn" data-mode="heatmap" type="button" role="tab">Heatmap</button>
                             <button class="mode-btn" data-mode="hexbin" type="button" role="tab">Hex Bins</button>
                         </div>
+                        <!-- v0.12 — Curated overlay toggles. Each button
+                             shows/hides a Leaflet layer group fetched
+                             from /api/overlay (14 crashes, 35 nuclear
+                             encounters, 75 facilities). Always-on
+                             markers at every zoom — never clustered. -->
+                        <div class="overlay-toggles" id="overlay-toggles">
+                            <button class="overlay-toggle-btn" data-overlay="crashes" type="button" title="Show crash-retrieval sites (14)">
+                                <span class="overlay-dot" style="background:#ef4444"></span>Crashes
+                            </button>
+                            <button class="overlay-toggle-btn" data-overlay="nuclear" type="button" title="Show UAP-over-nuclear-site encounters (35)">
+                                <span class="overlay-dot" style="background:#f59e0b"></span>Nuclear
+                            </button>
+                            <button class="overlay-toggle-btn" data-overlay="facilities" type="button" title="Show nuclear weapon facilities (75)">
+                                <span class="overlay-dot" style="background:#3b82f6"></span>Facilities
+                            </button>
+                        </div>
                         <!-- v0.11.4 — Region (geofence) draw tool.
                              Click the REGION button to open a shape
                              picker (Rectangle / Polygon / Circle),
