@@ -36,23 +36,36 @@ busy, and new requests wait 30 s then time out. Once all 8 pool
 slots are wedged this way the app effectively stops serving even
 though Azure still thinks it's healthy.
 
-**Prevention (shipped in v0.12.1).** Three pool parameters —
-[`app.py:158`](../app.py):
+**Prevention (shipped in v0.12.1 + hardened in v0.12.2).** The pool
+now combines socket-health checks, idle/lifetime recycling, and
+fail-fast timeouts — [`app.py:170`](../app.py):
 
 ```python
 _pool = ConnectionPool(
-    DATABASE_URL, min_size=1, max_size=8, open=True, timeout=30,
+    DATABASE_URL, min_size=1, max_size=8, open=True,
+    timeout=8,          # v0.12.2: was 30 — fail fast to the LB
     max_idle=300,       # 5 min — close idle conns before Azure kills them
     max_lifetime=3600,  # 1 hour — recycle as defense in depth
     check=ConnectionPool.check_connection,  # SELECT 1 before handout
-    kwargs={"autocommit": True,
-            "options": "-c default_transaction_read_only=on"},
+    kwargs={
+        "autocommit": True,
+        "connect_timeout": 5,                       # v0.12.2
+        "options": ("-c default_transaction_read_only=on "
+                    "-c statement_timeout=25000"),  # v0.12.2
+    },
 )
 ```
 
-`check` is the crucial one — it makes the pool self-healing. Dead
-connections are discarded and replaced instead of handed out and
-wedging the caller.
+- `check` is self-healing: dead connections get discarded and replaced
+  instead of handed out and wedging the caller.
+- `timeout=8` + `/health` returning 503 on DB failure (v0.12.2) lets
+  Azure App Service Health Check auto-restart a wedged instance
+  instead of relying on manual `az webapp restart`.
+- `connect_timeout=5` caps how long opening a *fresh* connection can
+  block. Without it, the pool refilling after a mass eviction can
+  stall indefinitely on a dead NAT path.
+- `statement_timeout=25000` is the server-side kill switch for any
+  single runaway query.
 
 **Mitigation if it happens anyway.** Restart the App Service:
 
@@ -113,22 +126,28 @@ completes).
 
 ## 3. `/health` endpoint behavior
 
-`/health` (`app.py:427`) runs `SELECT COUNT(*) FROM sighting` and
+`/health` (`app.py:442`) runs `SELECT COUNT(*) FROM sighting` and
 returns:
 
 - `HTTP 200 {"status":"ok","sightings":N}` — healthy, DB reachable
-- `HTTP 200 {"status":"waiting","detail":"..."}` — DB unreachable
-  but still in the cold-start grace window
+- `HTTP 503 {"status":"unhealthy","detail":"..."}` — DB unreachable
+  (v0.12.2 — was 200 with `status:"waiting"` prior to 2026-04-16
+  hotfix, which prevented Azure from detecting a wedged worker).
 
-**Caveat.** The endpoint currently returns 200 even when DB is
-unreachable. This was intentional during cold start to prevent
-Azure from restarting a container that's just slow to warm up.
-The downside is that Azure App Service Health Check (if enabled)
-won't detect a wedged pool — it only restarts on non-2xx.
+**Azure App Service Health Check** is enabled against this path
+(10-min LB threshold). Non-2xx responses start the eviction clock;
+the LB stops routing traffic to the unhealthy instance, and after
+~1h of sustained failure the instance is replaced. On single-
+instance B1 we don't get replacement, but we do get auto-restart
+via the platform — zero-touch recovery from the v0.12.1/2.1 wedge.
 
-If a future incident justifies it, flip `/health` to return 503
-on DB failure once past a 60 s boot window. Not shipped yet —
-pool self-healing (§2.1) makes it lower priority.
+Verify it's on:
+
+```bash
+az webapp config show --name ufosint-explorer \
+    --resource-group rg-ufosint-prod \
+    --query "{healthCheckPath:healthCheckPath}" -o json
+```
 
 ## 4. Incident log
 
@@ -161,6 +180,28 @@ pool self-healing (§2.1) makes it lower priority.
   updated at [`tests/conftest.py`](../tests/conftest.py) to
   stub the new `check_connection` staticmethod on `_FakePool`.
 
+### 2026-04-16 (round 2) — prod wedged again, pool check hung on dead NAT
+
+- **18:24 UTC.** `/api/map` starts returning 500 with
+  `PoolTimeout`. Same symptom as round 1. Layer 1's
+  `check=SELECT 1` apparently hung on the half-dead socket until
+  OS timeout rather than failing fast.
+- **18:25 UTC.** `az webapp restart` issued, pool reinitialized.
+- **Post-mortem.** `check` is necessary but insufficient: when
+  Azure's path silently drops packets (no RST), `SELECT 1` just
+  hangs on the dead FD. Also, `/health` had been returning 200
+  on failure, so Azure App Service Health Check couldn't have
+  saved us even if enabled.
+- **Fix shipped (v0.12.2).**
+  - `/health` now returns 503 on DB failure (happy path
+    unchanged so deploy smoke still works).
+  - Pool `timeout=30 → 8` — return 503 to the LB in 8 s.
+  - `connect_timeout=5` on the psycopg kwargs — cap fresh-
+    connection dials.
+  - `statement_timeout=25000` in the PG options — server-side
+    kill for any stuck query.
+  - Azure App Service Health Check enabled at `/health`.
+
 ## 5. Useful commands
 
 ```bash
@@ -188,8 +229,6 @@ done
 
 ## 6. Future work worth considering
 
-- **`/health` returns 503 on DB failure** (see §3). Enables Azure
-  App Service Health Check auto-restart — zero-touch recovery.
 - **Azure Application Insights alerting** on 5xx rate spike. Cuts
   MTTR from hours to minutes by paging someone on detection.
 - **`Always On` setting** on the App Service — prevents the
@@ -197,7 +236,10 @@ done
 - **Observability dashboard** in Azure portal pinning the 3–4
   metrics that matter: request rate, 5xx rate, PG active
   connections, App Service CPU.
+- **Scale out to 2 instances** on Standard tier — Health Check
+  eviction is much more effective with a sibling to route traffic
+  to while the unhealthy instance restarts.
 
-None of the above is required now — pool self-healing (§2.1) is
-sufficient for the specific wedging mode that caused the 2026-04-16
-incident. Revisit if something novel breaks.
+None of the above is required now — v0.12.2's fail-fast pool +
+503 health check + Azure auto-restart covers the wedging modes
+observed so far. Revisit if something novel breaks.

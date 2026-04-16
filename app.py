@@ -167,12 +167,25 @@ if not DATABASE_URL:
 #     hour overnight leaves the pool full of half-dead sockets.
 #   - `max_lifetime`: recycle every hour as defense in depth against
 #     slow memory or handle leaks on either end of the connection.
+#
+# v0.12.2 hotfix — Layer 1 wasn't enough. When Azure NAT *silently
+# drops* packets, the check=SELECT 1 probe hangs on the dead socket
+# until the OS-level timeout fires, so getconn() still blocks for the
+# full pool `timeout=` window. Belt-and-braces additions:
+#   - `connect_timeout=5`: cap opening a fresh connection at 5s so a
+#     pool refill after a mass eviction can't block forever.
+#   - `statement_timeout=25000`: server-side kill switch for any stuck
+#     query (25s — matches pool checkout + small margin).
+#   - `timeout=8`: if all 8 slots are busy, return the 503 to the LB
+#     in 8s instead of holding the request for 30s. Pairs with the
+#     Azure Health Check probe on /health, which will rotate/restart
+#     the instance after ~10 min of sustained 503s.
 _pool = ConnectionPool(
     DATABASE_URL,
     min_size=1,
     max_size=8,
     open=True,
-    timeout=30,
+    timeout=8,          # v0.12.2: was 30; fail fast to the LB
     max_idle=300,       # 5 min
     max_lifetime=3600,  # 1 hour
     check=ConnectionPool.check_connection,
@@ -181,7 +194,11 @@ _pool = ConnectionPool(
         # on every query, and default_transaction_read_only is a safety
         # net in case anything ever tries to write.
         "autocommit": True,
-        "options": "-c default_transaction_read_only=on",
+        "connect_timeout": 5,   # v0.12.2: cap fresh-connection dials
+        "options": (
+            "-c default_transaction_read_only=on "
+            "-c statement_timeout=25000"  # v0.12.2: 25s server-side kill
+        ),
     },
 )
 
@@ -441,8 +458,17 @@ def index():
 
 @app.route("/health")
 def health():
-    """Health check. Tries to query the DB; returns 200 'waiting' if the
-    pool can't connect yet (e.g. during cold start), 200 'ok' otherwise."""
+    """Health check.
+
+    v0.12.2 — returns **503** on DB failure so Azure App Service Health
+    Check can detect a wedged instance and rotate/restart it. Previous
+    behaviour always returned 200 (even on failure), which meant the
+    load balancer never noticed a pool-wedged worker and kept routing
+    traffic to it — see docs/OPERATIONS.md § incident log 2026-04-16.
+
+    Deploy workflow smoke probe still matches on `"status":"ok"` +
+    `"sightings":` in the body, so the happy path is unchanged.
+    """
     try:
         conn = get_db()
         try:
@@ -453,7 +479,10 @@ def health():
             conn.close()
         return jsonify({"status": "ok", "sightings": count})
     except Exception as e:
-        return jsonify({"status": "waiting", "detail": str(e)})
+        # 503 = Service Unavailable. Azure Health Check treats any
+        # non-2xx/3xx response as unhealthy and starts its eviction
+        # clock (10 min LB threshold + 1h replacement threshold).
+        return jsonify({"status": "unhealthy", "detail": str(e)}), 503
 
 
 def _api_stats_mapped_count(conn):

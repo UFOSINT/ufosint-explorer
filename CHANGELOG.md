@@ -79,6 +79,35 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
   overview. Bumped to 190 px on mobile and added `flex-wrap` to
   the brush-header so layout is deterministic.
 
+## [0.12.2] — 2026-04-16 — Fail-fast health check + statement/connect timeouts (prod resilience, hotfix)
+
+Second prod wedge on 2026-04-16 proved v0.12.1's Layer 1 alone wasn't
+enough: when Azure's network path *silently drops* packets rather than
+RST'ing, `check=SELECT 1` hangs on the dead socket until the OS-level
+TCP timeout fires. See `docs/OPERATIONS.md` §4.
+
+### Fixed
+- **`/health` now returns HTTP 503 on DB failure** (was 200 with
+  `status:"waiting"`). Azure App Service Health Check had no way to
+  detect a wedged worker because the endpoint lied; the LB happily
+  kept routing 30 s-timeout traffic to it. Happy path unchanged
+  (`200 {"status":"ok","sightings":N}`) so the deploy smoke probe
+  still works.
+- **Pool `timeout` 30 s → 8 s.** Requests that can't check out a
+  connection now return 503 to the LB in 8 s instead of holding
+  the worker thread for 30 s. Pairs with Azure Health Check eviction.
+- **`connect_timeout=5`** on pool `kwargs` — caps how long opening
+  a *fresh* connection can block, so a mass eviction + refill can't
+  stall getconn() indefinitely.
+- **`statement_timeout=25000`** in the PG `options` string — server-
+  side kill switch for any runaway query (25 s; slightly under pool
+  checkout + margin so clients see the PG error not a pool timeout).
+
+### Ops
+- Azure App Service Health Check enabled at `/health` (10 min LB
+  threshold). Unhealthy instances are auto-restarted instead of
+  relying on manual `az webapp restart`.
+
 ## [0.12.1] — 2026-04-16 — Pool self-healing (prod resilience)
 
 Prevents the 2026-04-16 prod incident (see
