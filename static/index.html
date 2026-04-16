@@ -472,7 +472,13 @@
                          only sink was the server-side `coords` query
                          param on /api/map, which was never wired into
                          the client-side bulk buffer filter pipeline. -->
-                    <div id="map-status" class="panel-status" aria-live="polite">READY</div>
+                    <!-- v0.13: default is empty. A `.panel-status:empty`
+                         rule hides the pill so the "READY" ghost no longer
+                         sits at lower-left of the map after the intro
+                         dissolves. Writers set textContent to show a
+                         real status; setting textContent = "" hides again.
+                         See docs/V013_UX_POLISH_PLAN.md §4. -->
+                    <div id="map-status" class="panel-status" aria-live="polite"></div>
                     <button id="btn-load-all" class="btn-load-all" style="display:none" onclick="loadAll()">Load All</button>
                     <div class="hud-brackets" aria-hidden="true">
                         <span class="hud-br hud-br-tl"></span>

@@ -456,16 +456,34 @@ def test_css_brush_height_bumped_on_touch():
 # Phase 6 — Responsive polish
 # =============================================================================
 
-def test_stats_badge_optional_chips_wrapped():
-    """showStats should wrap derived-count chips in
-    .stats-chip-optional so CSS can hide them on narrow viewports."""
+def test_stats_badge_renders_single_chip():
+    """v0.13 §1 — badge collapsed to a single "${total} sightings"
+    chip. All derived numbers (mapped / high quality / with movement /
+    duplicates) moved into the popover, which opens on click.
+
+    Previously (v0.9.0–v0.12) the badge rendered up to five
+    middle-dot-separated chips and wrapped to 2-3 lines on narrow
+    viewports, inflating the header from 53 px to 108 px+. This
+    test locks the v0.13 contract: the `badge.innerHTML = ...`
+    line must produce a single chip with the total count.
+
+    See docs/V013_UX_POLISH_PLAN.md §1 for the full rationale.
+    """
     src = _read(APP_JS)
     body = _extract_js_function(src, "showStats")
     assert body, "couldn't locate showStats body"
-    assert 'stats-chip-optional' in body, (
-        "showStats must wrap the high-quality / with-movement / "
-        "duplicates chips in <span class='stats-chip-optional'> so "
-        "they can be hidden on mobile"
+    # Must assign a single-chip string to badge.innerHTML. The chip
+    # must include the total count. We don't pin the exact phrasing
+    # because wording tweaks shouldn't break the test — just the
+    # shape: a literal with ${total} and no chip separator.
+    assert re.search(
+        r"badge\.innerHTML\s*=\s*`[^`]*\$\{total\}[^`]*`\s*;",
+        body,
+    ), "badge.innerHTML must be set to a template literal containing ${total}"
+    # Guard against the old multi-chip pattern sneaking back in.
+    assert ".stats-sep" not in body, (
+        "showStats should no longer emit the middle-dot `.stats-sep` "
+        "separator — the badge is a single chip now"
     )
 
 

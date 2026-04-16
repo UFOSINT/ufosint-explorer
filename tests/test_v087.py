@@ -515,9 +515,16 @@ def test_stats_response_includes_mapped_sightings():
 
 
 def test_show_stats_renders_mapped_sightings():
-    """The frontend badge should prefer data.mapped_sightings and
-    fall back to data.geocoded_locations. Direct reference to the
-    old field alone without the fallback is a regression."""
+    """The frontend should prefer data.mapped_sightings and fall back
+    to data.geocoded_locations. Direct reference to the old field
+    alone without the fallback is a regression.
+
+    v0.13: the badge itself was collapsed to "${total} sightings"
+    only (see docs/V013_UX_POLISH_PLAN.md §1). The `mapped` number
+    now lives in the popover row "Sightings on map". The assertion
+    below only checks that mapped_sightings is still READ — the
+    exact DOM location moved from badge chip to popover row.
+    """
     src = _read(APP_JS)
     body = _extract_js_function(src, "showStats")
     assert body, "couldn't locate showStats body"
@@ -526,11 +533,12 @@ def test_show_stats_renders_mapped_sightings():
         "level count) instead of data.geocoded_locations which is "
         "the distinct-place count"
     )
-    # The chip label should now read "mapped" sourced from the new
-    # field, not the old one.
-    assert "${mapped} mapped" in body, (
-        "badge chip should render `${mapped} mapped` where `mapped` "
-        "resolves from mapped_sightings"
+    # `${mapped}` still appears — in the popover row now, not the
+    # badge chip. Guard against the field falling out of showStats
+    # entirely.
+    assert "${mapped}" in body, (
+        "showStats should render the mapped count somewhere (popover "
+        "row in v0.13+, used to be the badge chip)"
     )
 
 

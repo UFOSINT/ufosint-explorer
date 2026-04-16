@@ -657,6 +657,12 @@ select:focus {
     z-index: 1000;
     pointer-events: none;
 }
+/* v0.13: hide the status pill when it has no message. The HTML default
+ * used to be "READY", which stuck at lower-left of the map after the
+ * intro dissolved — the "ghost" flagged in docs/V013_UX_POLISH_PLAN.md §4.
+ * Now writers set textContent to show a message and set it back to ""
+ * to hide. */
+.panel-status:empty { display: none; }
 
 .btn-load-all {
     position: absolute;
@@ -3355,6 +3361,91 @@ body.is-touch.mobile-filters-hidden .observatory-stage {
     grid-template-rows: 1fr;
 }
 
+/* =========================================================================
+   v0.13 §2 — mobile filter drawer as OVERLAY, not flow-push
+   =========================================================================
+   The layout root (body) is a flex column of height: 100vh with
+   #main as flex: 1. Anything in the column between the header and
+   #main subtracts from the map's height. Previously, expanding
+   the mobile filter bar (hamburger tap) made it wrap to 200+ px
+   in-flow, squeezing the map container to 0 px on phones. The
+   agent review flagged this as the second-worst Tier-1 issue.
+
+   Fix: when the user expands the filter drawer on mobile/touch,
+   pull #filters-bar (and the movement row) OUT of the flex flow
+   via position: fixed. The map keeps its full height; filters
+   float on top as a scrollable panel below the header. A subtle
+   dim backdrop signals modal-ish behavior without capturing taps
+   (so the map behind stays interactable).
+
+   See docs/V013_UX_POLISH_PLAN.md §2 for full context.
+   ========================================================================= */
+@media (max-width: 720px) {
+    body:not(.mobile-filters-hidden) #filters-bar {
+        position: fixed;
+        top: 52px;       /* below the mobile header (padding 6 + content ~40) */
+        left: 0;
+        right: 0;
+        z-index: 900;
+        max-height: calc(100vh - 52px - 160px);  /* reserve for TimeBrush */
+        overflow-y: auto;
+        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.6);
+        border-bottom: 1px solid var(--border);
+    }
+    body:not(.mobile-filters-hidden) .filter-movement-row {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 160px;   /* above the TimeBrush */
+        z-index: 899;
+        background: var(--bg-panel);
+        border-top: 1px solid var(--border);
+        box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.4);
+    }
+    /* Dim the rest of the UI while the drawer is open. pointer-events
+       stays auto on the map so users can still pan/zoom underneath —
+       tapping the hamburger again is the canonical close gesture. */
+    body:not(.mobile-filters-hidden)::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.35);
+        z-index: 880;
+        pointer-events: none;
+    }
+}
+/* Mirror the same behavior on any touch-primary device regardless
+   of viewport width — phones in landscape, tablets, 2-in-1s. */
+body.is-touch:not(.mobile-filters-hidden) #filters-bar {
+    position: fixed;
+    top: 52px;
+    left: 0;
+    right: 0;
+    z-index: 900;
+    max-height: calc(100vh - 52px - 160px);
+    overflow-y: auto;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.6);
+    border-bottom: 1px solid var(--border);
+}
+body.is-touch:not(.mobile-filters-hidden) .filter-movement-row {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 160px;
+    z-index: 899;
+    background: var(--bg-panel);
+    border-top: 1px solid var(--border);
+    box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.4);
+}
+body.is-touch:not(.mobile-filters-hidden)::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.35);
+    z-index: 880;
+    pointer-events: none;
+}
+
 /* ---- "Unsaved changes" indicator on the Apply button ---- */
 /* Toggled on by text input events, removed when applyFilters runs or
    the button is clicked. A subtle accent ring pulse draws the eye
@@ -3847,13 +3938,26 @@ body.is-touch .brush-handle {
     width: 14px;
     position: relative;
 }
-/* Expand the hit area without changing the visual — a
-   pseudo-element stretches beyond the visible handle so taps
-   near-but-not-exactly-on-it still register. */
+/* v0.13 §3 — expand the hit area to the 44x44 touch-target minimum
+   without changing the visual. Previously used `inset: -12px -8px`
+   which only reached ~30x46 — still unthumb-able on phones. New math:
+   handle is 14 wide by 22 tall, inset -12 -15 grows it to 44 wide by
+   46 tall. Visual handle stays the same size. */
 body.is-touch .brush-handle::before {
     content: "";
     position: absolute;
-    inset: -12px -8px;
+    inset: -12px -15px;
+}
+/* v0.13 §3 — the overview-handle (the tiny 6px handles on the
+   bottom mini-map that set the OVERVIEW window) had no touch
+   override at all. Same pattern: expand the pseudo-element hit
+   area so the handle is actually grabbable on a thumb. Overview
+   handles are 6 wide, ~22 tall — inset -12 -19 reaches 44x46. */
+body.is-touch .overview-handle { position: relative; }
+body.is-touch .overview-handle::before {
+    content: "";
+    position: absolute;
+    inset: -12px -19px;
 }
 body.is-touch .stats-badge .stats-chip-optional { display: none; }
 body.is-touch .filter-movement-row {

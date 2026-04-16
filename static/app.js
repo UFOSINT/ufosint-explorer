@@ -729,26 +729,20 @@ function showStats(data) {
     const withMovStr = (typeof withMovement === "number" && withMovement > 0)
         ? withMovement.toLocaleString() : null;
 
-    // Compact badge — up to five chips separated by middle dots.
-    // The first two (total, mapped) always render without the
-    // .stats-chip-optional class — they're the headline numbers.
-    // The derived chips (high-quality, with-movement) only render
-    // once the v0.8.2/v0.8.3b columns are populated, AND carry the
-    // .stats-chip-optional class so v0.9.0 CSS can hide them on
-    // narrow viewports. The popover still shows everything.
-    const chips = [
-        `${total} sightings`,
-        `${mapped} mapped`,
-    ];
-    if (highQStr) {
-        chips.push(`<span class="stats-chip-optional">${highQStr} high quality</span>`);
-    }
-    if (withMovStr) {
-        chips.push(`<span class="stats-chip-optional">${withMovStr} with movement</span>`);
-    }
-    chips.push(`<span class="stats-chip-optional">${dupes} possible duplicates</span>`);
-    const sep = ` <span class="stats-sep">·</span> `;
-    badge.innerHTML = chips.join(sep);
+    // v0.13: Badge collapsed to a single "X sightings" chip.
+    //
+    // Previously the badge rendered up to 5 middle-dot-separated
+    // chips (total · mapped · high quality · with movement ·
+    // possible duplicates). Measured header-height impact: 53px →
+    // 90px at ≤1400px viewports (2-line wrap), 108px at ≤900px
+    // (3-line wrap). On iPad portrait (768) it ballooned to 237px.
+    // All the detail is already available in #stats-popover, which
+    // opens on click — no information lost, just moved one click
+    // deeper. See docs/V013_UX_POLISH_PLAN.md §1.
+    //
+    // highQStr / withMovStr / dupes / mapped / geo* are still
+    // computed above because the popover uses them.
+    badge.innerHTML = `${total} sightings`;
 
     if (popover) {
         const sources = (data.by_source || []).map(s =>
@@ -7047,11 +7041,26 @@ function initMapPlaceSearch() {
         const restore = disableButtonWhilePending(goBtn, "…");
         try {
             const place = await geocodePlace(q);
-            // Prefer a viewport fit if Nominatim gave us a bounding box,
-            // otherwise zoom to a reasonable level (city ~ zoom 11).
+            // v0.13 §5 — if Nominatim returned a bounding box, auto-apply
+            // it as a rectangle region filter AND pan. Previously this
+            // only panned the map, which silently failed the user's most
+            // obvious task (scope results to Arizona / Texas / the UK).
+            // The region chip is always clearable via the existing X on
+            // the chip, so users who wanted pan-only can undo with one
+            // click. See docs/V013_UX_POLISH_PLAN.md §5.
             if (place.bbox && place.bbox.length === 4) {
                 const [s, n, w, e] = place.bbox.map(parseFloat);
                 state.map.fitBounds([[s, w], [n, e]], { maxZoom: 12 });
+                // applyRegionFilter lives later in the file; it
+                // materializes the rectangle as a Leaflet overlay,
+                // stores state.regionFilter, and calls applyFilters()
+                // which flows through to the bulk-buffer filter mask.
+                if (typeof applyRegionFilter === "function") {
+                    applyRegionFilter({
+                        type: "rect",
+                        south: s, north: n, west: w, east: e,
+                    });
+                }
             } else {
                 state.map.setView([place.lat, place.lng], 11);
             }

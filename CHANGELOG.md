@@ -15,7 +15,39 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+- **Place search now filters results** to the searched bounding box.
+  Typing "Arizona" in the map place search applies the Nominatim
+  bbox as a rectangle region filter in addition to panning the
+  map. Previously the map zoomed but the sighting set was unchanged
+  — users had to manually draw a polygon. One-click-clearable via
+  the region chip. See `docs/V013_UX_POLISH_PLAN.md` §5.
+
+### Changed
+- **Header stats badge collapsed to a single "${total} sightings"
+  chip.** The 5-chip middle-dot chain (`total · mapped · high
+  quality · with movement · possible duplicates`) that wrapped to
+  2-3 lines at most viewport widths is gone; click the badge for
+  the detail popover, which already carried every derived count.
+  Measured: header height stays at 53 px across viewports instead
+  of growing to 108 px / 237 px. See §1.
+
+### Fixed
+- **Mobile filter drawer no longer collapses the map to 0 px.**
+  When a user tapped the hamburger on a phone, the filter bar
+  wrapped to 200+ px in the flex flow, squeezing the map
+  container below the viewport. `#filters-bar` + movement row now
+  become `position: fixed` overlays on mobile + touch, with a
+  subtle backdrop. Map keeps its full height. See §2.
+- **TimeBrush selection handles grabbable on touch.** Base handles
+  are 14 px / 6 px wide; the `body.is-touch` pseudo-element hit
+  overlay now reaches a proper 44 × 44 px minimum without changing
+  visual size. Overview mini-map handles got the same treatment
+  (previously had no touch override). See §3.
+- **"READY" ghost at lower-left of the map** after the intro
+  dissolve. The `#map-status` panel had "READY" as its HTML default
+  value which persisted until something wrote over it. Default is
+  now empty + a `.panel-status:empty { display: none }` rule. See §4.
 
 ## [0.12.1] — 2026-04-16 — Pool self-healing (prod resilience)
 
