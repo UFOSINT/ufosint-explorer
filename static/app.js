@@ -8810,6 +8810,13 @@ async function loadOverlayData() {
 function _buildOverlayLayers() {
     if (!_overlayData || !state.map) return;
 
+    // v0.12 fix: use the shared SVG renderer so overlay markers
+    // don't create a canvas above deck.gl (same preferCanvas bug
+    // that blocked point clicks after drawing a region shape).
+    const svgR = typeof _getRegionRenderer === "function"
+        ? _getRegionRenderer()
+        : L.svg({ padding: 0.1 });
+
     // Crash layer (14 records, red, radius 10)
     const crashMarkers = (_overlayData.crashes || []).map(c => {
         if (!c.latitude || !c.longitude) return null;
@@ -8819,7 +8826,7 @@ function _buildOverlayLayers() {
             color: "#fff",
             weight: 2,
             fillOpacity: 0.9,
-            pane: "markerPane",
+            renderer: svgR,
         });
         m.bindPopup(() => _renderCrashPopup(c), { maxWidth: 380, className: "overlay-popup-wrap" });
         return m;
@@ -8835,7 +8842,7 @@ function _buildOverlayLayers() {
             color: "#fff",
             weight: 1.5,
             fillOpacity: 0.9,
-            pane: "markerPane",
+            renderer: svgR,
         });
         m.bindPopup(() => _renderNuclearPopup(n), { maxWidth: 380, className: "overlay-popup-wrap" });
         return m;
@@ -8851,7 +8858,7 @@ function _buildOverlayLayers() {
             color: "#fff",
             weight: 1,
             fillOpacity: 0.7,
-            pane: "markerPane",
+            renderer: svgR,
         });
         m.bindPopup(() => _renderFacilityPopup(f), { maxWidth: 300, className: "overlay-popup-wrap" });
         return m;
