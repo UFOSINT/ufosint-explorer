@@ -1916,6 +1916,16 @@ function loadObservatory() {
         refreshRailAnalytics();
     }
 
+    // v0.12 — eagerly fetch overlay data so crash/nuclear stems
+    // appear on the TimeBrush immediately (even before the user
+    // clicks an overlay toggle). The fetch is a no-op if already
+    // cached from a previous visit.
+    if (typeof loadOverlayData === "function") {
+        loadOverlayData().then(() => {
+            if (state.timeBrush) state.timeBrush._drawAnnotations();
+        });
+    }
+
     // Initialize the time brush lazily on first Observatory visit.
     if (!state.timeBrush) {
         const canvas = document.getElementById("brush-canvas");
@@ -3087,30 +3097,84 @@ class TimeBrush {
     }
 
     _drawAnnotations() {
-        if (!this.annEl || !this.annotations) return;
+        if (!this.annEl) return;
         this.annEl.innerHTML = "";
-        // v0.9.0 — annotations are positioned as percent across the
-        // current VIEW range, not the full dataset. Annotations
-        // outside the view are skipped entirely.
         const viewL = this.viewMinT;
         const viewR = this.viewMaxT;
         const vSpan = viewR - viewL;
         if (vSpan <= 0) return;
-        for (const a of this.annotations) {
-            if (!a.year) continue;
-            const tMs = Date.UTC(a.year, 0, 1);
-            if (tMs < viewL || tMs > viewR) continue;
-            const x = ((tMs - viewL) / vSpan) * 100;
-            const line = document.createElement("div");
-            line.className = "brush-ann";
-            line.style.left = x + "%";
-            line.title = `${a.label} (${a.year}) — ${a.tag || ""}`;
-            this.annEl.appendChild(line);
-            const label = document.createElement("div");
-            label.className = "brush-ann-label";
-            label.style.left = x + "%";
-            label.textContent = a.label;
-            this.annEl.appendChild(label);
+
+        // v0.12: compute zoom level to decide when to show labels.
+        // At full range (~126 years), labels overlap badly. Show
+        // labels only when zoomed to <40 years (enough room for
+        // the larger number of overlay events).
+        const viewYears = vSpan / (365.25 * 86400000);
+        const showLabels = viewYears < 40;
+
+        // 1. Existing key-sighting annotations (always show labels
+        //    since they're hand-curated for spacing at full range).
+        if (this.annotations) {
+            for (const a of this.annotations) {
+                if (!a.year) continue;
+                const tMs = Date.UTC(a.year, 0, 1);
+                if (tMs < viewL || tMs > viewR) continue;
+                const x = ((tMs - viewL) / vSpan) * 100;
+                const line = document.createElement("div");
+                line.className = "brush-ann";
+                line.style.left = x + "%";
+                line.title = a.label + " (" + a.year + ") \u2014 " + (a.tag || "");
+                this.annEl.appendChild(line);
+                const label = document.createElement("div");
+                label.className = "brush-ann-label";
+                label.style.left = x + "%";
+                label.textContent = a.label;
+                this.annEl.appendChild(label);
+            }
+        }
+
+        // 2. v0.12 — overlay events (crashes + nuclear encounters).
+        //    Vertical stems always visible; labels appear on zoom.
+        if (_overlayData) {
+            const crashes = _overlayData.crashes || [];
+            const nuclear = _overlayData.nuclear_encounters || [];
+            for (const c of crashes) {
+                if (!c.year) continue;
+                const tMs = Date.UTC(c.year, 0, 1);
+                if (tMs < viewL || tMs > viewR) continue;
+                const x = ((tMs - viewL) / vSpan) * 100;
+                const stem = document.createElement("div");
+                stem.className = "brush-ann brush-ann-crash";
+                stem.style.left = x + "%";
+                var title = (c.page_name || "").replace(/^\d{4}\s+/, "");
+                stem.title = "CRASH " + c.year + " \u2014 " + title;
+                this.annEl.appendChild(stem);
+                if (showLabels) {
+                    const lbl = document.createElement("div");
+                    lbl.className = "brush-ann-label brush-ann-label-crash";
+                    lbl.style.left = x + "%";
+                    lbl.textContent = title.split(" ").slice(0, 2).join(" ");
+                    this.annEl.appendChild(lbl);
+                }
+            }
+            for (const n of nuclear) {
+                if (!n.year) continue;
+                const tMs = Date.UTC(n.year, 0, 1);
+                if (tMs < viewL || tMs > viewR) continue;
+                const x = ((tMs - viewL) / vSpan) * 100;
+                const stem = document.createElement("div");
+                stem.className = "brush-ann brush-ann-nuclear";
+                stem.style.left = x + "%";
+                var ntitle = (n.page_name || "").replace(/^\d{4}\s+/, "");
+                stem.title = "NUCLEAR " + n.year + " \u2014 " + ntitle;
+                this.annEl.appendChild(stem);
+                if (showLabels) {
+                    const lbl = document.createElement("div");
+                    lbl.className = "brush-ann-label brush-ann-label-nuclear";
+                    lbl.style.left = x + "%";
+                    lbl.textContent = ntitle.split(" ").slice(0, 2).join(" ");
+                    this.annEl.appendChild(lbl);
+                }
+            }
         }
     }
 

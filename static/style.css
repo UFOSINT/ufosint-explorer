@@ -4519,6 +4519,34 @@ body[data-hide-brush] .observatory-time-brush {
     white-space: nowrap;
     padding-left: 3px;
 }
+/* v0.12 — crash + nuclear overlay annotation stems + labels.
+   Stems are always visible; labels appear only when zoomed in
+   (<40 year view span) so they don't overlap at full range. */
+.brush-ann.brush-ann-crash {
+    background: #ef4444;
+    opacity: 0.6;
+    width: 1.5px;
+}
+.brush-ann.brush-ann-nuclear {
+    background: #f59e0b;
+    opacity: 0.5;
+    width: 1px;
+}
+.brush-ann-label.brush-ann-label-crash {
+    color: #ef4444;
+    font-size: 8px;
+    top: auto;
+    bottom: 2px;
+    letter-spacing: 0.06em;
+}
+.brush-ann-label.brush-ann-label-nuclear {
+    color: #f59e0b;
+    font-size: 7px;
+    top: auto;
+    bottom: 12px;
+    letter-spacing: 0.04em;
+    opacity: 0.85;
+}
 
 /* --- Theme toggle in the gear menu --- */
 .theme-toggle {
