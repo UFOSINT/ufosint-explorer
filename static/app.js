@@ -3208,6 +3208,13 @@ class TimeBrush {
 
     _syncWindow() {
         if (!this.windowEl || !this.w) return;
+        // v0.12 fix: if NaN slipped into window[], recover by
+        // resetting to the full dataset range. This prevents the
+        // brush from freezing permanently.
+        if (isNaN(this.window[0]) || isNaN(this.window[1])) {
+            console.warn("[brush] NaN in window — resetting to full range");
+            this.window = [this.minT, this.maxT];
+        }
         // v0.9.0 — clip the selection rectangle to the current view.
         // If the window extends beyond the view on either side, add
         // extends-left/extends-right classes so CSS can render a
@@ -3640,6 +3647,8 @@ class TimeBrush {
                     const over = newR - this.maxT;
                     newL -= over; newR -= over;
                 }
+                // v0.12 fix: NaN guard for pan
+                if (isNaN(newL) || isNaN(newR)) return;
                 this.viewMinT = newL;
                 this.viewMaxT = newR;
                 this._draw();
@@ -3675,6 +3684,15 @@ class TimeBrush {
             } else if (dragging.mode === "r") {
                 newR = Math.min(this.maxT, Math.max(newL + 7 * 86400000, dragging.startR + dt));
             }
+            // v0.12 fix: guard against NaN from edge-case division
+            // by zero (e.g. viewSpan=0, wrapRect.width=0, or drag
+            // past the dataset bounds). Once NaN lands in window[],
+            // everything downstream breaks and the brush freezes.
+            if (isNaN(newL) || isNaN(newR) || !isFinite(newL) || !isFinite(newR)) return;
+            // Clamp to dataset bounds as a final safety net
+            newL = Math.max(this.minT, newL);
+            newR = Math.min(this.maxT, newR);
+            if (newR - newL < 86400000) newR = newL + 86400000;  // min 1 day
             this.window = [newL, newR];
             // Visual-only update: window rectangle + year labels.
             this._syncWindow();
