@@ -75,6 +75,13 @@ TABLES = [
         "emotion_7_dominant", "vader_compound", "roberta_sentiment",
         "emotion_7_surprise", "emotion_7_fear", "emotion_7_neutral",
         "emotion_7_anger", "emotion_7_disgust", "emotion_7_sadness", "emotion_7_joy",
+        # v0.12 — NRC lexicon word-counts. Requires
+        # add_v012_gerb_nrc_columns.sql on the PG side.
+        "nrc_joy", "nrc_fear", "nrc_anger", "nrc_sadness",
+        "nrc_surprise", "nrc_disgust", "nrc_trust", "nrc_anticipation",
+        "nrc_positive", "nrc_negative",
+        # v0.12 — nuclear proximity from UAP Gerb overlay.
+        "distance_to_nearest_nuclear_site_km", "nearest_nuclear_site_name",
     ]),
     ("attachment", ["id", "sighting_id", "url", "file_type", "description"]),
     ("sighting_reference", ["sighting_id", "reference_id"]),
@@ -92,6 +99,22 @@ TABLES = [
     ("date_correction", [
         "id", "sighting_id", "source_name",
         "original_date", "corrected_date", "correction_type", "reason",
+    ]),
+    # v0.12 — UAP Gerb overlay tables (curated, not in the main sighting corpus)
+    ("crash_retrieval", [
+        "id", "page_name", "year", "date_event", "city", "region", "country",
+        "latitude", "longitude", "precision", "craft_type", "craft_size_m",
+        "recovery_status", "has_biologics", "crew_count", "evidence_quality",
+        "source_confidence", "short_summary", "raw_json",
+    ]),
+    ("nuclear_encounter", [
+        "id", "page_name", "year", "date_event", "base", "city", "region",
+        "country", "latitude", "longitude", "weapon_system", "incident_type",
+        "missiles_affected", "sensor_confirmation", "witness_credibility",
+        "evidence_quality", "source_confidence", "summary", "raw_json",
+    ]),
+    ("facility", [
+        "id", "name", "facility_type", "latitude", "longitude", "source",
     ]),
 ]
 
