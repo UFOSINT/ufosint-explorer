@@ -4518,6 +4518,16 @@ body[data-hide-brush] .observatory-time-brush {
     letter-spacing: 0.08em;
     white-space: nowrap;
     padding-left: 3px;
+    /* v0.12: text stroke for readability on both themes */
+    text-shadow:
+        -1px -1px 0 var(--bg),
+         1px -1px 0 var(--bg),
+        -1px  1px 0 var(--bg),
+         1px  1px 0 var(--bg),
+         0   -1px 0 var(--bg),
+         0    1px 0 var(--bg),
+        -1px  0   0 var(--bg),
+         1px  0   0 var(--bg);
 }
 /* v0.12 — crash + nuclear overlay annotation stems + labels.
    Stems are always visible; labels appear only when zoomed in
