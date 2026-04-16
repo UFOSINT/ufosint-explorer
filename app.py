@@ -979,7 +979,7 @@ def api_overlay():
             ORDER BY year, page_name
         """)
         crash_cols = [d[0] for d in cur.description]
-        crashes = [dict(zip(crash_cols, row)) for row in cur.fetchall()]
+        crashes = [dict(zip(crash_cols, row, strict=False)) for row in cur.fetchall()]
 
         # Nuclear encounters (35 rows)
         cur.execute("""
@@ -993,7 +993,7 @@ def api_overlay():
             ORDER BY year, page_name
         """)
         nuclear_cols = [d[0] for d in cur.description]
-        nuclear = [dict(zip(nuclear_cols, row)) for row in cur.fetchall()]
+        nuclear = [dict(zip(nuclear_cols, row, strict=False)) for row in cur.fetchall()]
 
         # Facilities (75 rows, filtered to geocoded)
         cur.execute("""
@@ -1003,7 +1003,7 @@ def api_overlay():
             ORDER BY name
         """)
         fac_cols = [d[0] for d in cur.description]
-        facilities = [dict(zip(fac_cols, row)) for row in cur.fetchall()]
+        facilities = [dict(zip(fac_cols, row, strict=False)) for row in cur.fetchall()]
 
     return jsonify({
         "crashes": crashes,
