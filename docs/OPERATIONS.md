@@ -36,9 +36,9 @@ busy, and new requests wait 30 s then time out. Once all 8 pool
 slots are wedged this way the app effectively stops serving even
 though Azure still thinks it's healthy.
 
-**Prevention (shipped in v0.12.1 + hardened in v0.12.2).** The pool
-now combines socket-health checks, idle/lifetime recycling, and
-fail-fast timeouts — [`app.py:170`](../app.py):
+**Prevention (shipped in v0.12.1 + hardened in v0.12.2 + v0.12.3).**
+The pool combines socket-health checks, idle/lifetime recycling,
+fail-fast timeouts, and TCP keepalive — [`app.py:183`](../app.py):
 
 ```python
 _pool = ConnectionPool(
@@ -50,6 +50,10 @@ _pool = ConnectionPool(
     kwargs={
         "autocommit": True,
         "connect_timeout": 5,                       # v0.12.2
+        "keepalives": 1,                            # v0.12.3
+        "keepalives_idle": 60,                      # v0.12.3
+        "keepalives_interval": 10,                  # v0.12.3
+        "keepalives_count": 5,                      # v0.12.3
         "options": ("-c default_transaction_read_only=on "
                     "-c statement_timeout=25000"),  # v0.12.2
     },
@@ -66,6 +70,13 @@ _pool = ConnectionPool(
   stall indefinitely on a dead NAT path.
 - `statement_timeout=25000` is the server-side kill switch for any
   single runaway query.
+- TCP keepalive (v0.12.3) is the critical fix that makes `check`
+  *reliable*. Without it, the OS had no evidence a half-dead socket
+  was bad, so `SELECT 1` would hang for ~2 h in the kernel send
+  buffer. With keepalive, dead sockets are detected in ~110 s and
+  `check` fails instantly.
+- `alwaysOn=true` (ops change, v0.12.3) keeps the container warm
+  so connections don't go stale from idle sleep in the first place.
 
 **Mitigation if it happens anyway.** Restart the App Service:
 
@@ -201,6 +212,34 @@ az webapp config show --name ufosint-explorer \
   - `statement_timeout=25000` in the PG options — server-side
     kill for any stuck query.
   - Azure App Service Health Check enabled at `/health`.
+
+### 2026-04-17 (round 3) — pool wedged overnight, Always On was off
+
+- **01:46 UTC.** Azure Health Check detects `/health` → 503.
+  Pool already dead — no user traffic caused it.
+- **01:47 UTC.** Single Reddit user's page load succeeds
+  (HTML+static served without DB) but API calls fail with
+  `PoolTimeout: couldn't get a connection after 8.00 sec`.
+- **Post-mortem.** `alwaysOn: false` on the App Service.
+  Azure idled the container after ~20 min of no traffic.
+  On wake-up: TCP sockets dead at kernel level, but default
+  Linux TCP keepalive is ~2 hours → OS doesn't know → pool's
+  `check=SELECT 1` hangs on the dead FD for the full OS TCP
+  timeout → same PoolTimeout cascade.
+- **Why v0.12.2 didn't prevent it:** `connect_timeout=5` only
+  applies to *fresh* connections. `check=` runs on *existing*
+  connections whose TCP socket is half-dead. Without TCP
+  keepalive, the OS has no evidence the socket is bad, so
+  `SELECT 1` sits in the kernel send buffer until the 2-hour
+  retransmit timeout. `statement_timeout` is server-side — PG
+  never receives the query, so it can't kill it.
+- **Fix shipped (v0.12.3).**
+  - TCP keepalive on all PG connections: `keepalives=1`,
+    `keepalives_idle=60`, `keepalives_interval=10`,
+    `keepalives_count=5`. Dead socket detected in ~110 s
+    instead of ~2 h. `check` fails instantly → pool replaces.
+  - `alwaysOn: true` enabled on the App Service. Container
+    stays warm, connections don't go stale from idle sleep.
 
 ## 5. Useful commands
 

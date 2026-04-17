@@ -79,6 +79,28 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
   overview. Bumped to 190 px on mobile and added `flex-wrap` to
   the brush-header so layout is deterministic.
 
+## [0.12.3] — 2026-04-17 — TCP keepalive + Always On (prod resilience, hotfix)
+
+Third prod wedge in 24 h. Root cause: `alwaysOn` was **false** on the
+App Service — Azure idled the container after ~20 min of no traffic.
+On wake-up the pool's TCP sockets were dead at the kernel level, but
+the default Linux TCP keepalive timeout is ~2 h so the OS didn't know.
+`check=SELECT 1` hung on the dead FD → same cascade as before.
+
+### Fixed
+- **TCP keepalive on all PG connections** (`keepalives=1`,
+  `keepalives_idle=60`, `keepalives_interval=10`, `keepalives_count=5`).
+  The OS now probes idle sockets every 60 s and declares them dead
+  after ~110 s (60 + 10×5). When `check` runs on a socket the OS
+  already knows is dead, it fails instantly → pool replaces it → no
+  hang. This is the missing piece that makes Layer 1 (`check=`) work
+  reliably even when Azure drops packets silently.
+
+### Ops
+- **Always On enabled** on `ufosint-explorer` App Service. Container
+  stays warm, connections don't go stale from idle sleep. TCP keepalive
+  is the belt; Always On is the braces.
+
 ## [0.12.2] — 2026-04-16 — Fail-fast health check + statement/connect timeouts (prod resilience, hotfix)
 
 Second prod wedge on 2026-04-16 proved v0.12.1's Layer 1 alone wasn't

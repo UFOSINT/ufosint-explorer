@@ -180,6 +180,21 @@ if not DATABASE_URL:
 #     in 8s instead of holding the request for 30s. Pairs with the
 #     Azure Health Check probe on /health, which will rotate/restart
 #     the instance after ~10 min of sustained 503s.
+#
+# v0.12.3 hotfix — Third wedge incident. Root cause: `alwaysOn` was
+# false, so Azure put the container to sleep after ~20 min of no
+# traffic. On wake-up, old TCP sockets are dead at the kernel level
+# but the pool doesn't know — `check=SELECT 1` hangs on the dead FD
+# because the default Linux TCP keepalive is 2 hours (way past Azure's
+# NAT timeout). Fixes:
+#   - `keepalives=1` + `keepalives_idle=60` + `keepalives_interval=10`
+#     + `keepalives_count=5`: make the OS probe idle sockets every 60s.
+#     A dead socket is detected in ~110s (60 + 10*5) instead of ~2h.
+#     This means `check` runs on a socket the OS already knows is dead
+#     → instant failure → pool replaces it → no hang.
+#   - `alwaysOn=true` enabled on the App Service (ops change, not code)
+#     so the container stays warm and connections don't go stale in the
+#     first place. TCP keepalive is the belt; Always On is the braces.
 _pool = ConnectionPool(
     DATABASE_URL,
     min_size=1,
@@ -195,6 +210,15 @@ _pool = ConnectionPool(
         # net in case anything ever tries to write.
         "autocommit": True,
         "connect_timeout": 5,   # v0.12.2: cap fresh-connection dials
+        # v0.12.3: TCP keepalive — detect dead sockets at the kernel
+        # level in ~110s instead of the default ~2h. Azure's NAT drops
+        # idle connections after a few minutes; without keepalive the
+        # pool's `check` callback hangs on a dead FD for the full OS
+        # TCP timeout, which is what caused the 3x wedge incidents.
+        "keepalives": 1,
+        "keepalives_idle": 60,      # start probing after 60s idle
+        "keepalives_interval": 10,  # probe every 10s after that
+        "keepalives_count": 5,      # give up after 5 failed probes
         "options": (
             "-c default_transaction_read_only=on "
             "-c statement_timeout=25000"  # v0.12.2: 25s server-side kill
