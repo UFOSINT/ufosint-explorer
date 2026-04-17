@@ -126,7 +126,13 @@ def test_api_timeline_excludes_0019():
     I caught in post-deploy smoke, hence the %% in all
     parameterized-execute branches."""
     src = _read(APP_PY)
+    # v0.12.4: api_timeline was split — the body that holds the SQL
+    # moved to _api_timeline_impl so we could wrap the connection in
+    # a try/finally. Prefer the impl; fall back to the route for
+    # older revs of this test running against a pre-v0.12.4 checkout.
     body = _extract_js_function_like(
+        src, "_api_timeline_impl", end_pat=r"\n\ndef |\n\n@app\."
+    ) or _extract_js_function_like(
         src, "api_timeline", end_pat=r"\n\ndef |\n\n@app\."
     )
     assert body, "couldn't locate api_timeline body"
@@ -212,7 +218,11 @@ def test_methodology_has_current_build_banner():
 
 def test_api_timeline_reads_bins_param():
     src = _read(APP_PY)
+    # v0.12.4: see test_api_timeline_excludes_0019 above — body moved
+    # to _api_timeline_impl.
     body = _extract_js_function_like(
+        src, "_api_timeline_impl", end_pat=r"\n\ndef |\n\n@app\."
+    ) or _extract_js_function_like(
         src, "api_timeline", end_pat=r"\n\ndef |\n\n@app\."
     )
     assert body

@@ -195,10 +195,17 @@ if not DATABASE_URL:
 #   - `alwaysOn=true` enabled on the App Service (ops change, not code)
 #     so the container stays warm and connections don't go stale in the
 #     first place. TCP keepalive is the belt; Always On is the braces.
+#
+# v0.12.4 hotfix — audit (FAILURE_MODES.md MED-9) found pool had no
+# headroom above gunicorn's 2*4=8 concurrent slots. During the 20–40 s
+# prewarm window the background thread also holds 1–2 connections, so
+# a real request that lands mid-prewarm could starve. Bump to 12 slots
+# to absorb prewarm + burst traffic without hitting PoolTimeout. PG
+# B1ms max_connections is ~50, so there's plenty of headroom.
 _pool = ConnectionPool(
     DATABASE_URL,
-    min_size=1,
-    max_size=8,
+    min_size=2,         # v0.12.4: was 1 — keep 2 warm for fast first-request
+    max_size=12,        # v0.12.4: was 8 — headroom above gunicorn 2x4 slots
     open=True,
     timeout=8,          # v0.12.2: was 30; fail fast to the LB
     max_idle=300,       # 5 min
@@ -347,44 +354,69 @@ def init_filters():
     states, match_methods. Each had no byte slot in the 32-byte
     bulk row and nothing in the v0.8.7 UI drives them.
     """
+    # v0.12.4: try/finally — startup connection leak would block all
+    # subsequent requests. See docs/FAILURE_MODES.md CRIT-1.
     conn = get_db()
-    cur = conn.cursor()
+    try:
+        cur = conn.cursor()
 
-    # Standardized shape (NOT raw shape — the raw column has
-    # mixed-case duplicates like "Disk" vs "Disc" that the
-    # v0.8.3b classifier collapses into the standardized list).
-    cur.execute("""
-        SELECT DISTINCT standardized_shape FROM sighting
-        WHERE standardized_shape IS NOT NULL AND standardized_shape != ''
-        ORDER BY standardized_shape
-    """)
-    FILTER_CACHE["shapes"] = [r[0] for r in cur.fetchall()]
+        # Standardized shape (NOT raw shape — the raw column has
+        # mixed-case duplicates like "Disk" vs "Disc" that the
+        # v0.8.3b classifier collapses into the standardized list).
+        cur.execute("""
+            SELECT DISTINCT standardized_shape FROM sighting
+            WHERE standardized_shape IS NOT NULL AND standardized_shape != ''
+            ORDER BY standardized_shape
+        """)
+        FILTER_CACHE["shapes"] = [r[0] for r in cur.fetchall()]
 
-    cur.execute("SELECT id, name FROM source_database ORDER BY name")
-    FILTER_CACHE["sources"] = [
-        {"id": r[0], "name": r[1]} for r in cur.fetchall()
-    ]
+        cur.execute("SELECT id, name FROM source_database ORDER BY name")
+        FILTER_CACHE["sources"] = [
+            {"id": r[0], "name": r[1]} for r in cur.fetchall()
+        ]
 
-    cur.execute("""
-        SELECT DISTINCT primary_color FROM sighting
-        WHERE primary_color IS NOT NULL AND primary_color != ''
-        ORDER BY primary_color
-    """)
-    FILTER_CACHE["colors"] = [r[0] for r in cur.fetchall()]
+        cur.execute("""
+            SELECT DISTINCT primary_color FROM sighting
+            WHERE primary_color IS NOT NULL AND primary_color != ''
+            ORDER BY primary_color
+        """)
+        FILTER_CACHE["colors"] = [r[0] for r in cur.fetchall()]
 
-    cur.execute("""
-        SELECT DISTINCT dominant_emotion FROM sighting
-        WHERE dominant_emotion IS NOT NULL AND dominant_emotion != ''
-        ORDER BY dominant_emotion
-    """)
-    FILTER_CACHE["emotions"] = [r[0] for r in cur.fetchall()]
-
-    conn.close()
+        cur.execute("""
+            SELECT DISTINCT dominant_emotion FROM sighting
+            WHERE dominant_emotion IS NOT NULL AND dominant_emotion != ''
+            ORDER BY dominant_emotion
+        """)
+        FILTER_CACHE["emotions"] = [r[0] for r in cur.fetchall()]
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _safe_float(value, name, default=None):
+    """Parse a query-param string to float, or raise 400 on bad input.
+
+    v0.12.4 — added after audit found /api/map and /api/heatmap called
+    `float(request.args.get(...))` with no validation, so a malformed
+    URL like ?south=foo caused ValueError → 500 → connection leak
+    (combined with the unsafe get_db pattern). See
+    docs/FAILURE_MODES.md CRIT-3.
+
+    Returns `default` if `value` is None (missing param). Raises
+    werkzeug BadRequest → HTTP 400 with a JSON error body if the
+    value is non-numeric.
+    """
+    if value is None or value == "":
+        return default
+    try:
+        return float(value)
+    except (ValueError, TypeError) as e:
+        from werkzeug.exceptions import BadRequest
+        raise BadRequest(f"{name} must be a number, got {value!r}") from e
+
 
 def add_common_filters(params, clauses, args, table_prefix="s"):
     """Add common filter clauses shared across endpoints.
@@ -1038,52 +1070,60 @@ def well_known_mcp():
 @app.route("/api/overlay")
 @cache.cached(timeout=600)
 def api_overlay():
-    """UAP Gerb curated overlay: crashes, nuclear encounters, facilities."""
+    """UAP Gerb curated overlay: crashes, nuclear encounters, facilities.
+
+    v0.12.4 — added try/finally. Previous versions leaked a pool
+    connection on every cache miss because `conn.close()` was never
+    called. See docs/FAILURE_MODES.md CRIT-2.
+    """
     conn = get_db()
-    with conn.cursor() as cur:
-        # Crashes (14 rows)
-        cur.execute("""
-            SELECT id, page_name, year, date_event,
-                   city, region, country, latitude, longitude,
-                   precision, craft_type, craft_size_m,
-                   recovery_status, has_biologics, crew_count,
-                   evidence_quality, source_confidence,
-                   short_summary
-            FROM crash_retrieval
-            ORDER BY year, page_name
-        """)
-        crash_cols = [d[0] for d in cur.description]
-        crashes = [dict(zip(crash_cols, row, strict=False)) for row in cur.fetchall()]
+    try:
+        with conn.cursor() as cur:
+            # Crashes (14 rows)
+            cur.execute("""
+                SELECT id, page_name, year, date_event,
+                       city, region, country, latitude, longitude,
+                       precision, craft_type, craft_size_m,
+                       recovery_status, has_biologics, crew_count,
+                       evidence_quality, source_confidence,
+                       short_summary
+                FROM crash_retrieval
+                ORDER BY year, page_name
+            """)
+            crash_cols = [d[0] for d in cur.description]
+            crashes = [dict(zip(crash_cols, row, strict=False)) for row in cur.fetchall()]
 
-        # Nuclear encounters (35 rows)
-        cur.execute("""
-            SELECT id, page_name, year, date_event,
-                   base, city, region, country, latitude, longitude,
-                   weapon_system, incident_type, missiles_affected,
-                   sensor_confirmation, witness_credibility,
-                   evidence_quality, source_confidence,
-                   summary
-            FROM nuclear_encounter
-            ORDER BY year, page_name
-        """)
-        nuclear_cols = [d[0] for d in cur.description]
-        nuclear = [dict(zip(nuclear_cols, row, strict=False)) for row in cur.fetchall()]
+            # Nuclear encounters (35 rows)
+            cur.execute("""
+                SELECT id, page_name, year, date_event,
+                       base, city, region, country, latitude, longitude,
+                       weapon_system, incident_type, missiles_affected,
+                       sensor_confirmation, witness_credibility,
+                       evidence_quality, source_confidence,
+                       summary
+                FROM nuclear_encounter
+                ORDER BY year, page_name
+            """)
+            nuclear_cols = [d[0] for d in cur.description]
+            nuclear = [dict(zip(nuclear_cols, row, strict=False)) for row in cur.fetchall()]
 
-        # Facilities (75 rows, filtered to geocoded)
-        cur.execute("""
-            SELECT id, name, facility_type, latitude, longitude
-            FROM facility
-            WHERE latitude IS NOT NULL
-            ORDER BY name
-        """)
-        fac_cols = [d[0] for d in cur.description]
-        facilities = [dict(zip(fac_cols, row, strict=False)) for row in cur.fetchall()]
+            # Facilities (75 rows, filtered to geocoded)
+            cur.execute("""
+                SELECT id, name, facility_type, latitude, longitude
+                FROM facility
+                WHERE latitude IS NOT NULL
+                ORDER BY name
+            """)
+            fac_cols = [d[0] for d in cur.description]
+            facilities = [dict(zip(fac_cols, row, strict=False)) for row in cur.fetchall()]
 
-    return jsonify({
-        "crashes": crashes,
-        "nuclear_encounters": nuclear,
-        "facilities": facilities,
-    })
+        return jsonify({
+            "crashes": crashes,
+            "nuclear_encounters": nuclear,
+            "facilities": facilities,
+        })
+    finally:
+        conn.close()
 
 
 @app.route("/api/tool/<name>", methods=["POST"])
@@ -1123,165 +1163,172 @@ def api_map():
     clean cache hits. Default cap is 25,000 markers; the limit query
     parameter overrides up to 100,000 for "Load All".
     """
-    conn = get_db()
-    cur = conn.cursor()
-
-    clauses = [
-        "l.latitude IS NOT NULL", "l.longitude IS NOT NULL",
-        "l.latitude BETWEEN -90 AND 90",
-        "l.longitude BETWEEN -180 AND 180",
-    ]
-    args = []
-
-    # Bounding box filter
+    # v0.12.4: validate bbox BEFORE checking out a pool connection. A
+    # malformed URL like ?south=foo used to blow up on float() AFTER
+    # get_db() was called, leaking the connection. See
+    # docs/FAILURE_MODES.md CRIT-3.
     south = request.args.get("south")
     north = request.args.get("north")
     west = request.args.get("west")
     east = request.args.get("east")
     have_bbox = all([south, north, west, east])
     if have_bbox:
-        south_f = float(south)
-        north_f = float(north)
-        west_f = float(west)
-        east_f = float(east)
-        clauses.append("l.latitude BETWEEN %s AND %s")
-        args.extend([south_f, north_f])
-        clauses.append("l.longitude BETWEEN %s AND %s")
-        args.extend([west_f, east_f])
+        south_f = _safe_float(south, "south")
+        north_f = _safe_float(north, "north")
+        west_f = _safe_float(west, "west")
+        east_f = _safe_float(east, "east")
     else:
         # Fall back to whole-world bbox so the grid-sampling math has
         # something to divide by.
         south_f, north_f, west_f, east_f = -90.0, 90.0, -180.0, 180.0
 
-    add_common_filters(request.args, clauses, args)
-
-    where = " AND ".join(clauses)
-
-    # Configurable limit (default 25000, max 100000)
-    req_limit = request.args.get("limit", 25000)
+    conn = get_db()
     try:
-        req_limit = min(int(req_limit), 100000)
-    except (ValueError, TypeError):
-        req_limit = 25000
+        cur = conn.cursor()
 
-    # Decide sampling strategy from explicit zoom (preferred) or bbox
-    # area as a fallback. Zoom 0 = whole world, ~7 = continent, 10+ =
-    # city. Threshold: zoom <= 7 -> hash sample; >= 8 -> grid.
-    zoom_param = request.args.get("zoom")
-    if zoom_param is not None:
+        clauses = [
+            "l.latitude IS NOT NULL", "l.longitude IS NOT NULL",
+            "l.latitude BETWEEN -90 AND 90",
+            "l.longitude BETWEEN -180 AND 180",
+        ]
+        args = []
+
+        if have_bbox:
+            clauses.append("l.latitude BETWEEN %s AND %s")
+            args.extend([south_f, north_f])
+            clauses.append("l.longitude BETWEEN %s AND %s")
+            args.extend([west_f, east_f])
+
+        add_common_filters(request.args, clauses, args)
+
+        where = " AND ".join(clauses)
+
+        # Configurable limit (default 25000, max 100000)
+        req_limit = request.args.get("limit", 25000)
         try:
-            use_grid = int(zoom_param) >= 8
+            req_limit = min(int(req_limit), 100000)
         except (ValueError, TypeError):
-            use_grid = False
-    else:
-        bbox_area = max(0.0001, (north_f - south_f) * (east_f - west_f))
-        use_grid = bbox_area < 100.0  # < ~10 deg on a side
+            req_limit = 25000
 
-    if use_grid:
-        # 50x50 grid of the visible bbox, up to 10 most-recent samples
-        # per cell. Worst case 25k markers; usually far fewer because
-        # most cells are empty.
-        GRID_SIZE = 50
-        K_PER_CELL = 10
-        lat_step = max((north_f - south_f) / GRID_SIZE, 1e-9)
-        lng_step = max((east_f - west_f) / GRID_SIZE, 1e-9)
-        sql = f"""
-            WITH cells AS (
+        # Decide sampling strategy from explicit zoom (preferred) or bbox
+        # area as a fallback. Zoom 0 = whole world, ~7 = continent, 10+ =
+        # city. Threshold: zoom <= 7 -> hash sample; >= 8 -> grid.
+        zoom_param = request.args.get("zoom")
+        if zoom_param is not None:
+            try:
+                use_grid = int(zoom_param) >= 8
+            except (ValueError, TypeError):
+                use_grid = False
+        else:
+            bbox_area = max(0.0001, (north_f - south_f) * (east_f - west_f))
+            use_grid = bbox_area < 100.0  # < ~10 deg on a side
+
+        if use_grid:
+            # 50x50 grid of the visible bbox, up to 10 most-recent samples
+            # per cell. Worst case 25k markers; usually far fewer because
+            # most cells are empty.
+            GRID_SIZE = 50
+            K_PER_CELL = 10
+            lat_step = max((north_f - south_f) / GRID_SIZE, 1e-9)
+            lng_step = max((east_f - west_f) / GRID_SIZE, 1e-9)
+            sql = f"""
+                WITH cells AS (
+                    SELECT s.id, l.latitude, l.longitude,
+                           s.date_event, s.shape, sd.name AS source_name,
+                           COALESCE(l.city, '') AS city,
+                           COALESCE(l.state, '') AS state,
+                           COALESCE(l.country, '') AS country,
+                           COALESCE(sc.name, '') AS collection,
+                           (s.description IS NOT NULL AND LENGTH(s.description) > 0) AS has_desc,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY
+                                   CAST((l.latitude  - %s) / %s AS INTEGER),
+                                   CAST((l.longitude - %s) / %s AS INTEGER)
+                               ORDER BY s.date_event DESC
+                           ) AS rn
+                    FROM sighting s
+                    JOIN location l ON s.location_id = l.id
+                    JOIN source_database sd ON s.source_db_id = sd.id
+                    LEFT JOIN source_collection sc ON sd.collection_id = sc.id
+                    WHERE {where}
+                )
+                SELECT id, latitude, longitude, date_event, shape, source_name,
+                       city, state, country, collection, has_desc
+                FROM cells
+                WHERE rn <= %s
+                LIMIT %s
+            """
+            cur.execute(
+                sql,
+                [south_f, lat_step, west_f, lng_step] + args + [K_PER_CELL, req_limit],
+            )
+        else:
+            # Hash-based pseudo-random sample using WHERE filter (not ORDER BY).
+            # ORDER BY ((id * prime) % M) would force PG to seq-scan, hash, and
+            # SORT every matching row before taking the LIMIT. With a WHERE
+            # filter the engine can stop scanning as soon as it has enough
+            # matching rows. We pick the modulo threshold so the expected sample
+            # is ~2x the requested limit (gives the engine some slack so the
+            # LIMIT actually clips, and PG's planner picks a sensible scan).
+            # Total geocoded population is ~106k; for limit=25000 we want
+            # ~50000 matches before the LIMIT, so threshold ~= 50000/106000
+            # = 47%. We use a 100-bucket modulo for granularity.
+            # Use a generous threshold (50%) for the common case so PG can
+            # short-circuit early via the LIMIT.
+            sql = f"""
                 SELECT s.id, l.latitude, l.longitude,
                        s.date_event, s.shape, sd.name AS source_name,
                        COALESCE(l.city, '') AS city,
                        COALESCE(l.state, '') AS state,
                        COALESCE(l.country, '') AS country,
                        COALESCE(sc.name, '') AS collection,
-                       (s.description IS NOT NULL AND LENGTH(s.description) > 0) AS has_desc,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY
-                               CAST((l.latitude  - %s) / %s AS INTEGER),
-                               CAST((l.longitude - %s) / %s AS INTEGER)
-                           ORDER BY s.date_event DESC
-                       ) AS rn
+                       (s.description IS NOT NULL AND LENGTH(s.description) > 0) AS has_desc
                 FROM sighting s
                 JOIN location l ON s.location_id = l.id
                 JOIN source_database sd ON s.source_db_id = sd.id
                 LEFT JOIN source_collection sc ON sd.collection_id = sc.id
                 WHERE {where}
+                  AND ((s.id * 2654435761) %% 100) < 50
+                LIMIT %s
+            """
+            cur.execute(sql, args + [req_limit])
+
+        markers = []
+        for r in cur.fetchall():
+            markers.append({
+                "id": r[0],
+                "lat": r[1],
+                "lng": r[2],
+                "date": r[3],
+                "shape": r[4],
+                "source": r[5],
+                "city": r[6],
+                "state": r[7],
+                "country": r[8],
+                "collection": r[9],
+                "has_desc": bool(r[10]),
+            })
+
+        # Total-in-view count: only run the COUNT(*) when we hit the limit,
+        # since otherwise len(markers) IS the total. Saves a full filtered
+        # scan on the common case.
+        if len(markers) < req_limit:
+            total_in_view = len(markers)
+        else:
+            cur.execute(
+                f"SELECT COUNT(*) FROM sighting s JOIN location l ON s.location_id = l.id WHERE {where}",
+                args,
             )
-            SELECT id, latitude, longitude, date_event, shape, source_name,
-                   city, state, country, collection, has_desc
-            FROM cells
-            WHERE rn <= %s
-            LIMIT %s
-        """
-        cur.execute(
-            sql,
-            [south_f, lat_step, west_f, lng_step] + args + [K_PER_CELL, req_limit],
-        )
-    else:
-        # Hash-based pseudo-random sample using WHERE filter (not ORDER BY).
-        # ORDER BY ((id * prime) % M) would force PG to seq-scan, hash, and
-        # SORT every matching row before taking the LIMIT. With a WHERE
-        # filter the engine can stop scanning as soon as it has enough
-        # matching rows. We pick the modulo threshold so the expected sample
-        # is ~2x the requested limit (gives the engine some slack so the
-        # LIMIT actually clips, and PG's planner picks a sensible scan).
-        # Total geocoded population is ~106k; for limit=25000 we want
-        # ~50000 matches before the LIMIT, so threshold ~= 50000/106000
-        # = 47%. We use a 100-bucket modulo for granularity.
-        # Use a generous threshold (50%) for the common case so PG can
-        # short-circuit early via the LIMIT.
-        sql = f"""
-            SELECT s.id, l.latitude, l.longitude,
-                   s.date_event, s.shape, sd.name AS source_name,
-                   COALESCE(l.city, '') AS city,
-                   COALESCE(l.state, '') AS state,
-                   COALESCE(l.country, '') AS country,
-                   COALESCE(sc.name, '') AS collection,
-                   (s.description IS NOT NULL AND LENGTH(s.description) > 0) AS has_desc
-            FROM sighting s
-            JOIN location l ON s.location_id = l.id
-            JOIN source_database sd ON s.source_db_id = sd.id
-            LEFT JOIN source_collection sc ON sd.collection_id = sc.id
-            WHERE {where}
-              AND ((s.id * 2654435761) %% 100) < 50
-            LIMIT %s
-        """
-        cur.execute(sql, args + [req_limit])
+            total_in_view = cur.fetchone()[0]
 
-    markers = []
-    for r in cur.fetchall():
-        markers.append({
-            "id": r[0],
-            "lat": r[1],
-            "lng": r[2],
-            "date": r[3],
-            "shape": r[4],
-            "source": r[5],
-            "city": r[6],
-            "state": r[7],
-            "country": r[8],
-            "collection": r[9],
-            "has_desc": bool(r[10]),
+        return jsonify({
+            "markers": markers,
+            "count": len(markers),
+            "total_in_view": total_in_view,
+            "sample_strategy": "grid" if use_grid else "hash",
         })
-
-    # Total-in-view count: only run the COUNT(*) when we hit the limit,
-    # since otherwise len(markers) IS the total. Saves a full filtered
-    # scan on the common case.
-    if len(markers) < req_limit:
-        total_in_view = len(markers)
-    else:
-        cur.execute(
-            f"SELECT COUNT(*) FROM sighting s JOIN location l ON s.location_id = l.id WHERE {where}",
-            args,
-        )
-        total_in_view = cur.fetchone()[0]
-
-    conn.close()
-    return jsonify({
-        "markers": markers,
-        "count": len(markers),
-        "total_in_view": total_in_view,
-        "sample_strategy": "grid" if use_grid else "hash",
-    })
+    finally:
+        conn.close()
 
 
 @app.route("/api/heatmap")
@@ -1291,66 +1338,79 @@ def api_heatmap():
 
     Returns [lat, lng] pairs. Default 50k limit, supports limit param for Load All.
     Cached for 5 minutes per unique query string.
+
+    v0.12.4 — validate bbox BEFORE get_db() and wrap in try/finally
+    to prevent connection leak on malformed input. See
+    docs/FAILURE_MODES.md CRIT-1, CRIT-3.
     """
-    conn = get_db()
-    cur = conn.cursor()
-
-    clauses = [
-        "l.latitude IS NOT NULL", "l.longitude IS NOT NULL",
-        "l.latitude BETWEEN -90 AND 90",
-        "l.longitude BETWEEN -180 AND 180",
-    ]
-    args = []
-
-    # Bounding box filter
+    # Validate bbox before checking out a connection
     south = request.args.get("south")
     north = request.args.get("north")
     west = request.args.get("west")
     east = request.args.get("east")
-    if all([south, north, west, east]):
-        clauses.append("l.latitude BETWEEN %s AND %s")
-        args.extend([float(south), float(north)])
-        clauses.append("l.longitude BETWEEN %s AND %s")
-        args.extend([float(west), float(east)])
+    have_bbox = all([south, north, west, east])
+    if have_bbox:
+        south_f = _safe_float(south, "south")
+        north_f = _safe_float(north, "north")
+        west_f = _safe_float(west, "west")
+        east_f = _safe_float(east, "east")
 
-    add_common_filters(request.args, clauses, args)
-
-    where = " AND ".join(clauses)
-
-    # Configurable limit (default 50000, max 200000 for heatmap since it's just coords)
-    req_limit = request.args.get("limit", 50000)
+    conn = get_db()
     try:
-        req_limit = min(int(req_limit), 200000)
-    except (ValueError, TypeError):
-        req_limit = 50000
+        cur = conn.cursor()
 
-    sql = f"""
-        SELECT l.latitude, l.longitude
-        FROM sighting s
-        JOIN location l ON s.location_id = l.id
-        WHERE {where}
-        LIMIT %s
-    """
+        clauses = [
+            "l.latitude IS NOT NULL", "l.longitude IS NOT NULL",
+            "l.latitude BETWEEN -90 AND 90",
+            "l.longitude BETWEEN -180 AND 180",
+        ]
+        args = []
 
-    cur.execute(sql, args + [req_limit])
-    points = [[r[0], r[1]] for r in cur.fetchall()]
+        if have_bbox:
+            clauses.append("l.latitude BETWEEN %s AND %s")
+            args.extend([south_f, north_f])
+            clauses.append("l.longitude BETWEEN %s AND %s")
+            args.extend([west_f, east_f])
 
-    # Only run COUNT when we hit the limit; otherwise len(points) IS the total.
-    if len(points) < req_limit:
-        total_in_view = len(points)
-    else:
-        cur.execute(
-            f"SELECT COUNT(*) FROM sighting s JOIN location l ON s.location_id = l.id WHERE {where}",
-            args,
-        )
-        total_in_view = cur.fetchone()[0]
+        add_common_filters(request.args, clauses, args)
 
-    conn.close()
-    return jsonify({
-        "points": points,
-        "count": len(points),
-        "total_in_view": total_in_view,
-    })
+        where = " AND ".join(clauses)
+
+        # Configurable limit (default 50000, max 200000 for heatmap since it's just coords)
+        req_limit = request.args.get("limit", 50000)
+        try:
+            req_limit = min(int(req_limit), 200000)
+        except (ValueError, TypeError):
+            req_limit = 50000
+
+        sql = f"""
+            SELECT l.latitude, l.longitude
+            FROM sighting s
+            JOIN location l ON s.location_id = l.id
+            WHERE {where}
+            LIMIT %s
+        """
+
+        cur.execute(sql, args + [req_limit])
+        points = [[r[0], r[1]] for r in cur.fetchall()]
+
+        # Only run COUNT when we hit the limit; otherwise len(points) IS the total.
+        if len(points) < req_limit:
+            total_in_view = len(points)
+        else:
+            cur.execute(
+                f"SELECT COUNT(*) FROM sighting s JOIN location l ON s.location_id = l.id WHERE {where}",
+                args,
+            )
+            total_in_view = cur.fetchone()[0]
+
+        return jsonify({
+            "points": points,
+            "count": len(points),
+            "total_in_view": total_in_view,
+        })
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -2424,7 +2484,18 @@ def api_timeline():
     paths, which retain the @cache.cached(query_string=True) TTL so
     repeated hits with the same filter remain fast after the first.
     """
+    # v0.12.4: try/finally — see FAILURE_MODES.md CRIT-1. All inner
+    # conn.close() calls are idempotent and harmless under the outer
+    # finally; they're preserved so the early-return code paths still
+    # release the pool slot at the earliest opportunity.
     conn = get_db()
+    try:
+        return _api_timeline_impl(conn)
+    finally:
+        conn.close()
+
+
+def _api_timeline_impl(conn):
     cur = conn.cursor()
 
     year = request.args.get("year")
@@ -3006,187 +3077,199 @@ def api_sentiment_overview():
     23-second query from the v0.7.4 cold-start logs. Filtered requests
     still hit the live query path through Flask-Caching.
     """
+    # v0.12.4: try/except cleanup — idempotent close() means the
+    # inner close calls are safe to leave. See FAILURE_MODES.md CRIT-1.
     conn = get_db()
-    cur = conn.cursor()
+    try:
+        cur = conn.cursor()
 
-    # --- MV fast path: unfiltered overview ------------------------------
-    if not _has_common_filters(request.args):
-        try:
-            cur.execute(f"""
-                SELECT {", ".join(_SENTIMENT_OVERVIEW_COLS)}
-                FROM mv_sentiment_overview
-            """)
-            row = cur.fetchone()
-            conn.close()
-            return jsonify(dict(zip(_SENTIMENT_OVERVIEW_COLS, row, strict=False)))
-        except psycopg.errors.UndefinedTable:
-            print("[api_sentiment_overview] mv_sentiment_overview missing, "
-                  "falling back to live query")
-            cur = conn.cursor()
+        # --- MV fast path: unfiltered overview ------------------------------
+        if not _has_common_filters(request.args):
+            try:
+                cur.execute(f"""
+                    SELECT {", ".join(_SENTIMENT_OVERVIEW_COLS)}
+                    FROM mv_sentiment_overview
+                """)
+                row = cur.fetchone()
+                return jsonify(dict(zip(_SENTIMENT_OVERVIEW_COLS, row, strict=False)))
+            except psycopg.errors.UndefinedTable:
+                print("[api_sentiment_overview] mv_sentiment_overview missing, "
+                      "falling back to live query")
+                cur = conn.cursor()
 
-    clauses = []
-    args = []
-    add_common_filters(request.args, clauses, args)
+        clauses = []
+        args = []
+        add_common_filters(request.args, clauses, args)
 
-    where = " AND ".join(clauses) if clauses else "TRUE"
+        where = " AND ".join(clauses) if clauses else "TRUE"
 
-    cur.execute(f"""
-        SELECT
-            COUNT(*) as total_analyzed,
-            AVG(sa.vader_compound) as avg_compound,
-            AVG(sa.vader_positive) as avg_positive,
-            AVG(sa.vader_negative) as avg_negative,
-            AVG(sa.vader_neutral)  as avg_neutral,
-            SUM(sa.emo_joy) as joy,
-            SUM(sa.emo_fear) as fear,
-            SUM(sa.emo_anger) as anger,
-            SUM(sa.emo_sadness) as sadness,
-            SUM(sa.emo_surprise) as surprise,
-            SUM(sa.emo_disgust) as disgust,
-            SUM(sa.emo_trust) as trust,
-            SUM(sa.emo_anticipation) as anticipation
-        FROM sighting s
-        JOIN sentiment_analysis sa ON s.id = sa.sighting_id
-        LEFT JOIN location l ON s.location_id = l.id
-        WHERE {where}
-    """, args)
-    row = cur.fetchone()
-    keys = [desc[0] for desc in cur.description]
-    result = dict(zip(keys, row, strict=False))
+        cur.execute(f"""
+            SELECT
+                COUNT(*) as total_analyzed,
+                AVG(sa.vader_compound) as avg_compound,
+                AVG(sa.vader_positive) as avg_positive,
+                AVG(sa.vader_negative) as avg_negative,
+                AVG(sa.vader_neutral)  as avg_neutral,
+                SUM(sa.emo_joy) as joy,
+                SUM(sa.emo_fear) as fear,
+                SUM(sa.emo_anger) as anger,
+                SUM(sa.emo_sadness) as sadness,
+                SUM(sa.emo_surprise) as surprise,
+                SUM(sa.emo_disgust) as disgust,
+                SUM(sa.emo_trust) as trust,
+                SUM(sa.emo_anticipation) as anticipation
+            FROM sighting s
+            JOIN sentiment_analysis sa ON s.id = sa.sighting_id
+            LEFT JOIN location l ON s.location_id = l.id
+            WHERE {where}
+        """, args)
+        row = cur.fetchone()
+        keys = [desc[0] for desc in cur.description]
+        result = dict(zip(keys, row, strict=False))
 
-    conn.close()
-    return jsonify(result)
+        return jsonify(result)
+    finally:
+        conn.close()
 
 
 @app.route("/api/sentiment/timeline")
 @cache.cached(timeout=600, query_string=True)
 def api_sentiment_timeline():
     """Average VADER compound score by year."""
+    # v0.12.4: try/finally — see FAILURE_MODES.md CRIT-1
     conn = get_db()
-    cur = conn.cursor()
+    try:
+        cur = conn.cursor()
 
-    # v0.9.1: exclude the 692 bogus "0019-..." records. The %%
-    # is the psycopg literal-% escape — see api_timeline above
-    # for the full explanation.
-    clauses = [
-        "s.date_event IS NOT NULL",
-        "LENGTH(s.date_event) >= 4",
-        "s.date_event NOT LIKE '0019-%%'",
-    ]
-    args = []
-    add_common_filters(request.args, clauses, args)
+        # v0.9.1: exclude the 692 bogus "0019-..." records. The %%
+        # is the psycopg literal-% escape — see api_timeline above
+        # for the full explanation.
+        clauses = [
+            "s.date_event IS NOT NULL",
+            "LENGTH(s.date_event) >= 4",
+            "s.date_event NOT LIKE '0019-%%'",
+        ]
+        args = []
+        add_common_filters(request.args, clauses, args)
 
-    where = " AND ".join(clauses)
+        where = " AND ".join(clauses)
 
-    cur.execute(f"""
-        SELECT SUBSTR(s.date_event, 1, 4) as year,
-               COUNT(*) as count,
-               AVG(sa.vader_compound) as avg_compound,
-               AVG(sa.vader_positive) as avg_positive,
-               AVG(sa.vader_negative) as avg_negative,
-               SUM(sa.emo_joy) as joy,
-               SUM(sa.emo_fear) as fear,
-               SUM(sa.emo_anger) as anger,
-               SUM(sa.emo_sadness) as sadness,
-               SUM(sa.emo_surprise) as surprise,
-               SUM(sa.emo_disgust) as disgust,
-               SUM(sa.emo_trust) as trust,
-               SUM(sa.emo_anticipation) as anticipation
-        FROM sighting s
-        JOIN sentiment_analysis sa ON s.id = sa.sighting_id
-        LEFT JOIN location l ON s.location_id = l.id
-        WHERE {where}
-        GROUP BY year
-        ORDER BY year
-    """, args)
-    rows = cur.fetchall()
-    keys = [desc[0] for desc in cur.description]
-    data = [dict(zip(keys, row, strict=False)) for row in rows]
+        cur.execute(f"""
+            SELECT SUBSTR(s.date_event, 1, 4) as year,
+                   COUNT(*) as count,
+                   AVG(sa.vader_compound) as avg_compound,
+                   AVG(sa.vader_positive) as avg_positive,
+                   AVG(sa.vader_negative) as avg_negative,
+                   SUM(sa.emo_joy) as joy,
+                   SUM(sa.emo_fear) as fear,
+                   SUM(sa.emo_anger) as anger,
+                   SUM(sa.emo_sadness) as sadness,
+                   SUM(sa.emo_surprise) as surprise,
+                   SUM(sa.emo_disgust) as disgust,
+                   SUM(sa.emo_trust) as trust,
+                   SUM(sa.emo_anticipation) as anticipation
+            FROM sighting s
+            JOIN sentiment_analysis sa ON s.id = sa.sighting_id
+            LEFT JOIN location l ON s.location_id = l.id
+            WHERE {where}
+            GROUP BY year
+            ORDER BY year
+        """, args)
+        rows = cur.fetchall()
+        keys = [desc[0] for desc in cur.description]
+        data = [dict(zip(keys, row, strict=False)) for row in rows]
 
-    conn.close()
-    return jsonify({"data": data})
+        return jsonify({"data": data})
+    finally:
+        conn.close()
 
 
 @app.route("/api/sentiment/by-source")
 @cache.cached(timeout=600, query_string=True)
 def api_sentiment_by_source():
     """Emotion breakdown per source database."""
+    # v0.12.4: try/finally — see FAILURE_MODES.md CRIT-1
     conn = get_db()
-    cur = conn.cursor()
+    try:
+        cur = conn.cursor()
 
-    clauses = []
-    args = []
-    add_common_filters(request.args, clauses, args)
+        clauses = []
+        args = []
+        add_common_filters(request.args, clauses, args)
 
-    where = " AND ".join(clauses) if clauses else "TRUE"
+        where = " AND ".join(clauses) if clauses else "TRUE"
 
-    cur.execute(f"""
-        SELECT sd.name as source_name,
-               COUNT(*) as count,
-               AVG(sa.vader_compound) as avg_compound,
-               SUM(sa.emo_joy) as joy,
-               SUM(sa.emo_fear) as fear,
-               SUM(sa.emo_anger) as anger,
-               SUM(sa.emo_sadness) as sadness,
-               SUM(sa.emo_surprise) as surprise,
-               SUM(sa.emo_disgust) as disgust,
-               SUM(sa.emo_trust) as trust,
-               SUM(sa.emo_anticipation) as anticipation
-        FROM sighting s
-        JOIN sentiment_analysis sa ON s.id = sa.sighting_id
-        JOIN source_database sd ON s.source_db_id = sd.id
-        LEFT JOIN location l ON s.location_id = l.id
-        WHERE {where}
-        GROUP BY sd.name
-        ORDER BY count DESC
-    """, args)
-    rows = cur.fetchall()
-    keys = [desc[0] for desc in cur.description]
-    data = [dict(zip(keys, row, strict=False)) for row in rows]
+        cur.execute(f"""
+            SELECT sd.name as source_name,
+                   COUNT(*) as count,
+                   AVG(sa.vader_compound) as avg_compound,
+                   SUM(sa.emo_joy) as joy,
+                   SUM(sa.emo_fear) as fear,
+                   SUM(sa.emo_anger) as anger,
+                   SUM(sa.emo_sadness) as sadness,
+                   SUM(sa.emo_surprise) as surprise,
+                   SUM(sa.emo_disgust) as disgust,
+                   SUM(sa.emo_trust) as trust,
+                   SUM(sa.emo_anticipation) as anticipation
+            FROM sighting s
+            JOIN sentiment_analysis sa ON s.id = sa.sighting_id
+            JOIN source_database sd ON s.source_db_id = sd.id
+            LEFT JOIN location l ON s.location_id = l.id
+            WHERE {where}
+            GROUP BY sd.name
+            ORDER BY count DESC
+        """, args)
+        rows = cur.fetchall()
+        keys = [desc[0] for desc in cur.description]
+        data = [dict(zip(keys, row, strict=False)) for row in rows]
 
-    conn.close()
-    return jsonify({"data": data})
+        return jsonify({"data": data})
+    finally:
+        conn.close()
 
 
 @app.route("/api/sentiment/by-shape")
 @cache.cached(timeout=600, query_string=True)
 def api_sentiment_by_shape():
     """Emotion breakdown per top 10 shapes."""
+    # v0.12.4: try/finally — see FAILURE_MODES.md CRIT-1
     conn = get_db()
-    cur = conn.cursor()
+    try:
+        cur = conn.cursor()
 
-    clauses = ["s.shape IS NOT NULL", "s.shape != ''"]
-    args = []
-    add_common_filters(request.args, clauses, args)
+        clauses = ["s.shape IS NOT NULL", "s.shape != ''"]
+        args = []
+        add_common_filters(request.args, clauses, args)
 
-    where = " AND ".join(clauses)
+        where = " AND ".join(clauses)
 
-    cur.execute(f"""
-        SELECT s.shape,
-               COUNT(*) as count,
-               AVG(sa.vader_compound) as avg_compound,
-               SUM(sa.emo_joy) as joy,
-               SUM(sa.emo_fear) as fear,
-               SUM(sa.emo_anger) as anger,
-               SUM(sa.emo_sadness) as sadness,
-               SUM(sa.emo_surprise) as surprise,
-               SUM(sa.emo_disgust) as disgust,
-               SUM(sa.emo_trust) as trust,
-               SUM(sa.emo_anticipation) as anticipation
-        FROM sighting s
-        JOIN sentiment_analysis sa ON s.id = sa.sighting_id
-        LEFT JOIN location l ON s.location_id = l.id
-        WHERE {where}
-        GROUP BY s.shape
-        ORDER BY count DESC
-        LIMIT 10
-    """, args)
-    rows = cur.fetchall()
-    keys = [desc[0] for desc in cur.description]
-    data = [dict(zip(keys, row, strict=False)) for row in rows]
+        cur.execute(f"""
+            SELECT s.shape,
+                   COUNT(*) as count,
+                   AVG(sa.vader_compound) as avg_compound,
+                   SUM(sa.emo_joy) as joy,
+                   SUM(sa.emo_fear) as fear,
+                   SUM(sa.emo_anger) as anger,
+                   SUM(sa.emo_sadness) as sadness,
+                   SUM(sa.emo_surprise) as surprise,
+                   SUM(sa.emo_disgust) as disgust,
+                   SUM(sa.emo_trust) as trust,
+                   SUM(sa.emo_anticipation) as anticipation
+            FROM sighting s
+            JOIN sentiment_analysis sa ON s.id = sa.sighting_id
+            LEFT JOIN location l ON s.location_id = l.id
+            WHERE {where}
+            GROUP BY s.shape
+            ORDER BY count DESC
+            LIMIT 10
+        """, args)
+        rows = cur.fetchall()
+        keys = [desc[0] for desc in cur.description]
+        data = [dict(zip(keys, row, strict=False)) for row in rows]
 
-    conn.close()
-    return jsonify({"data": data})
+        return jsonify({"data": data})
+    finally:
+        conn.close()
 
 
 # v0.8.6: /api/duplicates and the Duplicates panel were removed.

@@ -79,6 +79,55 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
   overview. Bumped to 190 px on mobile and added `flex-wrap` to
   the brush-header so layout is deterministic.
 
+## [0.12.4] — 2026-04-17 — Audit-driven connection-leak + timeout hardening
+
+Code audit after the three pool-wedge incidents uncovered 11 latent
+failure modes. See [`docs/FAILURE_MODES.md`](docs/FAILURE_MODES.md)
+for the full list. This release ships fixes for the three critical
+items (connection leaks) + two high-severity items (gunicorn/pool
+tuning).
+
+### Fixed
+- **`/api/overlay` connection leak** (CRIT-2). The route never called
+  `conn.close()` on any code path, so every cache miss leaked a pool
+  slot. With a 10-min cache TTL and 2 workers, that's up to 12 leaks
+  per hour — a plausible contributor to the 2026-04-17 overnight wedge.
+- **Exception-path connection leaks** (CRIT-1) across 8 more routes
+  (`init_filters`, `/api/map`, `/api/heatmap`, `/api/timeline`,
+  `/api/sentiment/overview`, `/api/sentiment/timeline`,
+  `/api/sentiment/by-source`, `/api/sentiment/by-shape`). All now
+  wrap DB access in `try/finally` so any mid-handler exception
+  (bad SQL, network blip, user input, memory error) returns the
+  connection to the pool.
+- **Unvalidated `float()` on query params** (CRIT-3). `/api/map` and
+  `/api/heatmap` called `float(request.args.get("south"))` with no
+  guard, so a URL like `?south=foo` raised `ValueError` → 500 →
+  (combined with CRIT-1) leaked a connection. New `_safe_float()`
+  helper returns HTTP 400 on non-numeric input and runs BEFORE
+  `get_db()` so no pool slot is checked out on bad data.
+
+### Changed
+- **Pool `max_size` 8 → 12, `min_size` 1 → 2** (MED-9). Adds headroom
+  above gunicorn's 2×4 = 8 concurrent slots so the prewarm thread
+  (which holds 1–2 connections for 20–40 s) can't starve real
+  requests. PG B1ms `max_connections` is ~50, so there's room.
+- **gunicorn `--timeout` 180 → 45** (HIGH-6). 45 s = pool timeout (8 s)
+  + statement timeout (25 s) + margin. Previously a wedged request
+  held a worker thread for 3 min before gunicorn SIGKILL'd it; now
+  it's ≤45 s. Also adds `--graceful-timeout 30`, `--max-requests 10000`
+  and `--max-requests-jitter 500` for proactive worker recycling.
+  Applied to both `Procfile` (local dev) and the Azure App Service
+  startup command.
+
+### Added
+- **`docs/FAILURE_MODES.md`** — code audit findings, 11 items across
+  crit/high/med/low severity, each with trigger, blast radius, and
+  concrete fix. Living document; revisit quarterly or after each
+  incident.
+- **`_safe_float(value, name, default)` helper** — centralises the
+  validate-then-parse pattern. Returns 400 with a JSON body via
+  `werkzeug.exceptions.BadRequest`.
+
 ## [0.12.3] — 2026-04-17 — TCP keepalive + Always On (prod resilience, hotfix)
 
 Third prod wedge in 24 h. Root cause: `alwaysOn` was **false** on the
