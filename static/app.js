@@ -497,9 +497,50 @@ async function fetchJSON(url, options = {}) {
     if (!resp.ok) {
         let detail = "";
         try { detail = await resp.text(); } catch (_) {}
+        // v0.12.5 — show a user-visible banner on 5xx so people
+        // know the site is having trouble instead of seeing an
+        // empty map with no explanation. See FAILURE_MODES.md MED-10.
+        if (resp.status >= 500) {
+            showApiErrorBanner(resp.status);
+        }
         throw new Error(`HTTP ${resp.status}: ${detail.substring(0, 200)}`);
     }
     return resp.json();
+}
+
+// v0.12.5 — API error banner. Debounced so a cascade of 500s from
+// a single pool wedge doesn't spam the DOM; re-arms after 30 s so
+// a fresh failure after the first wave is still visible.
+let _apiErrorBannerShownAt = 0;
+function showApiErrorBanner(status) {
+    const now = Date.now();
+    if (now - _apiErrorBannerShownAt < 30000) return;
+    _apiErrorBannerShownAt = now;
+
+    // Create banner on demand; reuse the same node on subsequent hits.
+    let banner = document.getElementById("api-error-banner");
+    if (!banner) {
+        banner = document.createElement("div");
+        banner.id = "api-error-banner";
+        banner.setAttribute("role", "alert");
+        banner.innerHTML = `
+            <span class="api-error-icon" aria-hidden="true">!</span>
+            <span class="api-error-text">
+                ufosint is having trouble right now
+                <span class="api-error-sub">
+                    Some data may be missing. Our monitoring has been notified.
+                </span>
+            </span>
+            <button class="api-error-close" aria-label="Dismiss">x</button>
+        `;
+        document.body.appendChild(banner);
+        banner.querySelector(".api-error-close").addEventListener("click", () => {
+            banner.classList.add("api-error-banner--hidden");
+        });
+    }
+    // Reset hidden state in case the user dismissed a previous occurrence.
+    banner.classList.remove("api-error-banner--hidden");
+    banner.dataset.status = String(status);
 }
 
 // Returns true if the error was a deliberate abort (so callers can

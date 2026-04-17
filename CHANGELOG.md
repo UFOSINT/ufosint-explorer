@@ -79,6 +79,30 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
   overview. Bumped to 190 px on mobile and added `flex-wrap` to
   the brush-header so layout is deterministic.
 
+## [0.12.5] — 2026-04-17 — Audit follow-up: lock timeout + API error banner
+
+Picks up two remaining audit items (`docs/FAILURE_MODES.md`) that
+address user-visible reliability rather than code-level leak risk.
+
+### Fixed
+- **`_points_bulk_build` lock now has a 30 s acquire timeout**
+  (HIGH-5). Previously `with lock:` blocked indefinitely if the
+  owning thread was wedged mid-build; other threads stalled until
+  gunicorn's worker timeout killed them. The late arrival now falls
+  through to an uncoordinated build — slightly worse for DB
+  contention on that one request, but avoids starving the other
+  7 worker slots.
+
+### Added
+- **API error banner** (MED-10). When any `/api/*` call returns
+  HTTP 5xx, a dismissable red banner slides in at the top of the
+  page reading "ufosint is having trouble right now / Some data
+  may be missing. Our monitoring has been notified." Debounced at
+  30 s so a cascade of 500s from a pool wedge doesn't spam the UI.
+  Closes the "empty map with no explanation" UX gap that made
+  users think their connection was broken during all 3 wedge
+  incidents.
+
 ## [0.12.4] — 2026-04-17 — Audit-driven connection-leak + timeout hardening
 
 Code audit after the three pool-wedge incidents uncovered 11 latent

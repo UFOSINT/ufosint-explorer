@@ -1938,10 +1938,31 @@ def _points_bulk_build(etag: str) -> tuple[bytes, bytes, dict]:
     """Coalesced wrapper around the actual build. Multiple threads
     asking for the same etag share one build; the second thread
     through finds the result in @lru_cache without re-running the
-    SELECT scan."""
+    SELECT scan.
+
+    v0.12.5 — added 30 s lock acquire timeout (FAILURE_MODES.md
+    HIGH-5). Previously `with lock:` blocked indefinitely if the
+    owning thread was wedged mid-build (e.g. PG query hang), so
+    every other thread stalled until gunicorn's worker timeout
+    killed them. With the timeout, the late-arriving thread
+    falls through to an uncoordinated build — worse for
+    contention on that single request, but avoids starving the
+    other 7 worker slots.
+    """
     lock = _get_points_bulk_lock(etag)
-    with lock:
+    acquired = lock.acquire(timeout=30)
+    if not acquired:
+        # Fall through: build without coalescing. The wedged thread
+        # is still holding the lock; letting us run in parallel
+        # means we double-up the DB scan once, but the lru_cache
+        # hit that follows covers it for subsequent requests.
+        print(f"[points_bulk] lock timeout after 30s for etag={etag[:8]}, "
+              "running uncoordinated build")
         return _points_bulk_build_cached(etag)
+    try:
+        return _points_bulk_build_cached(etag)
+    finally:
+        lock.release()
 
 
 @functools.lru_cache(maxsize=2)

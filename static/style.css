@@ -5884,3 +5884,92 @@ body[data-hide-brush] .observatory-time-brush {
     .overlay-toggle-btn { font-size: 9px; padding: 3px 5px; }
     .overlay-toggle-btn span:not(.overlay-dot) { display: none; }
 }
+
+/* v0.12.5 — API error banner (FAILURE_MODES.md MED-10) -------------------
+ * Appears at top-center when any /api/* request returns 5xx, so users
+ * see a real message instead of a mysteriously empty page. Dismissable,
+ * debounced (re-arms after 30s), visible over everything including the
+ * map/TimeBrush layers.
+ */
+#api-error-banner {
+    position: fixed;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px 10px 12px;
+    min-width: 280px;
+    max-width: min(560px, calc(100vw - 24px));
+    background: #5a1a1a;
+    border: 1px solid #8a2a2a;
+    border-left: 4px solid #e04a4a;
+    border-radius: 6px;
+    color: #ffeaea;
+    font-size: 13px;
+    line-height: 1.4;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.5);
+    animation: api-error-slide-in 200ms ease-out;
+}
+#api-error-banner.api-error-banner--hidden { display: none; }
+.api-error-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #e04a4a;
+    color: #fff;
+    font-weight: 700;
+    font-size: 14px;
+    flex-shrink: 0;
+    font-family: sans-serif;
+}
+.api-error-close {
+    font-family: sans-serif;
+    font-weight: 400;
+    text-transform: lowercase;
+}
+.api-error-text {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-weight: 500;
+}
+.api-error-sub {
+    font-size: 11px;
+    font-weight: 400;
+    color: #ffc7c7;
+    opacity: 0.9;
+}
+.api-error-close {
+    background: transparent;
+    border: none;
+    color: #ffeaea;
+    font-size: 22px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 4px;
+    opacity: 0.7;
+    transition: opacity 120ms;
+    flex-shrink: 0;
+}
+.api-error-close:hover { opacity: 1; }
+
+@keyframes api-error-slide-in {
+    from { transform: translate(-50%, -20px); opacity: 0; }
+    to   { transform: translate(-50%, 0);     opacity: 1; }
+}
+
+@media (max-width: 540px) {
+    #api-error-banner {
+        top: 8px;
+        padding: 8px 10px;
+        font-size: 12px;
+    }
+    .api-error-sub { font-size: 10px; }
+}
