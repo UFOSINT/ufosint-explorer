@@ -1824,9 +1824,10 @@ def _points_bulk_etag() -> str:
 
     Derived from the schema version + geocoded row count + max sighting
     id + count of has_movement_mentioned rows + the set of derived
-    columns present in the schema. All SQL aggregates use existing
-    indexes (idx_location_coords, primary key, idx_sighting_has_movement)
-    so this runs in ~20ms and is safe to call on every request.
+    columns present in the schema + the source_database fingerprint.
+    All SQL aggregates use existing indexes (idx_location_coords,
+    primary key, idx_sighting_has_movement) so this runs in ~20ms and
+    is safe to call on every request.
 
     Including the column set in the ETag means when a new migration
     lands (adding new columns), the ETag changes and every
@@ -1840,9 +1841,22 @@ def _points_bulk_etag() -> str:
     coverage.has_movement = 0 despite PG holding 249,217 movement
     rows. Adding SUM(has_movement_mentioned) to the etag catches
     content-replace reloads without requiring a manual app restart.
+
+    v0.13 — added a source_database fingerprint (`srcN-idM`) to the
+    etag so adding a new source (like r/UFOs id=6) invalidates every
+    cached buffer even though cnt/max_id/mv_count might be unchanged.
+    This catches the failure mode where the alphabetical source-index
+    ordering in the buffer changes (MUFON=1, NUFORC=2, r/UFOs=3,
+    UFOCAT=4 after the add, vs MUFON=1, NUFORC=2, UFOCAT=3 before it).
+    Without this, a stale client buffer + fresh meta sidecar causes
+    filter-by-source and color-by-source to map to the WRONG source
+    for every row — which is exactly what showed up on 2026-04-18 as
+    "selecting r/UFOs paints everything pink". See tests/test_v013_reddit_ui.py.
     """
     conn = get_db()
     mv_count: int | str = "x"  # sentinel for pre-v0.8.3 schemas
+    src_count = 0
+    src_max_id = 0
     try:
         cur = conn.cursor()
         cur.execute(
@@ -1875,12 +1889,29 @@ def _points_bulk_etag() -> str:
         except psycopg.errors.UndefinedColumn:
             conn.rollback()
             mv_count = "x"
+
+        # v0.13 — source_database fingerprint. COUNT catches adds and
+        # removals; MAX(id) catches adds that preserved COUNT (e.g.
+        # a delete-then-insert). Doesn't catch renames — but renames
+        # are rare and usually piggyback on an ASSET_VERSION bump.
+        try:
+            cur.execute(
+                "SELECT COUNT(*)::int, COALESCE(MAX(id), 0)::int FROM source_database"
+            )
+            row = cur.fetchone()
+            if row:
+                src_count = int(row[0] or 0)
+                src_max_id = int(row[1] or 0)
+        except psycopg.Error:
+            conn.rollback()
     finally:
         conn.close()
     cols_tag = "-".join(sorted(cols)) if cols else "base"
     return (
         f"{_POINTS_BULK_SCHEMA_VERSION}"
-        f"-{int(cnt)}-{int(max_id)}-mv{mv_count}-{cols_tag}"
+        f"-{int(cnt)}-{int(max_id)}-mv{mv_count}"
+        f"-src{src_count}-id{src_max_id}"
+        f"-{cols_tag}"
     )
 
 

@@ -170,3 +170,41 @@ def test_css_has_reddit_and_llm_rules():
     # LLM chip base + at least one variant
     assert ".llm-chip" in css
     assert ".llm-chip-anomalous" in css or ".llm-chip-high" in css
+
+
+# ---------------------------------------------------------------------------
+# ETag — source_database fingerprint
+# ---------------------------------------------------------------------------
+
+def test_points_bulk_etag_includes_source_database_fingerprint():
+    """v0.13 regression test.
+
+    2026-04-18: shipping r/UFOs as source_database.id=6 changed the
+    alphabetical ordering used by _points_bulk_build_cached to assign
+    source_idx bytes in the 32-byte row. Every *new* bulk build had
+    the correct ordering, but the ETag was derived only from sighting
+    counts — unchanged until Reddit rows landed in PG.
+
+    Result on staging: clients with a cached 5-source buffer kept it,
+    the /api/filters dropdown grew to 6 sources, and selecting r/UFOs
+    (dropdown position 3) showed UFOCAT (old buffer position 3) tinted
+    Reddit-orange. Adding a source-database fingerprint to the ETag
+    invalidates the buffer cache whenever the sources list mutates.
+    """
+    src = _read(APP_PY)
+    start = src.find("def _points_bulk_etag(")
+    assert start != -1
+    end = src.find("\ndef ", start + 1)
+    body = src[start:end] if end != -1 else src[start:start + 5000]
+
+    # Must query source_database for the fingerprint
+    assert "FROM source_database" in body, (
+        "_points_bulk_etag must incorporate a source_database "
+        "fingerprint so adding a new source invalidates all caches"
+    )
+    # Must include both COUNT and MAX(id) so adds and delete-insert
+    # cycles both bump the etag
+    assert "COUNT(*)" in body and "MAX(id)" in body, (
+        "fingerprint needs COUNT + MAX(id) to catch adds and "
+        "delete-then-insert replacements"
+    )
