@@ -123,19 +123,40 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_sighting_num_witnesses
     WHERE num_witnesses IS NOT NULL;
 
 -- ---------------------------------------------------------------------------
--- source_database seed rows (idempotent insert-or-update)
+-- source_collection / source_database seed rows (idempotent).
 -- ---------------------------------------------------------------------------
--- The ufo-dedup pipeline owns the canonical list of sources, but we insert
--- the Reddit row here as a fallback so the schema migration can land before
--- the first data batch arrives. If the pipeline uses a different id it will
--- conflict-update the name.
-INSERT INTO source_collection (name)
-    VALUES ('Reddit')
-ON CONFLICT DO NOTHING;
+-- Both tables have bigint ids without DEFAULT/SERIAL (original values came
+-- from SQLite exports). We pick the next available id explicitly so INSERT
+-- can't violate the NOT NULL constraint.
+--
+-- Canonical ids after 2026-04-18 seed:
+--   source_collection  id=4  name='Reddit'
+--   source_database    id=6  name='r/UFOs'
+--
+-- Pipelines should resolve the id by name, not by hardcoded integer:
+--   SELECT id FROM source_database WHERE name = 'r/UFOs'
+DO $$
+DECLARE
+    reddit_coll_id bigint;
+BEGIN
+    -- Reddit collection
+    SELECT id INTO reddit_coll_id FROM source_collection WHERE name = 'Reddit';
+    IF reddit_coll_id IS NULL THEN
+        INSERT INTO source_collection (id, name)
+        VALUES ((SELECT COALESCE(MAX(id), 0) + 1 FROM source_collection), 'Reddit')
+        RETURNING id INTO reddit_coll_id;
+    END IF;
 
-INSERT INTO source_database (name, collection_id)
-    SELECT 'r/UFOs', id FROM source_collection WHERE name = 'Reddit'
-ON CONFLICT DO NOTHING;
+    -- r/UFOs source
+    IF NOT EXISTS (SELECT 1 FROM source_database WHERE name = 'r/UFOs') THEN
+        INSERT INTO source_database (id, name, collection_id)
+        VALUES (
+            (SELECT COALESCE(MAX(id), 0) + 1 FROM source_database),
+            'r/UFOs',
+            reddit_coll_id
+        );
+    END IF;
+END$$;
 
 -- =========================================================================
 -- Verification

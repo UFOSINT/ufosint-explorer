@@ -25,6 +25,14 @@ below diverges from the PR, the PR wins.
 Plus `source_collection('Reddit')` and `source_database('r/UFOs')` are
 seeded by the migration. Reference them by name, not by hardcoded id.
 
+**Canonical ids after the 2026-04-18 seed** (for debugging / spot checks;
+still resolve by name in pipeline code):
+
+```
+source_collection  id=4  name='Reddit'
+source_database    id=6  name='r/UFOs'
+```
+
 ---
 
 ## 2. Content policy — what goes in, what stays out
