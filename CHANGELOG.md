@@ -15,6 +15,35 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 ## [Unreleased]
 
+### Added (v0.13 Reddit UI — staging)
+- **Reddit r/UFOs source surfacing on the sighting popup.** A new
+  "View original on r/UFOs" link in the Source section, a full-width
+  Narrative section rendering the LLM-generated summary, and an
+  Analysis section with a 5-dot strangeness meter + confidence/
+  assessment chips. Sections hide entirely for legacy sources whose
+  fields are NULL, so the popup looks identical for NUFORC/MUFON/etc.
+- **Distinct Reddit marker color** on the map (`#ff4500`). Reddit-
+  orange is instantly recognizable and doesn't collide with the
+  existing 5-source palette.
+- **`source_db_id` on `/api/map` markers** so the frontend can style
+  by source without a string-match against a (potentially changing)
+  name.
+- **`description`, `has_photo`, `has_video`, `reddit_post_id`,
+  `reddit_url`, `llm_confidence`, `llm_anomaly_assessment`,
+  `llm_prosaic_candidate`, `llm_strangeness_rating`, `llm_model`,
+  `source_db_id`** added to the `/api/sighting/<id>` response. Null
+  for legacy rows; populated for Reddit after the CSV→SQLite→PG
+  import lands.
+
+### Changed
+- **v0.8.3 `description`-column ban relaxed.** The column is now
+  repurposed for the LLM-transformative summary written by the
+  Reddit pipeline. `summary`, `notes`, `raw_json` remain forbidden
+  per the original privacy posture.
+- **`/llms.txt` updated** to describe r/UFOs as the sixth source and
+  document the content policy.
+
+
 ### Added
 - **Place search now filters results** to the searched bounding box.
   Typing "Arizona" in the map place search applies the Nominatim

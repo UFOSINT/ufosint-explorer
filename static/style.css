@@ -5885,6 +5885,93 @@ body[data-hide-brush] .observatory-time-brush {
     .overlay-toggle-btn span:not(.overlay-dot) { display: none; }
 }
 
+/* v0.13 — Reddit r/UFOs + LLM Analysis popup sections ------------------- */
+
+/* "View original on r/UFOs" button inside the Source section */
+.reddit-row {
+    margin-top: 8px;
+}
+.reddit-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    background: #ff4500;
+    color: #fff;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    text-decoration: none;
+    transition: background-color 120ms;
+}
+.reddit-link:hover {
+    background: #cc3700;
+}
+.reddit-link-arrow {
+    font-size: 14px;
+    line-height: 1;
+}
+
+/* LLM narrative section (full-width) */
+.detail-narrative {
+    background: rgba(255, 69, 0, 0.04);
+    border-left: 3px solid rgba(255, 69, 0, 0.5);
+    padding: 10px 14px;
+}
+.detail-narrative-text {
+    margin: 0;
+    line-height: 1.55;
+    font-size: 13px;
+    color: var(--text);
+}
+.detail-narrative-footer {
+    margin-top: 8px;
+    font-size: 10px;
+    color: var(--text-muted);
+    font-style: italic;
+}
+.detail-narrative-provenance {
+    opacity: 0.75;
+}
+
+/* LLM Analysis — strangeness meter */
+.strangeness-meter {
+    font-family: monospace;
+    letter-spacing: 3px;
+    color: #ff4500;
+    font-size: 14px;
+}
+.strangeness-value {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-left: 6px;
+}
+
+/* LLM chips (confidence / assessment) */
+.llm-chip {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+/* Confidence: green / yellow / red gradient */
+.llm-chip-high   { background: rgba(89, 161, 79, 0.2);  color: #7fc074; border: 1px solid #59a14f; }
+.llm-chip-medium { background: rgba(242, 142, 43, 0.2); color: #f2ac63; border: 1px solid #f28e2b; }
+.llm-chip-low    { background: rgba(225, 87, 89, 0.2);  color: #e87e80; border: 1px solid #e15759; }
+/* Assessment: distinct palette */
+.llm-chip-anomalous  { background: rgba(255, 69, 0, 0.15); color: #ff8060; border: 1px solid #ff4500; }
+.llm-chip-prosaic    { background: rgba(138, 150, 173, 0.2); color: #a8b3c8; border: 1px solid #8a96ad; }
+.llm-chip-ambiguous  { background: rgba(118, 183, 178, 0.2); color: #9fcfcb; border: 1px solid #76b7b2; }
+
+/* Prosaic candidate inline text */
+.detail-prosaic {
+    color: var(--text);
+    font-style: italic;
+}
+
 /* v0.12.5 — API error banner (FAILURE_MODES.md MED-10) -------------------
  * Appears at top-center when any /api/* request returns 5xx, so users
  * see a real message instead of a mysteriously empty page. Dismissable,

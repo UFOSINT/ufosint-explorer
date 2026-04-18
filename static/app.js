@@ -40,13 +40,21 @@ const FILTER_FIELDS = [
     { id: "filter-emotion",   key: "emotion",   label: "Emotion" },
 ];
 
-// Source colors for chart and badges
+// Source colors for chart and badges.
+// v0.13 — added `r/UFOs` (Reddit) using Reddit's signature orange so
+// the source is instantly recognizable on the map. Keep this list in
+// sync with the source_database table names returned by /api/filters.
+// NUFORC's orange is close but muted; Reddit's is hotter.
 const SOURCE_COLORS = {
     "UFOCAT":    { bg: "#4e79a7", border: "#3a5d82" },
     "NUFORC":    { bg: "#f28e2b", border: "#c97520" },
     "MUFON":     { bg: "#e15759", border: "#b84445" },
     "UPDB":      { bg: "#76b7b2", border: "#5d9490" },
     "UFO-search": { bg: "#59a14f", border: "#478240" },
+    "r/UFOs":    { bg: "#ff4500", border: "#cc3700" },
+    // The dedup-team export currently names it "Reddit-UFOs"; keep a
+    // compatibility alias until the source name is unified upstream.
+    "Reddit-UFOs": { bg: "#ff4500", border: "#cc3700" },
 };
 
 function sourceColor(name) {
@@ -6465,7 +6473,34 @@ async function openDetail(id) {
         if (r.collection_name) html += `<div class="detail-row"><span class="detail-label">Collection:</span> <span class="collection-tag">${escapeHtml(r.collection_name)}</span></div>`;
         if (r.origin_name) html += `<div class="detail-row"><span class="detail-label">Origin:</span> ${escapeHtml(r.origin_name)}</div>`;
         if (r.source_record_id) html += `<div class="detail-row"><span class="detail-label">Record ID:</span> ${escapeHtml(r.source_record_id)}</div>`;
+        // v0.13 — Reddit-specific chip + "View on r/UFOs" link. Only
+        // renders when the sighting is from r/UFOs (reddit_url set).
+        // The permalink opens in a new tab; we never embed Reddit
+        // content directly on the site.
+        if (r.reddit_url) {
+            html += `<div class="detail-row reddit-row">
+                <a class="reddit-link" href="${escapeHtml(r.reddit_url)}" target="_blank" rel="noopener noreferrer">
+                    View original on r/UFOs
+                    <span class="reddit-link-arrow" aria-hidden="true">&rarr;</span>
+                </a>
+            </div>`;
+        }
         html += `</div>`;
+
+        // v0.13 — Narrative (LLM summary). For Reddit rows, r.description
+        // holds the LLM's transformative paraphrase of the post, safe to
+        // publish per the content policy in docs/REDDIT_INGEST_NOTES.md.
+        // Legacy sources have NULL here since v0.8.3 so this section
+        // hides for them entirely.
+        if (r.description) {
+            html += `<div class="detail-section detail-narrative" style="grid-column:1/-1">
+                <h3>Narrative</h3>
+                <p class="detail-narrative-text">${escapeHtml(r.description)}</p>
+                <div class="detail-narrative-footer">
+                    ${r.llm_model ? `<span class="detail-narrative-provenance">Summarized by ${escapeHtml(r.llm_model)}</span>` : ""}
+                </div>
+            </div>`;
+        }
 
         // Date & Time
         html += `<div class="detail-section"><h3>Date / Time</h3>`;
@@ -6507,6 +6542,50 @@ async function openDetail(id) {
             if (r.vallee) html += `<div class="detail-row"><span class="detail-label">Vallee:</span> ${escapeHtml(r.vallee)}</div>`;
             if (r.event_type) html += `<div class="detail-row"><span class="detail-label">Event type:</span> ${escapeHtml(r.event_type)}</div>`;
             if (r.svp_rating) html += `<div class="detail-row"><span class="detail-label">SVP:</span> ${escapeHtml(r.svp_rating)}</div>`;
+            html += `</div>`;
+        }
+
+        // v0.13 — LLM Analysis section. Populated by the LLM extraction
+        // pipeline for Reddit rows; NULL for legacy sources until the
+        // pipeline runs over NUFORC/MUFON narratives in a future
+        // backfill. Section hides entirely when all four fields are null.
+        const hasLlmAnalysis = (
+            r.llm_strangeness_rating != null ||
+            r.llm_confidence ||
+            r.llm_anomaly_assessment ||
+            r.llm_prosaic_candidate
+        );
+        if (hasLlmAnalysis) {
+            html += `<div class="detail-section"><h3>Analysis</h3>`;
+            if (r.llm_strangeness_rating != null) {
+                // 5-dot strangeness meter. Filled dots = rating, empty dots = 5 - rating.
+                const filled = Math.max(0, Math.min(5, r.llm_strangeness_rating));
+                const empty = 5 - filled;
+                const dots = "\u25cf".repeat(filled) + "\u25cb".repeat(empty);
+                html += `<div class="detail-row">
+                    <span class="detail-label">Strangeness:</span>
+                    <span class="strangeness-meter" title="1 = mundane, 5 = highly anomalous">${dots}</span>
+                    <span class="strangeness-value">${filled} / 5</span>
+                </div>`;
+            }
+            if (r.llm_confidence) {
+                html += `<div class="detail-row">
+                    <span class="detail-label">Confidence:</span>
+                    <span class="llm-chip llm-chip-confidence llm-chip-${escapeHtml(r.llm_confidence)}">${escapeHtml(r.llm_confidence)}</span>
+                </div>`;
+            }
+            if (r.llm_anomaly_assessment) {
+                html += `<div class="detail-row">
+                    <span class="detail-label">Assessment:</span>
+                    <span class="llm-chip llm-chip-assessment llm-chip-${escapeHtml(r.llm_anomaly_assessment)}">${escapeHtml(r.llm_anomaly_assessment)}</span>
+                </div>`;
+            }
+            if (r.llm_prosaic_candidate) {
+                html += `<div class="detail-row">
+                    <span class="detail-label">Possible explanation:</span>
+                    <span class="detail-prosaic">${escapeHtml(r.llm_prosaic_candidate)}</span>
+                </div>`;
+            }
             html += `</div>`;
         }
 

@@ -121,10 +121,17 @@ def _sighting_detail_columns_block(src: str) -> str:
 
 
 def test_sighting_detail_columns_has_no_raw_text():
-    """_SIGHTING_DETAIL_COLUMNS must not name any of the 4 dropped
-    columns."""
+    """_SIGHTING_DETAIL_COLUMNS must not name any of the truly-dropped
+    raw-text columns.
+
+    v0.13 — `description` was re-allowed because the column is now
+    populated by the Reddit LLM-summary pipeline (transformative
+    output, safe to publish). Legacy sources keep NULL here per the
+    v0.8.3 strip. `summary`, `notes`, `raw_json` stay forbidden —
+    those were never re-enabled for any source.
+    """
     block = _sighting_detail_columns_block(_read(APP_PY))
-    for forbidden in ("s.description", "s.summary", "s.notes", "s.raw_json"):
+    for forbidden in ("s.summary", "s.notes", "s.raw_json"):
         assert forbidden not in block, (
             f"_SIGHTING_DETAIL_COLUMNS names {forbidden!r}, which will "
             f"fail after strip_raw_for_public.py drops the column"
@@ -214,6 +221,14 @@ def test_build_export_query_no_description_ilike():
 # Frontend — app.js no longer renders r.description / r.summary / r.raw_json
 # ---------------------------------------------------------------------------
 def test_open_detail_does_not_render_description():
+    """v0.8.3 dropped the Description section wholesale.
+
+    v0.13 relaxation: `r.description` is now rendered by the Reddit
+    LLM-Analysis section because the Reddit ETL populates it with a
+    transformative LLM summary (safe to publish). The patterns we
+    still forbid are the ones that pulled raw user text without the
+    LLM-summary filter, and the old "Description" section header.
+    """
     js = _read(APP_JS)
     start = js.find("async function openDetail(")
     end = js.find("\n// ===", start + 1)
@@ -221,15 +236,10 @@ def test_open_detail_does_not_render_description():
         end = js.find("function closeModal", start + 1)
     body = js[start:end] if end != -1 else js[start:start + 15000]
 
-    # The v0.8.2 body used r.description / r.summary in the
-    # "Description" section. v0.8.3 dropped that whole section.
-    # We look for the specific rendering patterns that would
-    # inject raw text into the DOM, not mere name mentions in
-    # comments.
+    # r.summary / r.raw_json remain fully forbidden — those are raw
+    # user text and the strip script will drop them.
     for pat in (
-        "r.description ||",
         "r.summary ||",
-        "escapeHtml(r.description)",
         "escapeHtml(r.summary)",
         "JSON.stringify(r.raw_json",
         'innerHTML += "<div class="detail-desc"',

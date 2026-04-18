@@ -893,12 +893,13 @@ The site provides a GPU-accelerated map of 396,158 geocoded sightings, timeline 
 
 ## Data Sources
 
-Five databases totaling 614,505 deduplicated records:
+Six databases totaling ~618,316 deduplicated records:
 - NUFORC (159,320) — National UFO Reporting Center
 - MUFON (138,310) — Mutual UFO Network
 - UFOCAT (197,108) — CUFOS academic catalog
 - UPDB (65,016) — Jacques Vallee's Unified Phenomena Database
 - UFO-search (54,751) — Majestic Timeline historical compilations
+- r/UFOs (3,811) — curated first-person reports from the Reddit subreddit, processed through an LLM extraction pipeline that produces a structured summary, shape/color/duration classification, and strangeness/confidence/anomaly assessments. Content policy: we publish only transformative LLM output plus a permalink back to Reddit — never raw post text, usernames, or user comments. See `docs/REDDIT_INGEST_NOTES.md`.
 
 Plus three curated overlay tables (UAP Gerb research project, v0.12):
 - `crash_retrieval` (14) — documented crash/retrieval events with craft type, recovery status, biologics
@@ -1235,6 +1236,7 @@ def api_map():
                 WITH cells AS (
                     SELECT s.id, l.latitude, l.longitude,
                            s.date_event, s.shape, sd.name AS source_name,
+                           s.source_db_id,
                            COALESCE(l.city, '') AS city,
                            COALESCE(l.state, '') AS state,
                            COALESCE(l.country, '') AS country,
@@ -1253,7 +1255,7 @@ def api_map():
                     WHERE {where}
                 )
                 SELECT id, latitude, longitude, date_event, shape, source_name,
-                       city, state, country, collection, has_desc
+                       source_db_id, city, state, country, collection, has_desc
                 FROM cells
                 WHERE rn <= %s
                 LIMIT %s
@@ -1278,6 +1280,7 @@ def api_map():
             sql = f"""
                 SELECT s.id, l.latitude, l.longitude,
                        s.date_event, s.shape, sd.name AS source_name,
+                       s.source_db_id,
                        COALESCE(l.city, '') AS city,
                        COALESCE(l.state, '') AS state,
                        COALESCE(l.country, '') AS country,
@@ -1295,6 +1298,9 @@ def api_map():
 
         markers = []
         for r in cur.fetchall():
+            # v0.13 — source_db_id added so the frontend can style
+            # markers by source (e.g. Reddit-orange for id=6). The
+            # existing `source` (name) string stays for backcompat.
             markers.append({
                 "id": r[0],
                 "lat": r[1],
@@ -1302,11 +1308,12 @@ def api_map():
                 "date": r[3],
                 "shape": r[4],
                 "source": r[5],
-                "city": r[6],
-                "state": r[7],
-                "country": r[8],
-                "collection": r[9],
-                "has_desc": bool(r[10]),
+                "source_db_id": r[6],
+                "city": r[7],
+                "state": r[8],
+                "country": r[9],
+                "collection": r[10],
+                "has_desc": bool(r[11]),
             })
 
         # Total-in-view count: only run the COUNT(*) when we hit the limit,
@@ -2911,7 +2918,27 @@ _SIGHTING_DETAIL_COLUMNS = (
     # v0.8.5 — v0.8.3b movement classification fields
     "s.has_movement_mentioned",
     "s.movement_categories",
+    # v0.13 — Reddit r/UFOs specific. Null for legacy sources;
+    # populated for source_db_id=6 (r/UFOs). See docs/REDDIT_INGEST_NOTES.md.
+    "s.reddit_post_id",
+    "s.reddit_url",
+    # v0.13 — Generic LLM-extraction output. Universal columns:
+    # initially populated only for Reddit, but the schema allows
+    # backfill of legacy sources later via the same pipeline.
+    "s.llm_confidence",
+    "s.llm_anomaly_assessment",
+    "s.llm_prosaic_candidate",
+    "s.llm_strangeness_rating",
+    "s.llm_model",
+    # v0.13 — "description" is the LLM summary for Reddit rows (safe
+    # to publish — transformative output, not raw user text). Legacy
+    # sources have NULL here per the v0.8.3 public-export strip.
+    "s.description",
+    # v0.13 — has_photo / has_video. SMALLINT on PG side, bool in UI.
+    "s.has_photo",
+    "s.has_video",
     # Joined
+    "s.source_db_id",
     "sd.name AS source_name",
     "l.raw_text AS loc_raw",
     "l.city", "l.county", "l.state", "l.country", "l.region",
