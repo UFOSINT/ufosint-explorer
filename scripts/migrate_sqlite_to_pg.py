@@ -82,6 +82,22 @@ TABLES = [
         "nrc_positive", "nrc_negative",
         # v0.12 — nuclear proximity from UAP Gerb overlay.
         "distance_to_nearest_nuclear_site_km", "nearest_nuclear_site_name",
+        # v0.13 — Reddit r/UFOs ingest. Requires
+        # add_v013_reddit_columns.sql on the PG side. Column-probe
+        # silently drops these on older schemas; source content
+        # policy: only LLM-derivative fields + permalink URL, never
+        # raw post text / usernames / user comments. See
+        # docs/SOURCES.md.
+        #
+        # Note: duration_seconds, num_witnesses, num_objects are
+        # already in the list above — the v0.13 SQL migration just
+        # makes sure they exist as PG columns (no-op if already
+        # created by an earlier migration). has_photo + has_video
+        # are new universal fields; the rest are Reddit/LLM specific.
+        "reddit_post_id", "reddit_url",
+        "llm_confidence", "llm_anomaly_assessment",
+        "llm_prosaic_candidate", "llm_strangeness_rating", "llm_model",
+        "has_photo", "has_video",
     ]),
     ("attachment", ["id", "sighting_id", "url", "file_type", "description"]),
     ("sighting_reference", ["sighting_id", "reference_id"]),
