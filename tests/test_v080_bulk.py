@@ -46,9 +46,9 @@ def test_points_bulk_schema_version_constant():
 
 def test_points_bulk_bytes_per_row_constant():
     src = _read(APP_PY)
-    # v0.11: bumped to 40-byte rows for the transformer emotion
-    # columns (32 existing + 8 new bytes).
-    assert "_POINTS_BULK_BYTES_PER_ROW = 40" in src, (
+    # v0.14: bumped to 48-byte rows for the NRC Lexicon columns
+    # (40 v0.11 layout + 8 new uint8 NRC word-count bytes).
+    assert "_POINTS_BULK_BYTES_PER_ROW = 48" in src, (
         "The row layout is part of the wire contract — the client "
         "hard-codes it into its DataView offsets. Lock it here so a "
         "refactor can't silently bump it without a schema version change."
@@ -57,10 +57,9 @@ def test_points_bulk_bytes_per_row_constant():
 
 def test_points_bulk_struct_format():
     src = _read(APP_PY)
-    # v0.11: 40-byte row = v0.8.5 32-byte layout + 8 new uint8
-    # fields (emotion_28_idx, emotion_28_group, emotion_7_idx,
-    # vader_compound, roberta_sentiment, 3× reserved).
-    assert '_POINTS_BULK_STRUCT = "<IffIBBBBBBBBBBHHHBBBBBBBB"' in src, (
+    # v0.14: 48-byte row = v0.11 40-byte layout + 8 new uint8 NRC
+    # Lexicon word-count columns (nrc_joy .. nrc_anticipation).
+    assert '_POINTS_BULK_STRUCT = "<IffIBBBBBBBBBBHHHBBBBBBBBBBBBBBBB"' in src, (
         "The struct format locks the on-wire order. Little-endian so "
         "the JS DataView reads it directly. 26 fields, 40 bytes total."
     )
@@ -205,8 +204,10 @@ def _make_sighting(
     has_movement=0, movement_cats_json=None,
     emo28_dom=None, emo28_group=None, emo7_dom=None,
     vader_comp=None, roberta_sent=None,
+    nrc_joy=None, nrc_fear=None, nrc_anger=None, nrc_sadness=None,
+    nrc_surprise=None, nrc_disgust=None, nrc_trust=None, nrc_anticipation=None,
 ):
-    """Build a 24-tuple matching the v011-1 SELECT list.
+    """Build a 32-tuple matching the v014-1 SELECT list.
 
     Order must match _points_bulk_build():
       id, latitude, longitude, source_db_id, raw_shape, date_event,
@@ -216,7 +217,9 @@ def _make_sighting(
       has_description, has_media,
       has_movement_mentioned, movement_categories,
       emotion_28_dominant, emotion_28_group, emotion_7_dominant,
-      vader_compound, roberta_sentiment
+      vader_compound, roberta_sentiment,
+      nrc_joy, nrc_fear, nrc_anger, nrc_sadness,
+      nrc_surprise, nrc_disgust, nrc_trust, nrc_anticipation
     """
     return (
         sid, lat, lng, src, raw_shape, date_event,
@@ -226,6 +229,8 @@ def _make_sighting(
         has_movement, movement_cats_json,
         emo28_dom, emo28_group, emo7_dom,
         vader_comp, roberta_sent,
+        nrc_joy, nrc_fear, nrc_anger, nrc_sadness,
+        nrc_surprise, nrc_disgust, nrc_trust, nrc_anticipation,
     )
 
 
@@ -263,9 +268,9 @@ def test_points_bulk_meta_returns_schema_and_lookups(client, monkeypatch):
 
     # v0.8.5 shape (v0.8.3b data layer)
     assert meta["count"] == len(_SAMPLE_SIGHTINGS)
-    # v0.11: schema bumped from v083-1 (32B) to v011-1 (40B)
-    assert meta["schema_version"] == "v011-1"
-    assert meta["schema"]["bytes_per_row"] == 40
+    # v0.14: schema bumped from v011-1 (40B) to v014-1 (48B) for NRC
+    assert meta["schema_version"] == "v014-1"
+    assert meta["schema"]["bytes_per_row"] == 48
     assert meta["schema"]["endian"] == "little"
     assert meta["schema"]["score_unknown"] == 255
     assert meta["schema"]["date_epoch"] == "1900-01-01"
@@ -284,6 +289,9 @@ def test_points_bulk_meta_returns_schema_and_lookups(client, monkeypatch):
         "emotion_28_idx", "emotion_28_group",
         "emotion_7_idx", "vader_compound", "roberta_sentiment",
         "_reserved3a", "_reserved3b", "_reserved3c",
+        # v0.14 NRC additions
+        "nrc_joy", "nrc_fear", "nrc_anger", "nrc_sadness",
+        "nrc_surprise", "nrc_disgust", "nrc_trust", "nrc_anticipation",
     ]
 
     # v0.8.5 flag bits map: bit 0 = has_desc, bit 1 = has_media,
@@ -338,9 +346,9 @@ def test_points_bulk_default_returns_gzipped_binary(client, monkeypatch):
     assert resp.headers.get("Content-Encoding") == "gzip"
     assert resp.headers.get("ETag")
 
-    # Ungzip and verify size is an exact multiple of 40 (v0.11 row size)
+    # Ungzip and verify size is an exact multiple of 48 (v0.14 row size)
     raw = gzip.decompress(resp.data)
-    assert len(raw) == len(_SAMPLE_SIGHTINGS) * 40, (
+    assert len(raw) == len(_SAMPLE_SIGHTINGS) * 48, (
         "packed buffer length must equal count * bytes_per_row"
     )
 
@@ -358,9 +366,9 @@ def test_points_bulk_binary_roundtrip(client, monkeypatch):
     resp = client.get("/api/points-bulk")
     raw = gzip.decompress(resp.data)
 
-    fmt = "<IffIBBBBBBBBBBHHHBBBBBBBB"
+    fmt = "<IffIBBBBBBBBBBHHHBBBBBBBBBBBBBBBB"
     row_size = struct.calcsize(fmt)
-    assert row_size == 40
+    assert row_size == 48
 
     unpacked = [
         struct.unpack_from(fmt, raw, offset=i * row_size)

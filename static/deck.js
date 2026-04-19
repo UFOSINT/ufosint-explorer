@@ -190,16 +190,17 @@
         // If the server sends a different size the schema changed on
         // us and we should bail loudly rather than silently corrupt
         // every marker.
-        // v0.11: row size bumped from 32 to 40 bytes. Accept either
-        // for backward compat during deploy window (the server might
-        // be ahead of the CDN-cached HTML/JS).
-        if (bytesPerRow !== 40 && bytesPerRow !== 32) {
+        // v0.14: row size bumped from 40 to 48 bytes (8 NRC uint8 columns).
+        // Accept 32 (v0.8.5), 40 (v0.11), or 48 (v0.14) for backward
+        // compat during the deploy window.
+        if (bytesPerRow !== 48 && bytesPerRow !== 40 && bytesPerRow !== 32) {
             throw new Error(
-                `unexpected row size ${bytesPerRow} — expected 40 (v0.11). ` +
+                `unexpected row size ${bytesPerRow} — expected 48 (v0.14). ` +
                 `Deploy probably has stale server code.`,
             );
         }
-        const isV11 = bytesPerRow === 40;
+        const isV11 = bytesPerRow >= 40;
+        const isV014 = bytesPerRow >= 48;
         const rowBytes = bytesPerRow;
 
         const N = meta.count;
@@ -225,6 +226,17 @@
         POINTS.emotion7Idx       = new Uint8Array(N);
         POINTS.vaderCompound     = new Uint8Array(N);  // scaled 0-255
         POINTS.robertaSentiment  = new Uint8Array(N);  // scaled 0-255
+        // v0.14 — NRC Emotion Lexicon word counts (Plutchik 8). Values
+        // are uint8-clamped counts; aggregate sums over visibleIdx
+        // drive the NRC donut card live-updates during TimeBrush scrub.
+        POINTS.nrcJoy          = new Uint8Array(N);
+        POINTS.nrcFear         = new Uint8Array(N);
+        POINTS.nrcAnger        = new Uint8Array(N);
+        POINTS.nrcSadness      = new Uint8Array(N);
+        POINTS.nrcSurprise     = new Uint8Array(N);
+        POINTS.nrcDisgust      = new Uint8Array(N);
+        POINTS.nrcTrust        = new Uint8Array(N);
+        POINTS.nrcAnticipation = new Uint8Array(N);
 
         // Hot deserialisation loop. Hard-coded offsets for speed.
         for (let i = 0; i < N; i++) {
@@ -252,6 +264,17 @@
                 POINTS.emotion7Idx[i]      = dv.getUint8(o + 34);
                 POINTS.vaderCompound[i]    = dv.getUint8(o + 35);
                 POINTS.robertaSentiment[i] = dv.getUint8(o + 36);
+            }
+            // v0.14 — NRC Lexicon counts live at bytes 40-47.
+            if (isV014) {
+                POINTS.nrcJoy[i]          = dv.getUint8(o + 40);
+                POINTS.nrcFear[i]         = dv.getUint8(o + 41);
+                POINTS.nrcAnger[i]        = dv.getUint8(o + 42);
+                POINTS.nrcSadness[i]      = dv.getUint8(o + 43);
+                POINTS.nrcSurprise[i]     = dv.getUint8(o + 44);
+                POINTS.nrcDisgust[i]      = dv.getUint8(o + 45);
+                POINTS.nrcTrust[i]        = dv.getUint8(o + 46);
+                POINTS.nrcAnticipation[i] = dv.getUint8(o + 47);
             }
         }
         const t2 = performance.now();

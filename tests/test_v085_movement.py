@@ -141,28 +141,27 @@ def test_migrator_includes_movement_fields():
 # app.py — /api/points-bulk v083-1 schema
 # ---------------------------------------------------------------------------
 def test_points_bulk_schema_version_is_v083_1():
-    # v0.11: bumped to v011-1 (40B rows with emotion columns).
-    # The test name is preserved for history but the assertion
-    # reflects the current schema.
+    # v0.14: bumped to v014-1 (48B rows, 8 NRC Lexicon cols added).
+    # Test name preserved for history.
     src = _read(APP_PY)
-    assert '_POINTS_BULK_SCHEMA_VERSION = "v011-1"' in src
+    assert '_POINTS_BULK_SCHEMA_VERSION = "v014-1"' in src
 
 
 def test_points_bulk_bytes_per_row_is_32():
-    # v0.11: grew to 40 bytes (32 existing + 8 new).
+    # v0.14: grew to 48 bytes (40 v0.11 + 8 NRC uint8 cols).
     src = _read(APP_PY)
-    assert "_POINTS_BULK_BYTES_PER_ROW = 40" in src
+    assert "_POINTS_BULK_BYTES_PER_ROW = 48" in src
 
 
 def test_points_bulk_struct_has_new_fields():
-    # v0.11: struct grew from IffIBBBBBBBBBBHHH (32B) to
-    # IffIBBBBBBBBBBHHHBBBBBBBB (40B). The 8 new bytes carry
-    # emotion_28_idx, emotion_28_group, emotion_7_idx,
-    # vader_compound, roberta_sentiment, and 3 reserved bytes.
+    # v0.14: struct grew from IffIBBBBBBBBBBHHHBBBBBBBB (40B, v0.11)
+    # to IffIBBBBBBBBBBHHHBBBBBBBBBBBBBBBB (48B). The 8 new bytes
+    # carry nrc_joy, nrc_fear, nrc_anger, nrc_sadness, nrc_surprise,
+    # nrc_disgust, nrc_trust, nrc_anticipation (uint8 clamped counts).
     src = _read(APP_PY)
-    assert '_POINTS_BULK_STRUCT = "<IffIBBBBBBBBBBHHHBBBBBBBB"' in src, (
-        "Struct format must be the v0.11 40-byte layout with 8 "
-        "additional uint8 fields at the end."
+    assert '_POINTS_BULK_STRUCT = "<IffIBBBBBBBBBBHHHBBBBBBBBBBBBBBBB"' in src, (
+        "Struct format must be the v0.14 48-byte layout with 8 "
+        "additional NRC uint8 fields at the end."
     )
 
 
@@ -305,11 +304,11 @@ def test_deck_js_points_has_movement_flags_field():
 
 
 def test_deck_js_row_size_is_32():
-    # v0.11: row size bumped to 40. deck.js accepts both 32 and 40
+    # v0.14: row size bumped to 48. deck.js accepts 32, 40, and 48
     # for backward compat during the deploy window.
     js = _read(DECK_JS)
-    assert "bytesPerRow !== 40" in js
-    assert "expected 40 (v0.11)" in js
+    assert "bytesPerRow !== 48" in js
+    assert "expected 48 (v0.14)" in js
     # And the hot loop reads at offset 28 for movement_flags
     assert "getUint16(o + 28" in js
 
