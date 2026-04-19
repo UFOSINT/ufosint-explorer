@@ -15,6 +15,52 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 ## [Unreleased]
 
+### Added (v0.14 — science team data-quality overhaul)
+- **9 new `audit_*` columns on `sighting`** — metadata about the
+  ufo-dedup LLM-assisted audit pipeline. Populated for 378,383 of
+  618,316 rows. Not exposed in the UI yet; available via
+  `/api/sighting/<id>` for research use.
+  See `scripts/add_v014_audit_columns.sql`.
+- **`scripts/import_v014_surgical.py`** — zero-downtime import that
+  handles the v0.14 data scope:
+  location coord updates (43,740), sighting-level column sync across
+  all 618,316 rows (shape, color, duration, sound, direction,
+  standardized_shape, audit_*, etc.). Takes ~8 minutes, no TRUNCATE,
+  no downtime. All inside one transaction, idempotent.
+- **3 new canonical shapes** — `Crescent`, `Cloud`, `Dome` —
+  automatically appear in the Source filter dropdown via
+  `FILTER_CACHE` after worker restart.
+
+### Changed (user-visible impact)
+- **+40,763 high-quality records** (`quality_score ≥ 60`):
+  119,965 → 160,728. Filter "High quality only" is much more
+  meaningful.
+- **Color filter** now works on 264,414 records (was ~62,198):
+  ~4.2× more rows filterable.
+- **Duration filter** now works on 232,646 records (was ~994):
+  ~235× more.
+- **Sound filter** on 88,645 records (was ~26,877): ~3.3× more.
+- **Direction filter** on 131,592 (was ~12,378): ~10.6× more.
+- **Standardized shape** coverage 238,848 → 343,602: +104,754 rows
+  now classified.
+- **29,029 wrong-country geocodes** removed from the map (pins moved
+  to actual locations or set to NULL). Map drops from 468,349 to
+  418,077 visible pins, but every remaining pin is in the correct
+  spot. **Quality over quantity.**
+
+### Fixed (dedup-team side)
+- Bad geocodes where a US city name matched a NZ/AU/ZA city: fixed
+  via state bounding-box validation.
+- Messy location strings like `"Toronto (Canada), ON, Canada"`
+  normalized via Gemini Flash to `city=Toronto, state=ON, country=CA`.
+
+### Infrastructure
+- `.github/workflows/azure-deploy.yml` — `add_v014_audit_columns.sql`
+  added to sparse-checkout list and the migration-apply loop.
+- `scripts/migrate_sqlite_to_pg.py` — column list extended with the
+  9 audit fields so future rebuilds carry them through.
+
+
 ### Added (v0.13 rate limiting + LLM bulk-access guidance)
 - **Rate limiting** via `flask-limiter` (3.8.0). `/api/tool/<name>` and
   the `/mcp` JSON-RPC endpoint: 60 req/min per client. `/api/map` and

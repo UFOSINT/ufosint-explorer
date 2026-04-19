@@ -98,6 +98,13 @@ TABLES = [
         "llm_confidence", "llm_anomaly_assessment",
         "llm_prosaic_candidate", "llm_strangeness_rating", "llm_model",
         "has_photo", "has_video",
+        # v0.14 — audit metadata (LLM-assisted data-quality pass). Populated
+        # for ~378k of 618k sightings (those the pipeline touched). Requires
+        # add_v014_audit_columns.sql on the PG side.
+        "audit_status", "audit_location_check", "audit_location_fix",
+        "audit_geocode_check", "audit_data_extracted",
+        "audit_quality_notes", "audit_batch_id",
+        "audit_model", "audit_timestamp",
     ]),
     ("attachment", ["id", "sighting_id", "url", "file_type", "description"]),
     ("sighting_reference", ["sighting_id", "reference_id"]),

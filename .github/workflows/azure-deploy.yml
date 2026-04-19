@@ -133,6 +133,7 @@ jobs:
             scripts/add_v011_emotion_columns.sql
             scripts/add_v012_gerb_nrc_columns.sql
             scripts/add_v013_reddit_columns.sql
+            scripts/add_v014_audit_columns.sql
           sparse-checkout-cone-mode: false
           path: migrations
 
@@ -231,7 +232,7 @@ jobs:
       # applied manually because the workflow only knew about
       # migrations up to v0.8.3 — the "pre-apply before app code"
       # invariant needs this step to cover every open migration.
-      - name: Apply v0.11 / v0.12 / v0.13 migrations
+      - name: Apply v0.11 / v0.12 / v0.13 / v0.14 migrations
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
@@ -243,7 +244,8 @@ jobs:
           for f in \
               migrations/scripts/add_v011_emotion_columns.sql \
               migrations/scripts/add_v012_gerb_nrc_columns.sql \
-              migrations/scripts/add_v013_reddit_columns.sql; do
+              migrations/scripts/add_v013_reddit_columns.sql \
+              migrations/scripts/add_v014_audit_columns.sql; do
             if [ -f "$f" ]; then
               echo "Running $f …"
               psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
@@ -251,7 +253,7 @@ jobs:
               echo "::warning::$f not checked out — skipping"
             fi
           done
-          echo "v0.11 / v0.12 / v0.13 migrations complete."
+          echo "v0.11 / v0.12 / v0.13 / v0.14 migrations complete."
 
       # v0.7.5: create (if needed) and refresh the materialized views that
       # back /api/stats, /api/timeline, and /api/sentiment/overview. This
