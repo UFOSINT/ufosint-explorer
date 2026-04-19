@@ -3492,6 +3492,60 @@ def api_sentiment_by_shape():
         conn.close()
 
 
+@app.route("/api/sentiment/nrc")
+@cache.cached(timeout=600, query_string=True)
+def api_sentiment_nrc():
+    """v0.14 — aggregate NRC Lexicon word-counts across filtered sightings.
+
+    Returns a single JSON row with 8 Plutchik-aligned emotion sums plus
+    positive/negative aggregate sums. Backing the "NRC Emotion Lexicon"
+    donut card on the Insights page.
+
+    The NRC columns (nrc_joy .. nrc_negative) were added in v0.12 and
+    carry the per-row word-match counts from the NRC Word-Emotion
+    Association Lexicon. This endpoint just SUMs them under the current
+    filter set.
+
+    Cached 10 minutes per filter combination — same TTL as the other
+    /api/sentiment/* endpoints.
+    """
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        clauses = []
+        args: list = []
+        add_common_filters(request.args, clauses, args)
+        where = " AND ".join(clauses) if clauses else "TRUE"
+
+        cur.execute(f"""
+            SELECT
+                COALESCE(SUM(nrc_joy),         0)::bigint AS joy,
+                COALESCE(SUM(nrc_fear),        0)::bigint AS fear,
+                COALESCE(SUM(nrc_anger),       0)::bigint AS anger,
+                COALESCE(SUM(nrc_sadness),     0)::bigint AS sadness,
+                COALESCE(SUM(nrc_surprise),    0)::bigint AS surprise,
+                COALESCE(SUM(nrc_disgust),     0)::bigint AS disgust,
+                COALESCE(SUM(nrc_trust),       0)::bigint AS trust,
+                COALESCE(SUM(nrc_anticipation),0)::bigint AS anticipation,
+                COALESCE(SUM(nrc_positive),    0)::bigint AS positive,
+                COALESCE(SUM(nrc_negative),    0)::bigint AS negative,
+                COUNT(*) AS total_sightings
+            FROM sighting s
+            LEFT JOIN location l ON s.location_id = l.id
+            WHERE {where}
+        """, args)
+        row = cur.fetchone()
+        keys = [d[0] for d in cur.description]
+        payload = dict(zip(keys, row, strict=False))
+        # Convert psycopg's Decimal/int to plain int for clean JSON
+        for k, v in payload.items():
+            if v is not None:
+                payload[k] = int(v)
+        return jsonify(payload)
+    finally:
+        conn.close()
+
+
 # v0.8.6: /api/duplicates and the Duplicates panel were removed.
 # The v0.8.3b science-team export ships with zero duplicate_candidate
 # rows (the new pipeline resolves duplicates at ingest rather than

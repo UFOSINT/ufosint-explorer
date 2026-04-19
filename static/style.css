@@ -2002,6 +2002,25 @@ select:focus {
     min-height: 180px;
 }
 
+/* v0.14 — hint icon in card header + footnote under the NRC donut */
+.insight-hint {
+    display: inline-block;
+    margin-left: 6px;
+    font-size: 11px;
+    color: var(--text-faint);
+    cursor: help;
+    font-weight: 400;
+}
+.insight-footnote {
+    margin-top: 8px;
+    font-size: 11px;
+    color: var(--text-muted);
+    text-align: center;
+}
+.insight-footnote .nrc-pos { color: #59a14f; font-weight: 600; }
+.insight-footnote .nrc-neg { color: #e15759; font-weight: 600; }
+.insight-footnote .nrc-n   { color: var(--text-faint); }
+
 .insight-card-wide .insight-chart-wrap {
     min-height: 220px;
 }

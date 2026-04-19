@@ -5404,6 +5404,11 @@ function refreshInsightsClientCards(playback) {
     renderGoEmotions28();
     renderSentimentScores();
     renderEmotionBySourceV11();
+    // v0.14 — NRC Lexicon card (server-fetched; NRC columns aren't in
+    // the bulk buffer so we can't compute it client-side like the
+    // others). Fires in the background; the canvas renders whenever
+    // the fetch resolves.
+    renderNrcLexicon();
     // Section B: Data Quality (2 cards, unchanged)
     renderQualityDistribution();
     renderHoaxCurve();
@@ -6389,6 +6394,122 @@ function renderEmotionBySourceV11() {
                 evt.native.target.style.cursor = elements.length ? "pointer" : "";
             },
         },
+    });
+}
+
+// ---- Card 6 (v0.14): NRC Emotion Lexicon donut ----
+// Fetches aggregated NRC word-count totals from /api/sentiment/nrc
+// (filter-aware, 10-min cached server-side) and renders a donut of
+// the 8 Plutchik-aligned emotions. Positive/negative totals appear
+// as a small footnote under the chart (they'd dominate the donut if
+// included as slices).
+//
+// Why this card is server-fetched unlike the other 5 in this
+// section: NRC columns (nrc_joy..nrc_negative) aren't packed into
+// the 32-byte bulk buffer — adding 10 uint32 NRC columns would be
+// ~25 MB of extra payload for little visual gain. The server-side
+// aggregation is cheap (SUM over already-indexed rows, ~50 ms) and
+// the 10-min cache handles repeat hits.
+const _NRC_EMOTIONS = ["joy", "fear", "anger", "sadness", "surprise",
+                       "disgust", "trust", "anticipation"];
+const _NRC_COLORS = {
+    joy:          "#f2d857",  // yellow
+    fear:         "#8a5cd3",  // purple
+    anger:        "#e15759",  // red
+    sadness:      "#4e79a7",  // blue
+    surprise:     "#76b7b2",  // teal
+    disgust:      "#59a14f",  // green
+    trust:        "#9c755f",  // brown
+    anticipation: "#f28e2b",  // orange
+};
+let _nrcFetchInFlight = null;
+
+function renderNrcLexicon() {
+    const canvas = document.getElementById("nrc-chart");
+    if (!canvas) return;
+
+    // Filter params — same set the other /api/sentiment/* endpoints read.
+    let params = "";
+    try {
+        if (typeof getFilterParams === "function") {
+            const p = getFilterParams();
+            params = p.toString();
+        }
+    } catch (_) { /* best-effort */ }
+
+    const url = "/api/sentiment/nrc" + (params ? `?${params}` : "");
+
+    // De-dupe in-flight requests so rapid filter changes don't stack.
+    if (_nrcFetchInFlight) {
+        try { _nrcFetchInFlight.abort(); } catch (_) {}
+    }
+    const controller = new AbortController();
+    _nrcFetchInFlight = controller;
+
+    fetchJSON(url, { signal: controller.signal }).then((d) => {
+        _nrcFetchInFlight = null;
+        const counts = _NRC_EMOTIONS.map(k => Number(d[k] || 0));
+        const total = counts.reduce((a, b) => a + b, 0);
+        const labels = _NRC_EMOTIONS.map((k, i) => {
+            const pct = total > 0 ? ((counts[i] / total) * 100).toFixed(1) : "0";
+            return `${k.charAt(0).toUpperCase() + k.slice(1)} (${pct}%)`;
+        });
+        const bg = _NRC_EMOTIONS.map(k => _NRC_COLORS[k]);
+
+        const footnote = document.getElementById("nrc-footnote");
+        if (footnote) {
+            const pos = Number(d.positive || 0).toLocaleString();
+            const neg = Number(d.negative || 0).toLocaleString();
+            const n = Number(d.total_sightings || 0).toLocaleString();
+            footnote.innerHTML = (
+                `Valence: <span class="nrc-pos">${pos}</span> positive &middot; ` +
+                `<span class="nrc-neg">${neg}</span> negative &middot; ` +
+                `<span class="nrc-n">${n} sightings</span>`
+            );
+        }
+
+        if (state.insightsCharts.nrcLexicon) {
+            const c = state.insightsCharts.nrcLexicon;
+            c.data.datasets[0].data = counts;
+            c.data.labels = labels;
+            c.update("none");
+            return;
+        }
+        state.insightsCharts.nrcLexicon = new Chart(canvas.getContext("2d"), {
+            type: "doughnut",
+            data: {
+                labels,
+                datasets: [{
+                    data: counts,
+                    backgroundColor: bg,
+                    borderColor: "#1f2937",
+                    borderWidth: 2,
+                }],
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: { duration: 300 },
+                plugins: {
+                    legend: { position: "right", labels: { boxWidth: 12 } },
+                    tooltip: {
+                        callbacks: {
+                            label: (ctx) => {
+                                const v = ctx.parsed;
+                                const pct = total > 0 ? ((v / total) * 100).toFixed(1) : "0";
+                                return `${v.toLocaleString()} words (${pct}%)`;
+                            },
+                        },
+                    },
+                },
+            },
+        });
+    }).catch((err) => {
+        _nrcFetchInFlight = null;
+        if (isAbortError(err)) return;
+        // Non-fatal — the other cards keep working. Error banner
+        // in fetchJSON already handles 5xx.
+        console.warn("NRC chart load failed:", err);
     });
 }
 
