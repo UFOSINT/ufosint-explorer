@@ -88,6 +88,60 @@ app.config["COMPRESS_LEVEL"] = 6           # gzip default; balances CPU vs ratio
 app.config["COMPRESS_MIN_SIZE"] = 500
 Compress(app)
 
+# ---------------------------------------------------------------------------
+# Rate limiting (v0.13 — audit finding MED-7)
+# ---------------------------------------------------------------------------
+# On 2026-04-18 at 22:00 UTC a single PowerShell client hit the MCP tool
+# endpoint 7,208 times in one hour — no malice, just aggressive scripting.
+# The defense stack absorbed it fine, but the incident made the case:
+# we need rate limits so one client can't monopolize the PG pool or burn
+# our B1ms compute budget. The /llms.txt and MCP tool descriptions now
+# prominently point bulk-access clients at the SQLite download; this
+# limiter is the enforcement layer when they ignore the hint.
+#
+# Defaults are conservative: we want interactive tools fast, bulk via
+# the SQLite. Unlimited on /health, /api/stats, /api/filters (tiny and
+# hot-cached). Moderate on /api/map (heavy payload) and /api/tool/*
+# (the MCP function-call surface).
+#
+# Client-key strategy: use the X-Forwarded-For header if present (Azure
+# App Service's load balancer passes through the real client IP there),
+# else fall back to remote_addr. Without X-Forwarded-For every request
+# would look like it came from Azure's internal LB at 169.254.130.1
+# and they'd all share one bucket.
+from flask_limiter import Limiter  # noqa: E402
+from flask_limiter.util import get_remote_address  # noqa: E402
+
+
+def _rate_limit_key():
+    """Prefer the real client IP from X-Forwarded-For over Azure's LB IP.
+
+    Azure App Service sets X-Forwarded-For to the chain of upstream
+    proxies; the *leftmost* entry is the original client. Falls back
+    to remote_addr when the header isn't present (local dev, tests).
+    """
+    xff = request.headers.get("X-Forwarded-For", "")
+    if xff:
+        # Leftmost = original client per RFC 7239 / Azure docs
+        return xff.split(",")[0].strip()
+    return get_remote_address()
+
+
+# Storage backend: per-worker memory. Each gunicorn worker has its own
+# counter, so a client that hits worker A 60 times may get another 60
+# hits on worker B. Imperfect but acceptable — with 2 workers the real
+# ceiling is 120/min per IP per minute, which is still tight enough to
+# prevent the 2026-04-18 scripting spike (7,208 calls in one hour =
+# ~120/min) from repeating. If abuse patterns emerge, wire this to the
+# REDIS_URL backend (Flask-Limiter supports it; just change storage_uri).
+limiter = Limiter(
+    app=app,
+    key_func=_rate_limit_key,
+    default_limits=[],  # no global default — opt in per-route below
+    storage_uri="memory://",
+    headers_enabled=True,  # X-RateLimit-* headers in responses
+)
+
 # MCP-over-HTTP server, mounted at /mcp. Lets any MCP-aware AI client
 # (Claude Desktop, Cursor, Cline, Continue, Windsurf, etc.) call the
 # tool catalog directly using their own LLM, with no inference cost
@@ -96,6 +150,12 @@ Compress(app)
 # the blueprint after the Flask instance exists. (ruff E402)
 from mcp_http import mcp_bp  # noqa: E402
 app.register_blueprint(mcp_bp)
+
+# Apply the same 60/min rate limit to the MCP endpoint. Matches the
+# /api/tool/<name> limit since both expose the same underlying tools.
+# The limit is registered on the blueprint name; Flask-Limiter walks
+# every view function in the blueprint and attaches the limit.
+limiter.limit("60 per minute", key_func=_rate_limit_key)(mcp_bp)
 
 # ---------------------------------------------------------------------------
 # Response cache (Flask-Caching)
@@ -865,9 +925,30 @@ def llms_txt():
     """Lightweight LLM site index — what the site is and where to find things."""
     text = """# UFOSINT Explorer
 
-> Interactive research platform for the Unified UFO Sightings Database — 614,505 sighting records from five major UFO/UAP databases (NUFORC, MUFON, UFOCAT, UPDB, UFO-search), deduplicated and cross-referenced. Free, read-only, no authentication required.
+> Interactive research platform for the Unified UFO Sightings Database — 618,316 sighting records from six UFO/UAP sources (NUFORC, MUFON, UFOCAT, UPDB, UFO-search, r/UFOs), deduplicated and cross-referenced. Free, read-only, no authentication required.
 
-The site provides a GPU-accelerated map of 396,158 geocoded sightings, timeline charts, emotion/sentiment analysis from 4 transformer models, and a full methodology section. All data is queryable via MCP tools or a REST API.
+The site provides a GPU-accelerated map of 468,349 geocoded sightings, timeline charts, emotion/sentiment analysis from 4 transformer models, LLM strangeness/anomaly ratings on Reddit sightings, and a full methodology section. All data is queryable via MCP tools or a REST API.
+
+## For AI Agents / Bulk Analysis — DOWNLOAD THE SQLITE, DO NOT SCRAPE
+
+If you plan to read more than ~50 records, please do NOT loop over the MCP tools or /api/* endpoints. The complete dataset is freely available as a single SQLite file:
+
+```
+curl -LO https://github.com/UFOSINT/ufosint-explorer/releases/latest/download/ufo_public.db
+sqlite3 ufo_public.db "SELECT COUNT(*) FROM sighting;"
+# should return ~618,316
+```
+
+Why download instead of scraping:
+- It is ~100× faster than calling the API in a loop.
+- No rate limits, no throttling, no API key needed.
+- Saves compute on our small B1ms Postgres server.
+- You get richer data — every column, including fields we don't expose via the tools.
+- It is the citable artifact (tagged releases == immutable snapshots).
+
+**Rate limits on this site**: `/api/tool/*` is capped at 60 requests/minute per client. Heavy/repeated queries will be rate-limited. Use the SQLite file for bulk work. The interactive tools are for one-off questions a human or agent asks in a conversation.
+
+There is also a one-click download button in the site's Methodology section at https://ufosint.com/#methodology-downloads (for humans).
 
 ## MCP Tools (Model Context Protocol)
 
@@ -891,6 +972,15 @@ The site provides a GPU-accelerated map of 396,158 geocoded sightings, timeline 
 - [Filters](https://ufosint-explorer.azurewebsites.net/api/filters): Available filter values (shapes, sources, countries, etc.)
 - [UAP Gerb overlay](https://ufosint-explorer.azurewebsites.net/api/overlay): Curated crash retrievals (14), nuclear encounters (35), and facilities (75) as a single JSON payload. Not part of the main sighting corpus — these are research-grade overlay datasets.
 
+## When to use tools vs. the SQLite
+
+- **One question, few records** → call the tool (`search_sightings`, `get_stats`, etc.)
+- **Exploratory interactive session with a human** → call the tool
+- **"Give me every record from source X"** → download the SQLite
+- **"Analyze the entire corpus"** → download the SQLite
+- **Training data / benchmarking / ML** → download the SQLite, then cite the release tag
+- **Real-time freshness matters** → the SQLite is updated weekly; if you need newer, ask the tool
+
 ## Data Sources
 
 Six databases totaling ~618,316 deduplicated records:
@@ -908,12 +998,13 @@ Plus three curated overlay tables (UAP Gerb research project, v0.12):
 
 ## Download the Database
 
-The full 508 MB SQLite snapshot is attached to every tagged release:
+The full 553 MB SQLite snapshot is attached to every tagged release:
 
 - [Latest release download](https://github.com/UFOSINT/ufosint-explorer/releases/latest/download/ufo_public.db) — direct link to ufo_public.db
 - [All releases](https://github.com/UFOSINT/ufosint-explorer/releases) — browse version history
+- [One-click download button](https://ufosint.com/#methodology-downloads) — for humans; same file
 
-Quick start with the SQLite CLI: `sqlite3 ufo_public.db "SELECT COUNT(*) FROM sighting;"` should return 614505.
+Quick start with the SQLite CLI: `sqlite3 ufo_public.db "SELECT COUNT(*) FROM sighting;"` should return ~618,316. Full schema in [docs/ARCHITECTURE.md](https://github.com/UFOSINT/ufosint-explorer/blob/main/docs/ARCHITECTURE.md).
 
 ## Optional
 
@@ -1128,6 +1219,7 @@ def api_overlay():
 
 
 @app.route("/api/tool/<name>", methods=["POST"])
+@limiter.limit("60 per minute", key_func=_rate_limit_key)
 def api_tool_call(name):
     """Direct tool invocation for the BYOK chat.
 
@@ -1149,6 +1241,7 @@ def api_tool_call(name):
 
 
 @app.route("/api/map")
+@limiter.limit("30 per minute", key_func=_rate_limit_key)
 @cache.cached(timeout=300, query_string=True)
 def api_map():
     """Map markers with bbox + filters, with zoom-aware spatial sampling.
@@ -1339,6 +1432,7 @@ def api_map():
 
 
 @app.route("/api/heatmap")
+@limiter.limit("30 per minute", key_func=_rate_limit_key)
 @cache.cached(timeout=300, query_string=True)
 def api_heatmap():
     """Lightweight coordinate-only endpoint for heatmap rendering.

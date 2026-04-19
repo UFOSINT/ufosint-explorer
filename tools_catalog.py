@@ -390,7 +390,15 @@ TOOLS = [
             "matching X' or 'what reports came from California in 1973'. "
             "Returns up to 200 records (default 25). "
             "Date params accept either a year (1973) or an ISO date "
-            "(1973-10-15)."
+            "(1973-10-15). "
+            "\n\n"
+            "IF YOU ARE PLANNING TO CALL THIS TOOL MANY TIMES IN A LOOP OR "
+            "READ THE ENTIRE DATASET, STOP. Download the full 553 MB SQLite "
+            "export instead — one HTTP request, no rate limits, richer "
+            "columns, ~100x faster than looping the tool: "
+            "https://github.com/UFOSINT/ufosint-explorer/releases/latest/download/ufo_public.db"
+            " . This tool is for interactive queries, not bulk extraction. "
+            "Rate limits apply (60/min per client)."
         ),
         "parameters": {
             "type": "object",
@@ -479,7 +487,11 @@ TOOLS = [
             "Count sightings grouped by a categorical field. Use this for "
             "questions like 'most common shapes', 'top 10 reporting states', "
             "'how many reports per Hynek class'. Allowed fields: shape, "
-            "hynek, vallee, source, country, state."
+            "hynek, vallee, source, country, state. "
+            "For any aggregation that doesn't fit a single call, download the "
+            "SQLite export and run your own GROUP BY locally — it's "
+            "~100x faster: "
+            "https://github.com/UFOSINT/ufosint-explorer/releases/latest/download/ufo_public.db"
         ),
         "parameters": {
             "type": "object",

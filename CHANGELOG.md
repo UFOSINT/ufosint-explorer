@@ -15,6 +15,32 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 ## [Unreleased]
 
+### Added (v0.13 rate limiting + LLM bulk-access guidance)
+- **Rate limiting** via `flask-limiter` (3.8.0). `/api/tool/<name>` and
+  the `/mcp` JSON-RPC endpoint: 60 req/min per client. `/api/map` and
+  `/api/heatmap`: 30 req/min per client. `/health`, `/api/stats`,
+  `/api/filters`, static assets, and everything else: unlimited.
+  Client IP is resolved from `X-Forwarded-For` (Azure passes through
+  the real client) with `remote_addr` fallback. Trigger was the
+  2026-04-18 22:00 UTC spike where one PowerShell client made 7,208
+  requests to `/api/tool/search_sightings` in a single hour — no harm
+  done, but proof that bulk scripting without throttle is a real path.
+  Closes FAILURE_MODES.md MED-7.
+- **`/llms.txt` leads with "download the SQLite, don't scrape"**
+  guidance for AI agents and scripting clients. The 553 MB SQLite at
+  `github.com/UFOSINT/ufosint-explorer/releases/latest/download/ufo_public.db`
+  contains everything the tools expose and has zero rate limits. The
+  MCP tool descriptions (`search_sightings`, `count_by`) now embed
+  the same redirect so an LLM picking tools sees "stop if looping —
+  download the DB instead" inline.
+
+### Changed
+- `/llms.txt` totals updated for v0.13: **618,316 total sightings**,
+  **468,349 mapped**, six sources (r/UFOs added at 3,811).
+- `requirements.txt` adds `flask-limiter==3.8.0`.
+
+## [Unreleased previous entries below — will move to v0.13 on tag cut]
+
 ### Added (v0.13 Reddit UI — staging)
 - **Reddit r/UFOs source surfacing on the sighting popup.** A new
   "View original on r/UFOs" link in the Source section, a full-width
