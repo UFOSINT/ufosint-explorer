@@ -1963,11 +1963,23 @@ def _points_bulk_etag() -> str:
     filter-by-source and color-by-source to map to the WRONG source
     for every row — which is exactly what showed up on 2026-04-18 as
     "selecting r/UFOs paints everything pink". See tests/test_v013_reddit_ui.py.
+
+    v0.14 — same pattern for shapes. The bulk build sorts
+    standardized_shape alphabetically to assign shape_idx bytes. When
+    the science team added `Crescent`, `Cloud`, `Dome` in the v0.14
+    data-quality pass, 3 new shapes shifted existing indices (e.g.
+    Cone moved from idx 6 to 7 after Cloud was inserted alphabetically
+    at 6). The ETag happened to change anyway in v0.14 because the
+    geocoded count + mv_count also moved, but a future release that
+    only touches shapes (e.g. adds one canonical shape without
+    retagging) would silently break filter-by-shape on cached
+    clients. `shpN` is the shape-list fingerprint.
     """
     conn = get_db()
     mv_count: int | str = "x"  # sentinel for pre-v0.8.3 schemas
     src_count = 0
     src_max_id = 0
+    shape_count = 0
     try:
         cur = conn.cursor()
         cur.execute(
@@ -2015,6 +2027,23 @@ def _points_bulk_etag() -> str:
                 src_max_id = int(row[1] or 0)
         except psycopg.Error:
             conn.rollback()
+
+        # v0.14 — distinct-standardized-shape fingerprint so adding a
+        # new canonical shape (like Crescent / Cloud / Dome) bumps the
+        # etag even when no other fields change. Same rationale as the
+        # source_database fingerprint above: the bulk buffer embeds a
+        # sort-order-dependent shape_idx, so inserting an alphabetical
+        # shape shifts every subsequent index.
+        try:
+            cur.execute(
+                "SELECT COUNT(DISTINCT standardized_shape)::int "
+                "FROM sighting "
+                "WHERE standardized_shape IS NOT NULL AND standardized_shape != ''"
+            )
+            row = cur.fetchone()
+            shape_count = int(row[0]) if row and row[0] is not None else 0
+        except psycopg.Error:
+            conn.rollback()
     finally:
         conn.close()
     cols_tag = "-".join(sorted(cols)) if cols else "base"
@@ -2022,6 +2051,7 @@ def _points_bulk_etag() -> str:
         f"{_POINTS_BULK_SCHEMA_VERSION}"
         f"-{int(cnt)}-{int(max_id)}-mv{mv_count}"
         f"-src{src_count}-id{src_max_id}"
+        f"-shp{shape_count}"
         f"-{cols_tag}"
     )
 

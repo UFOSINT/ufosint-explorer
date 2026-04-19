@@ -208,3 +208,37 @@ def test_points_bulk_etag_includes_source_database_fingerprint():
         "fingerprint needs COUNT + MAX(id) to catch adds and "
         "delete-then-insert replacements"
     )
+
+
+def test_points_bulk_etag_includes_shape_fingerprint():
+    """v0.14 regression test.
+
+    Same failure class as the source-list fingerprint (v0.13 /
+    r/UFOs incident) but for shapes. The bulk-build sorts
+    standardized_shape alphabetically and assigns a per-row
+    shape_idx byte. Adding canonical shapes shifts the ordering
+    for every shape alphabetically after the insertion point;
+    cached client buffers with old indices will mis-label rows
+    when filtered or colored by shape.
+
+    On 2026-04-19 the science team's v0.14 data-quality pass added
+    Crescent / Cloud / Dome — 25 → 28 shapes. That happened to bump
+    the etag anyway because geocoded count + mv_count also moved,
+    but a future shapes-only update could silently break caches.
+    Including shape_count in the etag closes that gap.
+    """
+    src = _read(APP_PY)
+    start = src.find("def _points_bulk_etag(")
+    assert start != -1
+    end = src.find("\ndef ", start + 1)
+    body = src[start:end] if end != -1 else src[start:start + 6000]
+
+    assert "COUNT(DISTINCT standardized_shape)" in body, (
+        "_points_bulk_etag must include a COUNT(DISTINCT "
+        "standardized_shape) fingerprint so adding new canonical "
+        "shapes (Crescent/Cloud/Dome-style additions) invalidates "
+        "all cached buffers"
+    )
+    assert "shp" in body.replace("shape", "").replace("Shape", ""), (
+        "fingerprint must appear in the etag string with a `shp` tag"
+    )

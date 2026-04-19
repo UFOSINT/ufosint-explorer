@@ -136,7 +136,18 @@ class _FakeBulkCursor:
             # The endpoint probes which derived columns exist.
             self._current = [(c,) for c in self.present_columns]
         elif "from source_database" in s:
-            self._current = [(1, "MUFON"), (2, "NUFORC"), (3, "UFOCAT")]
+            # v0.13 — etag also probes source_database count + max(id).
+            # When called via COUNT(*)::int, COALESCE(MAX(id), 0)::int
+            # the tuple shape is a single int-pair row. When called
+            # via plain SELECT id, name, the shape is multi-row.
+            if "count(*)" in s or "coalesce(max" in s:
+                self._current = [(3, 3)]
+            else:
+                self._current = [(1, "MUFON"), (2, "NUFORC"), (3, "UFOCAT")]
+        elif "count(distinct standardized_shape)" in s:
+            # v0.14 — etag probes distinct shape count as a list
+            # fingerprint. Returns an int, not a tuple of names.
+            self._current = [(2,)]  # matches the fake's 2 shapes
         elif "distinct standardized_shape" in s:
             self._current = [("circle", "circle"), ("triangle", "triangle")]
         elif "distinct shape" in s and "standardized" not in s:
