@@ -883,28 +883,54 @@ DATABASE_URL="postgresql://..." python mcp_server.py</code></pre>
             <div class="methodology">
 
                 <h2>Unified UFO Sightings Database &mdash; Methodology</h2>
-                <p class="meth-intro"><strong>This is not raw data.</strong> UFOSINT Explorer presents a <strong>processed scientific analysis</strong> of five major UFO/UAP databases &mdash; 614,505 sighting records deduplicated, cross-referenced, quality-scored, movement-classified, and emotion-analyzed using four transformer models. Every step of the pipeline is documented below and can be independently replicated from the source data using the open-source <a href="https://github.com/UFOSINT/ufo-dedup" target="_blank" rel="noopener">ufo-dedup</a> pipeline. The web application source code is at <a href="https://github.com/UFOSINT/ufosint-explorer" target="_blank" rel="noopener">ufosint-explorer</a>.</p>
+                <p class="meth-intro"><strong>This is not raw data.</strong> UFOSINT Explorer presents a <strong>processed scientific analysis</strong> of six major UFO/UAP databases &mdash; 618,316 sighting records deduplicated, cross-referenced, geocode-verified, quality-scored, LLM-enriched, movement-classified, and emotion-analyzed using four transformer models. Every step of the pipeline is documented below and can be independently replicated from the source data using the open-source <a href="https://github.com/UFOSINT/ufo-dedup" target="_blank" rel="noopener">ufo-dedup</a> pipeline. The web application source code is at <a href="https://github.com/UFOSINT/ufosint-explorer" target="_blank" rel="noopener">ufosint-explorer</a>.</p>
 
-<div class="meth-download-banner">
-    <strong>Download the full database</strong>
-    The 508&nbsp;MB SQLite snapshot (<code>ufo_public.db</code>) is attached to every tagged release.
-    <a href="https://github.com/UFOSINT/ufosint-explorer/releases/latest/download/ufo_public.db" class="meth-download-link">Download latest</a>
-    &middot;
-    <a href="https://github.com/UFOSINT/ufosint-explorer/releases" target="_blank" rel="noopener">Browse releases</a>
-</div>
+                <div class="meth-download-banner">
+                    <strong>Download the full database</strong>
+                    The 628&nbsp;MB SQLite snapshot (<code>ufo_public.db</code>) is attached to every tagged release.
+                    <a href="https://github.com/UFOSINT/ufosint-explorer/releases/latest/download/ufo_public.db" class="meth-download-link">Download latest</a>
+                    &middot;
+                    <a href="https://github.com/UFOSINT/ufosint-explorer/releases" target="_blank" rel="noopener">Browse releases</a>
+                </div>
 
                 <div class="meth-banner meth-banner-note">
                     <strong>Reproducibility statement.</strong>
                     The entire database can be rebuilt from source files
                     with a single command (<code>python rebuild_db.py</code>).
                     All data quality fixes are idempotent and preserve
-                    original values. Derived columns (quality scores,
+                    original values. LLM-derived enrichments are cached to CSV files
+                    and replayed deterministically on rebuilds &mdash; no API key
+                    is needed for reproduction. Derived columns (quality scores,
                     movement categories, emotion classifications) are
                     computed deterministically from the raw narratives.
                     No records are deleted &mdash; duplicates are flagged,
-                    not merged. The deduplication pipeline described below
-                    documents the <em>historical</em> methodology; the
-                    current build applies deduplication at ingest time.
+                    not merged.
+                </div>
+
+                <!-- ============ Pipeline Overview ============ -->
+                <h3>Pipeline Architecture</h3>
+                <p>The 17-step pipeline transforms ~2.56 million raw records from 6 sources into a unified, analysis-ready database:</p>
+
+                <div class="meth-pipeline-diagram">
+                    <pre style="font-family: monospace; font-size: 0.85em; line-height: 1.4; background: var(--bg-card, #1a1a2e); padding: 1.2em; border-radius: 8px; overflow-x: auto;">
+            Raw Data (5 CSVs + 1 JSON + Reddit CSV)
+                |
+                v
+            rebuild_db.py  (17 steps, ~30 min)
+                |
+                +-- Steps 1-7:    Import 6 sources (618,316 sightings)
+                +-- Step 8:       SQL data quality fixes (~30 corrections)
+                +-- Step 9:       Geocode pass 1 (GeoNames offline gazetteer)
+                +-- Step 10:      Audit: fix bad geocodes + replay LLM location fixes
+                +-- Step 11:      Geocode pass 2 (picks up audit-improved locations)
+                +-- Steps 12-14:  Enrich, dedup, sentiment analysis
+                +-- Step 15:      Derived analysis (shapes, quality, duration, hoax)
+                +-- Step 16:      Replay cached enrichments (emotions, LLM extractions)
+                +-- Step 17:      Export
+                |
+                v
+            ufo_public.db  (618,316 sightings, 100 columns, 628 MB)
+                    </pre>
                 </div>
 
                 <!-- ============ Source Databases ============ -->
@@ -939,550 +965,179 @@ DATABASE_URL="postgresql://..." python mcp_server.py</code></pre>
                             <td>54,751</td><td>54,751</td><td>0</td>
                             <td>Majestic Timeline compilation from ufo-search.com. Historical records from 19 source compilations (Hatch, Eberhart, NICAP, Vallee, etc.).</td>
                         </tr>
+                        <tr>
+                            <td><span class="source-badge" style="background:#9c755f">r/UFOs</span></td>
+                            <td>3,811</td><td>3,811</td><td>0</td>
+                            <td>Reddit r/UFOs community sighting reports. Three-pass pipeline: API scraping, LLM-structured extraction (Gemini Flash), database import. Includes anomaly assessments and strangeness ratings.</td>
+                        </tr>
                     </tbody>
                 </table>
-                <p><strong>Total raw records across all sources: ~2.56 million.</strong> After removing known overlaps at import time: <strong>614,505</strong>.</p>
+                <p><strong>Total raw records across all sources: ~2.56 million.</strong> After removing known overlaps at import time: <strong>618,316</strong>.</p>
 
-                <!-- ============ UFOCAT Sub-Sources ============ -->
-                <h3>UFOCAT Sub-Source Landscape</h3>
-                <p>UFOCAT is itself an aggregator. Its <code>SOURCE</code> column identifies where each record originated:</p>
+                <!-- ============ LLM Data Quality ============ -->
+                <h3>LLM-Powered Data Quality Pipeline</h3>
+                <p>After initial import and geocoding, the pipeline runs an AI-powered data quality audit using Google Gemini Flash. Results are cached for deterministic replay on future rebuilds.</p>
+
                 <table>
-                    <thead><tr><th>UFOCAT SOURCE</th><th>Records</th><th>Overlap With</th></tr></thead>
-                    <tbody>
-                        <tr><td><code>UFOReportCtr</code></td><td>123,304</td><td>NUFORC (skipped, enriched)</td></tr>
-                        <tr><td><code>U</code> (Hatch)</td><td>17,184</td><td>UFO-search Hatch (18K)</td></tr>
-                        <tr><td><code>BlueBook1</code></td><td>13,101</td><td>UPDB Blue Book (14K)</td></tr>
-                        <tr><td><code>GEberhart1</code></td><td>11,643</td><td>UFO-search Eberhart (7.9K)</td></tr>
-                        <tr><td><code>CanadUFOSurv</code></td><td>10,785</td><td>&mdash;</td></tr>
-                        <tr><td><code>NICAP</code></td><td>2,315</td><td>UPDB NICAP (5.8K), UFO-search NICAP (5.5K)</td></tr>
-                        <tr><td><code>MUFONJournal</code> + MUFON*</td><td>2,861</td><td>MUFON</td></tr>
-                    </tbody>
-                </table>
-                <p>Only <code>UFOReportCtr</code> is skipped at import time. Other overlaps are handled by the deduplication engine.</p>
-
-                <!-- ============ Import Methodology ============ -->
-                <h3>Import Methodology</h3>
-                <p>Each source has a custom import script. Two aggregator sources skip known-duplicate sub-sources at import time:</p>
-                <ul>
-                    <li><strong>UFOCAT</strong> skips <code>SOURCE=UFOReportCtr</code> (123K NUFORC-origin records)</li>
-                    <li><strong>UPDB</strong> skips <code>name=MUFON</code> and <code>name=NUFORC</code> (1.82M records)</li>
-                </ul>
-
-                <h4>Source-Specific Handling</h4>
-                <ul>
-                    <li><strong>UFOCAT</strong> &mdash; 55-column CSV with split date fields (YEAR, MO, DAY, TIME). City stored in ALL CAPS in <code>raw_text</code>; copied to <code>city</code> post-import. Longitude negated for US/CA. <code>UFOReportCtr</code> records saved to enrichment sidecar.</li>
-                    <li><strong>NUFORC</strong> &mdash; Multi-line CSV with quoted descriptions. Dates: <code>1995-02-02 23:00 Local</code>. Locations: <code>City, ST, Country</code>.</li>
-                    <li><strong>MUFON</strong> &mdash; 7-column CSV with embedded <code>\n</code> in dates. Locations with escaped commas: <code>Newscandia\, MN\, US</code>.</li>
-                    <li><strong>UPDB</strong> &mdash; 1.9M rows; <code>name</code> column identifies sub-source. 1,820,741 MUFON/NUFORC rows skipped. Remaining 65,016 mapped to <code>source_origin</code> entries.</li>
-                    <li><strong>UFO-search</strong> &mdash; JSON array of 54,751 records from 19 historical compilations. Variable date formats ("Summer 1947", "4/34", "6/24/1947"). Regex-based date parser; free-text location parsing.</li>
-                </ul>
-
-                <h4>Data Quality Fixes</h4>
-                <p>Applied automatically by <code>rebuild_db.py</code> in the <code>apply_data_fixes()</code> pipeline. All fixes are idempotent and preserve original values in <code>date_event_raw</code> and <code>raw_json</code> columns.</p>
-
-                <h5>Location Fixes</h5>
-                <ul>
-                    <li><strong>UFOCAT longitude sign</strong> &mdash; 30,822 Western Hemisphere locations had positive longitude; negated for US/CA records</li>
-                    <li><strong>UFOCAT city field</strong> &mdash; 73,766 locations had city only in <code>raw_text</code>; copied to <code>city</code> column</li>
-                    <li><strong>Country code normalization</strong> &mdash; USA&rarr;US, United Kingdom&rarr;GB, Canada&rarr;CA, Australia&rarr;AU</li>
-                </ul>
-
-                <h5>Date Fixes</h5>
-                <ul>
-                    <li><strong>MUFON literal <code>\n</code> in dates</strong> &mdash; 136,654 MUFON records contained a literal backslash-n (0x5C6E) in <code>date_event</code> (e.g., <code>2020-01-15\n3:00PM</code>). Time portion extracted to <code>time_raw</code>, date truncated to ISO date</li>
-                    <li><strong>Year 0000</strong> &mdash; Records with year <code>0000</code> have <code>date_event</code> set to NULL</li>
-                    <li><strong>Negative years</strong> &mdash; Records with <code>date_event</code> starting with <code>-</code> (e.g., <code>-009-02-10</code>) have <code>date_event</code> set to NULL</li>
-                    <li><strong>Month 00</strong> &mdash; 551 records with <code>YYYY-00-DD</code> truncated to <code>YYYY</code></li>
-                    <li><strong>Day 00</strong> &mdash; 3,391 records with <code>YYYY-MM-00</code> truncated to <code>YYYY-MM</code></li>
-                    <li><strong>Impossible calendar dates</strong> &mdash; 14 records with Feb 30+, Apr/Jun/Sep/Nov 31 truncated to <code>YYYY-MM</code></li>
-                    <li><strong>UFOCAT century-only <code>19//</code></strong> &mdash; 692 records with 2-digit raw year <code>19</code> (meaning &ldquo;19xx, year unknown&rdquo;) had <code>date_event</code> set to NULL. Audit logged in <code>date_correction</code> table</li>
-                    <li><strong>UFOCAT H-BOMB TEST <code>195//</code></strong> &mdash; 1 record with 3-digit year 195 and city &ldquo;H-BOMB TEST&rdquo; (clearly 1950s) set to NULL</li>
-                    <li><strong>NUFORC data entry errors</strong> &mdash; 2 records with wrong century corrected: <code>0205</code>&rarr;<code>2005</code> (Falmouth), <code>1721</code>&rarr;<code>2021</code> (Crescent City, Starlink-era sighting)</li>
-                    <li><strong>UPDB mangled years</strong> &mdash; 19 records with broken years from upstream UPDB export: 1 corrected (<code>0196</code>&rarr;<code>1962</code>, confirmed by description), 18 set to NULL (century-round years <code>0200</code>&ndash;<code>0900</code> and unconfirmed modern dates)</li>
-                </ul>
-
-                <h5>Shape / Classification Normalization</h5>
-                <ul>
-                    <li><strong>Shape case normalization</strong> &mdash; 24 case-duplicate groups collapsed via title-case (e.g., <code>circle</code>&rarr;<code>Circle</code>), including hyphenated shapes (e.g., <code>cigar-shaped</code>&rarr;<code>Cigar-Shaped</code>). 352&rarr;317 distinct values</li>
-                    <li><strong>Shape typo correction</strong> &mdash; 9 misspellings corrected (e.g., <code>Triangel</code>&rarr;<code>Triangle</code>, <code>Rectagle</code>&rarr;<code>Rectangle</code>)</li>
-                    <li><strong>Junk shapes removed</strong> &mdash; 3 non-shape values set to NULL (<code>WITNESS</code>, <code>0</code>, <code>12:45</code>)</li>
-                    <li><strong>Hynek uppercase</strong> &mdash; 3 case-duplicate Hynek codes normalized (e.g., <code>nl</code>&rarr;<code>NL</code>). 43&rarr;40 distinct values</li>
-                    <li><strong>Vallee uppercase</strong> &mdash; 2 case-duplicate Vallee codes normalized (e.g., <code>fb1</code>&rarr;<code>FB1</code>). 43&rarr;41 distinct values</li>
-                </ul>
-
-                <h5>Description Cleanup</h5>
-                <ul>
-                    <li><strong><code>[MISSING DATA]</code> removal</strong> &mdash; Records with description consisting solely of <code>[MISSING DATA]</code> or <code>[missing data]</code> set to NULL</li>
-                    <li><strong>MUFON boilerplate</strong> &mdash; <code>Submitted by razor via e-mail</code> and <code>Investigator Notes:</code> boilerplate stripped from descriptions</li>
-                </ul>
-
-                <!-- ============ Historic Date Analysis ============ -->
-                <h3>Historic Date Analysis</h3>
-                <p>The database contains <strong>8,046 sighting records with dates before 1901</strong>, spanning from 34 AD (a white round object over China) to 1900. Most are legitimate historical sightings from academic catalogs, but several categories of date errors were identified through systematic analysis.</p>
-
-                <h4>Extraction &amp; Analysis Method</h4>
-                <p>All pre-1901 records were extracted into a standalone analysis database (<code>temp/historic_pre1901.db</code>) using <code>extract_historic.py</code>. Each record was auto-classified based on its source, raw date format, and year digit count, then flagged for manual review where ambiguous.</p>
-
-                <h4>Categories Identified</h4>
-                <table>
-                    <thead><tr><th>Category</th><th>Source</th><th>Records</th><th>Status</th><th>Description</th></tr></thead>
+                    <thead>
+                        <tr><th>Audit Tier</th><th>What It Does</th><th>Records</th><th>Method</th></tr>
+                    </thead>
                     <tbody>
                         <tr>
-                            <td><code>ufocat_ancient</code></td><td>UFOCAT</td><td>4,436</td>
-                            <td><span style="color:var(--green)">OK</span></td>
-                            <td>4-digit raw years (1001&ndash;1900). Legitimately pre-modern sightings. No action needed.</td>
+                            <td><strong>Tier A: Geocode Verification</strong></td>
+                            <td>Detects map pins in the wrong country/hemisphere (e.g., "Nelson, Nebraska" geocoded to New Zealand)</td>
+                            <td>29,029 fixed</td>
+                            <td>Code: US/CA state bounding-box validation</td>
                         </tr>
                         <tr>
-                            <td><code>ufocat_century_only</code></td><td>UFOCAT</td><td>692</td>
-                            <td><span style="color:var(--green)">Fixed</span></td>
-                            <td>2-digit raw year <code>19//</code> = &ldquo;sometime in the 1900s, year unknown.&rdquo; ETL zero-padded to <code>0019</code>. Descriptions confirm modern events (abductions, radar, motion pictures). <strong>Resolution:</strong> <code>date_event</code> set to NULL (year genuinely unknown).</td>
+                            <td><strong>Tier B: Location Normalization</strong></td>
+                            <td>Cleans 120K messy location strings for re-geocoding (e.g., "Toronto (Canada)" &rarr; city=Toronto, state=ON, country=CA)</td>
+                            <td>49,190 improved</td>
+                            <td>LLM: Gemini Flash, cached to CSV</td>
                         </tr>
                         <tr>
-                            <td><code>ufocat_3digit_review</code></td><td>UFOCAT</td><td>88</td>
-                            <td><span style="color:var(--green)">Fixed</span></td>
-                            <td>3-digit raw years (034&ndash;999). Mostly legitimate ancient dates. 1 confirmed modern mislabel corrected: <code>195//</code> &ldquo;H-BOMB TEST&rdquo; (1950s) &rarr; NULL. 4 ambiguous <code>188//</code> records left as-is (no descriptions to disambiguate). Remaining 83 are legitimate ancient sightings.</td>
-                        </tr>
-                        <tr>
-                            <td><code>other_source_review</code></td><td>UFO-search</td><td>1,984</td>
-                            <td><span style="color:var(--green)">OK</span></td>
-                            <td>Geldreich Majestic Timeline. Historical records from 61 AD to 1900. All appear legitimate.</td>
-                        </tr>
-                        <tr>
-                            <td><code>other_source_review</code></td><td>UPDB</td><td>780</td>
-                            <td><span style="color:var(--green)">Fixed</span></td>
-                            <td>~760 legitimate (1000&ndash;1900). 19 records had mangled modern years from upstream data errors. <strong>Resolution:</strong> 1 corrected (<code>0196</code>&rarr;1962, confirmed by description), 18 set to NULL (century-round years <code>0200</code>&ndash;<code>0900</code> and unconfirmed modern dates).</td>
-                        </tr>
-                        <tr>
-                            <td><code>other_source_review</code></td><td>MUFON</td><td>40</td>
-                            <td><span style="color:var(--green)">OK</span></td>
-                            <td>All 1890&ndash;1900. Appear legitimate.</td>
-                        </tr>
-                        <tr>
-                            <td><code>other_source_review</code></td><td>NUFORC</td><td>26</td>
-                            <td><span style="color:var(--green)">Fixed</span></td>
-                            <td>~23 legitimate historic reports. 2 data entry errors corrected: <code>0205</code>&rarr;2005 (Falmouth), <code>1721</code>&rarr;2021 (Crescent City). 1 ambiguous record (<code>1071</code>) left as-is (could be 1971 or 2007).</td>
+                            <td><strong>Field Extraction</strong></td>
+                            <td>Extracts shape, color, duration, witnesses, sound, and direction from narrative descriptions that had missing structured fields</td>
+                            <td>297,446 enriched</td>
+                            <td>LLM: Gemini Flash, cached to CSV</td>
                         </tr>
                     </tbody>
                 </table>
 
-                <h4>Root Cause: UFOCAT Variable-Length Year Field</h4>
-                <p>UFOCAT stores dates in separate YEAR, MO, DAY columns. The YEAR field uses <strong>variable-length encoding</strong>:</p>
-                <ul>
-                    <li><strong>4 digits</strong> (196,295 records): Standard years like <code>1966</code>, <code>2001</code></li>
-                    <li><strong>3 digits</strong> (90 records): Ancient years like <code>034</code> (34 AD), <code>776</code>, <code>919</code></li>
-                    <li><strong>2 digits</strong> (715 records): Century-only indicator <code>19</code> = &ldquo;19xx&rdquo; (20th century, unknown year)</li>
-                </ul>
-                <p>The ETL&rsquo;s <code>parse_ufocat_date()</code> zero-pads all years to 4 digits (<code>f&quot;{y:04d}&quot;</code>), which correctly handles 3-digit ancient years but misinterprets 2-digit <code>19</code> as year 19 AD instead of &ldquo;19xx.&rdquo;</p>
-
-                <h4>Applied Resolution</h4>
-                <p>After manual review of the annotated analysis dataset, <strong>714 records</strong> were corrected or nulled via Fixes 15&ndash;18 in <code>rebuild_db.py</code>. Every correction is logged in the <code>date_correction</code> audit table with the original date, corrected date, correction type, and reason. See <a href="https://github.com/UFOSINT/ufo-dedup/issues/1">GitHub issue #1</a>.</p>
-                <table>
-                    <thead><tr><th>Fix</th><th>Source</th><th>Action</th><th>Count</th></tr></thead>
-                    <tbody>
-                        <tr><td>Fix 15</td><td>UFOCAT</td><td>Century-only <code>19//</code> &rarr; NULL (year unknown)</td><td>692</td></tr>
-                        <tr><td>Fix 16</td><td>UFOCAT</td><td>H-BOMB TEST <code>195//</code> &rarr; NULL (1950s, not 195 AD)</td><td>1</td></tr>
-                        <tr><td>Fix 17</td><td>NUFORC</td><td>Data entry errors corrected (<code>0205</code>&rarr;2005, <code>1721</code>&rarr;2021)</td><td>2</td></tr>
-                        <tr><td>Fix 18</td><td>UPDB</td><td>Mangled years corrected/nulled (<code>0196</code>&rarr;1962, rest &rarr; NULL)</td><td>19</td></tr>
-                    </tbody>
-                </table>
-                <p>Conservative approach: only records with clear evidence were corrected. Ambiguous records (<code>188//</code> in UFOCAT, <code>1071</code> in NUFORC) were left unchanged. All fixes are idempotent and re-applied on each database rebuild.</p>
-
-                <!-- ============ Deduplication ============ -->
-                <h2>Deduplication Methodology</h2>
-                <p>Deduplication uses a <strong>two-phase strategy</strong>: known overlaps are eliminated at import time, then a three-tier matching engine flags remaining cross-source duplicates for review. <strong>No records are deleted</strong> &mdash; all 614,505 sightings remain, with 126,730 candidate pairs stored in the <code>duplicate_candidate</code> table.</p>
-
-                <h3>Phase 1: Import-Time Filtering</h3>
-                <p>Before deduplication runs, two aggregator sources skip sub-sources that would create known duplicates with higher-quality originals already imported:</p>
-                <table>
-                    <thead><tr><th>Source</th><th>Sub-Source Skipped</th><th>Records Skipped</th><th>Reason</th></tr></thead>
-                    <tbody>
-                        <tr><td><strong>UFOCAT</strong></td><td><code>SOURCE=UFOReportCtr</code></td><td>123,304</td><td>Copies of NUFORC sightings</td></tr>
-                        <tr><td><strong>UPDB</strong></td><td><code>name=MUFON</code></td><td>131,506</td><td>MUFON imported directly with richer descriptions</td></tr>
-                        <tr><td><strong>UPDB</strong></td><td><code>name=NUFORC</code></td><td>1,689,235</td><td>NUFORC imported directly with richer descriptions</td></tr>
-                    </tbody>
-                </table>
-                <p>This eliminates <strong>1,944,045 known duplicates</strong> before dedup begins, reducing the working set from ~2.56M to 614,505. The UFOCAT skip triggers enrichment to preserve valuable Hynek/Vallee metadata.</p>
-                <p>Other overlapping sub-sources (e.g. UFOCAT's Hatch records vs UFO-search's Hatch records) are kept and handled by the dedup engine, since both copies may carry unique metadata.</p>
-
-                <h3>Phase 1.5: Metadata Enrichment</h3>
-                <p>UFOCAT's 123K skipped UFOReportCtr records carry Hynek and Vallee classifications that NUFORC natively lacks. Rather than lose this data, <code>import_ufocat.py</code> writes skipped records to a sidecar file (<code>ufocat_enrichment.jsonl</code>), and <code>enrich.py</code> transfers the metadata to matching NUFORC sightings post-import.</p>
-                <p><strong>Matching:</strong> Date (YYYY-MM-DD) + normalized UPPER(city) + UPPER(state). City normalization strips parenthetical qualifiers, trailing punctuation, and collapses whitespace.</p>
-                <p><strong>Transfer rules:</strong> Only fills NULL fields &mdash; never overwrites existing NUFORC values.</p>
-                <table>
-                    <thead><tr><th>Field</th><th>NUFORC Records Enriched</th></tr></thead>
-                    <tbody>
-                        <tr><td>Hynek classification</td><td>102,554</td></tr>
-                        <tr><td>Vallee classification</td><td>83,710</td></tr>
-                        <tr><td>Shape</td><td>1,697</td></tr>
-                        <tr><td>Unmatched (no NUFORC hit)</td><td>19,637</td></tr>
-                    </tbody>
-                </table>
-
-                <h3>Phase 2: Three-Tier Cross-Source Matching</h3>
-                <p>After all imports and enrichment, the dedup engine (<code>dedup.py</code>) compares records across different sources using progressively broader matching strategies. Each tier builds on the previous, skipping pairs already flagged.</p>
-
-                <h4>Tier 1: MUFON &harr; NUFORC (7,694 pairs)</h4>
-                <p>The highest-overlap pair. Both sources cover modern US sightings with reliable date/location data.</p>
-                <ul>
-                    <li><strong>Match key:</strong> Exact date (YYYY-MM-DD) + UPPER(city) + UPPER(state)</li>
-                    <li><strong>Scoring:</strong> Full description similarity with source-specific preprocessing</li>
-                    <li><strong>Result:</strong> 7,694 candidate pairs</li>
-                </ul>
-
-                <h4>Tier 2: All Remaining Cross-Source Pairs (101,879 pairs)</h4>
-                <p>Four sub-tiers cover every remaining source combination, using the match key best suited to each source's location data quality:</p>
-                <table>
-                    <thead><tr><th>Sub-tier</th><th>Sources</th><th>Match Key</th><th>Why This Key</th><th>Pairs</th></tr></thead>
-                    <tbody>
-                        <tr><td><strong>2a</strong></td><td>MUFON &harr; UFOCAT</td><td>date + city + state</td><td>Both have structured state fields</td><td>2,295</td></tr>
-                        <tr><td><strong>2b</strong></td><td>NUFORC &harr; UFOCAT</td><td>date + city + state</td><td>Both have structured state fields</td><td>4,148</td></tr>
-                        <tr><td><strong>2c</strong></td><td>UPDB &harr; MUFON/NUFORC/UFOCAT</td><td>date + city <em>(no state)</em></td><td>UPDB has inconsistent state data</td><td>63,459</td></tr>
-                        <tr><td><strong>2d</strong></td><td>UFO-search &harr; MUFON/NUFORC/UFOCAT</td><td>date + city + state</td><td>UFO-search locations parsed via regex</td><td>31,977</td></tr>
-                    </tbody>
-                </table>
-                <p><strong>Source-specific notes:</strong></p>
-                <ul>
-                    <li>UFOCAT cities are stored in <code>raw_text</code> (ALL CAPS), not <code>city</code> &mdash; the loader reads <code>raw_text</code> instead</li>
-                    <li>UFO-search locations are free-text strings parsed by regex to extract <code>(city, state)</code> pairs; only locations matching the <code>City, ST</code> pattern with a valid US/Canadian state code are matchable</li>
-                    <li>UPDB sub-tier (2c) filters to US records only (<code>country='US'</code>) to reduce false positives from city-only matching</li>
-                    <li>All candidate pairs are normalized so <code>sighting_id_a &lt; sighting_id_b</code> to enforce the UNIQUE constraint</li>
-                </ul>
-
-                <h4>Tier 3: Description Fuzzy Matching (17,157 pairs)</h4>
-                <p>Catches duplicates that Tiers 1&ndash;2 miss due to location data differences (misspellings, missing state, different geocoding).</p>
-                <ul>
-                    <li><strong>Match key:</strong> Date only (no location requirement)</li>
-                    <li><strong>Scope:</strong> Only dates with records from 2+ sources AND &le;20 total records on that date</li>
-                    <li><strong>Skip:</strong> Pairs already found in Tiers 1&ndash;2 are excluded</li>
-                    <li><strong>Two-stage filtering:</strong>
-                        <ol>
-                            <li><strong>Token Jaccard &gt; 0.25</strong> &mdash; Fast set-intersection filter on lowercased word tokens</li>
-                            <li><strong>SequenceMatcher &ge; 0.5</strong> &mdash; Python's <code>difflib.SequenceMatcher</code> on the first 1,000 characters</li>
-                        </ol>
-                    </li>
-                    <li><strong>Result:</strong> 17,157 candidates from cross-source pairs sharing a date but not caught by location matching</li>
-                </ul>
-
-                <!-- ============ Similarity Scoring ============ -->
-                <h3>Similarity Scoring</h3>
-                <p>Every candidate pair receives a similarity score (0.0&ndash;1.0) computed by <code>compute_similarity()</code>:</p>
-                <ol>
-                    <li><strong>Source-specific preprocessing:</strong>
-                        <ul>
-                            <li>NUFORC: Strips <code>NUFORC UFO Sighting NNNNN</code> prefix</li>
-                            <li>MUFON: Strips <code>Submitted by razor via e-mail</code> boilerplate, extracts investigator notes</li>
-                        </ul>
-                    </li>
-                    <li><strong>"Starts with" shortcut:</strong> If both descriptions share the same first N characters (N &ge; 20), score = 0.95</li>
-                    <li><strong>Token Jaccard pre-filter:</strong> If token Jaccard &lt; 0.03, return that score immediately</li>
-                    <li><strong>Full alignment:</strong> <code>difflib.SequenceMatcher</code> on first 1,000 characters of each description</li>
-                </ol>
-                <p>Pairs with no description on either side receive score = 0.0 (still flagged as candidates based on location matching).</p>
-
-                <!-- ============ Results ============ -->
-                <h3>Results</h3>
-                <p><strong>126,730 duplicate candidate pairs</strong> across 127,440 unique sightings (20.7% of all records).</p>
-                <table>
-                    <thead><tr><th>Confidence</th><th>Score Range</th><th>Pairs</th><th>Interpretation</th></tr></thead>
-                    <tbody>
-                        <tr><td><span style="color:var(--green);font-weight:600">Certain</span></td><td>0.9 &ndash; 1.0</td><td>14,260</td><td>Near-identical descriptions; safe to auto-merge</td></tr>
-                        <tr><td><span style="color:var(--accent);font-weight:600">Likely</span></td><td>0.7 &ndash; 0.9</td><td>9,567</td><td>Strong match; minor wording differences</td></tr>
-                        <tr><td><span style="color:var(--orange);font-weight:600">Possible</span></td><td>0.5 &ndash; 0.7</td><td>13,303</td><td>Same event reported differently across sources</td></tr>
-                        <tr><td><span style="color:#b07d10;font-weight:600">Weak</span></td><td>0.3 &ndash; 0.5</td><td>11,144</td><td>Same date+location, descriptions partially overlap; needs review</td></tr>
-                        <tr><td><span style="color:var(--text-muted);font-weight:600">Unlikely</span></td><td>0.0 &ndash; 0.3</td><td>78,456</td><td>Same date+location but likely different events</td></tr>
-                    </tbody>
-                </table>
-
-                <h4>By Match Method</h4>
-                <table>
-                    <thead><tr><th>Method</th><th>Pairs</th><th>Avg Score</th></tr></thead>
-                    <tbody>
-                        <tr><td><code>tier2c_updb_ufocat</code></td><td>59,620</td><td>0.225</td></tr>
-                        <tr><td><code>tier2d_ufosearch_ufocat</code></td><td>31,439</td><td>0.240</td></tr>
-                        <tr><td><code>tier3_desc_fuzzy</code></td><td>17,157</td><td>0.768</td></tr>
-                        <tr><td><code>tier1a_mufon_nuforc</code></td><td>7,694</td><td>0.226</td></tr>
-                        <tr><td><code>tier2b_nuforc_ufocat</code></td><td>4,148</td><td>0.129</td></tr>
-                        <tr><td><code>tier2c_updb_nuforc</code></td><td>3,519</td><td>0.234</td></tr>
-                        <tr><td><code>tier2a_mufon_ufocat</code></td><td>2,295</td><td>0.072</td></tr>
-                        <tr><td><code>tier2d_ufosearch_nuforc</code></td><td>397</td><td>0.044</td></tr>
-                        <tr><td><code>tier2c_updb_mufon</code></td><td>320</td><td>0.012</td></tr>
-                        <tr><td><code>tier2d_ufosearch_mufon</code></td><td>141</td><td>0.009</td></tr>
-                    </tbody>
-                </table>
-                <p><em>Note: The previous build flagged 242K candidates. The current build flags only 126K because the 123K UFOCAT-NUFORC duplicates (UFOReportCtr) are now prevented at import time rather than flagged after the fact.</em></p>
-
-                <!-- ============ Limitations ============ -->
-                <h3>What Dedup Does NOT Do</h3>
-                <ul>
-                    <li><strong>No records are deleted or merged.</strong> The <code>duplicate_candidate</code> table is advisory. All 614,505 sightings remain queryable.</li>
-                    <li><strong>No within-source dedup.</strong> The engine only flags cross-source pairs (different <code>source_db_id</code>). Duplicates within a single source are not flagged.</li>
-                    <li><strong>No transitive closure.</strong> If A&harr;B and B&harr;C are both flagged, A&harr;C is NOT automatically inferred. Each pair is independent.</li>
-                    <li><strong>Multiple witnesses are preserved.</strong> If the same event has genuinely separate witness reports in different sources, both records remain. The similarity score distinguishes true duplicates (high score) from independent reports of the same event (low score).</li>
-                </ul>
-
-                <!-- ============ Schema ============ -->
-                <h3>Database Schema</h3>
-                <h4><code>sighting</code> (614,505 rows, 42 columns)</h4>
-                <p>The main table. Each row is one reported sighting event.</p>
-                <table>
-                    <thead><tr><th>Category</th><th>Fields</th></tr></thead>
-                    <tbody>
-                        <tr><td>Provenance</td><td><code>source_db_id</code>, <code>source_record_id</code>, <code>origin_id</code>, <code>origin_record_id</code></td></tr>
-                        <tr><td>Dates</td><td><code>date_event</code> (ISO 8601), <code>date_event_raw</code>, <code>date_end</code>, <code>time_raw</code>, <code>timezone</code>, <code>date_reported</code>, <code>date_posted</code></td></tr>
-                        <tr><td>Location</td><td><code>location_id</code> (FK to <code>location</code> table)</td></tr>
-                        <tr><td>Description</td><td><code>summary</code>, <code>description</code></td></tr>
-                        <tr><td>Observation</td><td><code>shape</code>, <code>color</code>, <code>size_estimated</code>, <code>angular_size</code>, <code>distance</code>, <code>duration</code>, <code>duration_seconds</code>, <code>num_objects</code>, <code>num_witnesses</code>, <code>sound</code>, <code>direction</code>, <code>elevation_angle</code>, <code>viewed_from</code></td></tr>
-                        <tr><td>Witness</td><td><code>witness_age</code>, <code>witness_sex</code>, <code>witness_names</code></td></tr>
-                        <tr><td>Classification</td><td><code>hynek</code>, <code>vallee</code>, <code>event_type</code>, <code>svp_rating</code></td></tr>
-                        <tr><td>Resolution</td><td><code>explanation</code>, <code>characteristics</code></td></tr>
-                        <tr><td>Context</td><td><code>weather</code>, <code>terrain</code>, <code>source_ref</code>, <code>page_volume</code>, <code>notes</code></td></tr>
-                        <tr><td>Preservation</td><td><code>raw_json</code> &mdash; complete original record as JSON</td></tr>
-                    </tbody>
-                </table>
-
-                <h4>Supporting Tables</h4>
-                <ul>
-                    <li><strong><code>location</code></strong> &mdash; Deduplicated locations with <code>raw_text</code>, <code>city</code>, <code>county</code>, <code>state</code>, <code>country</code>, <code>region</code>, <code>latitude</code>, <code>longitude</code></li>
-                    <li><strong><code>source_collection</code></strong> (3 rows) &mdash; Top-level provenance grouping:
-                        <ul>
-                            <li><strong>PUBLIUS</strong> &mdash; Compiled by Publius from original reporting sites and PhenomAInon downloads (MUFON, NUFORC, UPDB)</li>
-                            <li><strong>GELDREICH</strong> &mdash; Rich Geldreich's Majestic Timeline compilation from 19+ historical sources (UFO-search)</li>
-                            <li><strong>UFOCAT</strong> &mdash; CUFOS UFOCAT catalog, independent academic dataset</li>
-                        </ul>
-                    </li>
-                    <li><strong><code>source_database</code></strong> (5 rows) &mdash; UFOCAT, NUFORC, MUFON, UPDB, UFO-search. Each linked to a collection via <code>collection_id</code></li>
-                    <li><strong><code>source_origin</code></strong> (31 rows) &mdash; Upstream sources within aggregator databases (Blue Book, NICAP, Hatch, etc.)</li>
-                    <li><strong><code>duplicate_candidate</code></strong> (126,730 rows) &mdash; Flagged duplicate pairs with similarity scores</li>
-                </ul>
-
-                <!-- ============ Pipeline ============ -->
-                <h3>Reproducible Build Pipeline</h3>
-                <p>The entire database can be rebuilt from source files with a single command:</p>
-                <pre>python rebuild_db.py</pre>
-                <p>This runs the full pipeline in order:</p>
-                <ol>
-                    <li>Create schema (<code>create_schema.py</code>)</li>
-                    <li>Import all 5 sources (UFOCAT with enrichment sidecar, NUFORC, MUFON, UPDB, UFO-search)</li>
-                    <li>Apply data quality fixes &mdash; 14 fix categories covering dates, locations, shapes, classifications, and descriptions</li>
-                    <li>Geocode locations using GeoNames gazetteer (<code>geocode.py</code>)</li>
-                    <li>Run enrichment (<code>enrich.py</code>)</li>
-                    <li>Run three-tier deduplication (<code>dedup.py</code>)</li>
-                    <li>Copy database to explorer (<code>ufo-explorer/ufo_unified.db</code>)</li>
-                </ol>
-                <p>Total build time: ~2 minutes.</p>
-
-                <h4>Test Suite</h4>
-                <p>The pipeline is validated by <strong>364 automated tests</strong> (<code>pytest tests/</code>):</p>
-                <ul>
-                    <li><strong>115 dedup tests</strong> (<code>test_dedup.py</code>) &mdash; All dedup functions, tier logic, similarity scoring, and edge cases</li>
-                    <li><strong>114 ETL tests</strong> (<code>test_etl.py</code>) &mdash; Schema creation, all 5 importers, data fix pipeline</li>
-                    <li><strong>135 data quality tests</strong> (<code>test_data_quality.py</code>) &mdash; Shape normalization, date validation, classification cleanup, description fixes, historic date corrections, and audit trail</li>
-                </ul>
-                <p>All tests use an in-memory SQLite database with synthetic data &mdash; no production data required.</p>
+                <p><strong>Impact:</strong> +48,503 new correct map pins, +38,347 records above the quality threshold, 574,269 new structured field values extracted from text.</p>
 
                 <!-- ============ Geocoding ============ -->
                 <h3>Geocoding</h3>
-                <p>Only UFOCAT provides latitude/longitude coordinates natively. The other four sources have text-only locations (city, state, country). To enable map visualization for all sources, locations are geocoded using the <strong>GeoNames cities15000 gazetteer</strong> (33,000+ cities with population &gt; 15,000).</p>
-
-                <p><strong>Matching strategy</strong> (decreasing specificity):</p>
+                <p>Locations are geocoded offline using the <a href="https://www.geonames.org/" target="_blank" rel="noopener">GeoNames</a> gazetteer (cities with population &ge;15,000). Three matching strategies with decreasing specificity:</p>
                 <ol>
-                    <li><strong>Exact:</strong> UPPER(city) + state + country &rarr; highest confidence</li>
-                    <li><strong>City + country:</strong> No state available (e.g., UPDB) &rarr; picks largest matching city by population</li>
-                    <li><strong>City only:</strong> No country available (e.g., UFO-search raw text) &rarr; picks largest city globally</li>
-                    <li><strong>Raw text parsing:</strong> Regex extraction of city/state/country from free-text location strings</li>
+                    <li><strong>Exact:</strong> city + state + country &rarr; coordinates (highest confidence)</li>
+                    <li><strong>City + country:</strong> ignores state, picks largest city by population</li>
+                    <li><strong>City only:</strong> global lookup, <strong>prefers matches in the expected country</strong> when a US/CA state code is present (v0.14 fix &mdash; prevents wrong-continent matches)</li>
                 </ol>
+                <p><strong>Coverage:</strong> 418,077 of 618,316 sightings (67.6%) have map coordinates. Two geocoding passes run: before and after the LLM location audit.</p>
 
-                <p>The <code>geocode_src</code> column on the <code>location</code> table tracks provenance: <code>NULL</code> = coordinates from original source data, <code>geonames_exact</code> / <code>geonames_city_country</code> / <code>geonames_city_only</code> = geocoded via GeoNames.</p>
+                <!-- ============ Quality Score ============ -->
+                <h3>Quality Score (0&ndash;100)</h3>
+                <p>Every sighting receives a quality score based on the richness and completeness of its data. Higher scores indicate more detailed, verifiable reports.</p>
 
-                <!-- ============ Collections ============ -->
-                <h3>Source Collection Provenance</h3>
-                <p>Each source database belongs to a <strong>collection</strong> &mdash; a top-level grouping that identifies who aggregated or curated the data:</p>
                 <table>
-                    <thead><tr><th>Collection</th><th>Source(s)</th><th>Records</th><th>Description</th></tr></thead>
+                    <thead><tr><th>Feature</th><th>Points</th><th>Notes</th></tr></thead>
                     <tbody>
-                        <tr><td><span class="collection-tag">PUBLIUS</span></td><td>MUFON, NUFORC, UPDB</td><td>362,646</td><td>Compiled by Publius from original reporting sites (MUFON, NUFORC) and PhenomAInon downloads (UPDB sub-sources: UFODNA, Blue Book, NICAP, UKTNA, CANADAGOV, NIDS, BRAZILGOV, SKINWALKER, PILOTS, BAASS)</td></tr>
-                        <tr><td><span class="collection-tag">UFOCAT</span></td><td>UFOCAT</td><td>197,108</td><td>CUFOS academic catalog (2023 release)</td></tr>
-                        <tr><td><span class="collection-tag">GELDREICH</span></td><td>UFO-search</td><td>54,751</td><td>Rich Geldreich's Majestic Timeline from 19+ historical compilations</td></tr>
+                        <tr><td>Description length</td><td>0 / 5 / 15 / 25</td><td>None / &lt;50 / &lt;200 / 200+ characters</td></tr>
+                        <tr><td>Has media (photo/video)</td><td>+15</td><td></td></tr>
+                        <tr><td>Number of witnesses</td><td>0 / 5 / 10 / 15</td><td>0 / 1 / 2 / 3+</td></tr>
+                        <tr><td>Movement mentioned</td><td>+10 (+5 bonus)</td><td>+5 if 2+ movement categories detected</td></tr>
+                        <tr><td>9 structured fields</td><td>3 pts each (max 27)</td><td>time, shape, color, duration, sound, direction, elevation, Hynek, Vallee</td></tr>
+                        <tr><td>Coordinates present</td><td>+5</td><td></td></tr>
+                        <tr><td>Specificity bonus</td><td>+5</td><td>Time-of-day, compass direction, or altitude in description</td></tr>
+                        <tr><td>Unknown-date cap</td><td>min(score, 15)</td><td>Relaxed to 35 if 8+ features and has description</td></tr>
                     </tbody>
                 </table>
-                <p>Collections are filterable in the explorer UI. The three-layer provenance model (<code>source_collection</code> &rarr; <code>source_database</code> &rarr; <code>source_origin</code>) traces every record back to its ultimate origin.</p>
+                <p><strong>Distribution:</strong> 160,728 sightings (26%) score &ge;60. Average score: 42.3. The structured fields row is where LLM extraction has the biggest impact &mdash; each newly extracted field adds 3 points.</p>
 
-                <!-- ============ How Sightings Get Mapped (v0.8.7.2) ============ -->
-                <h2>How Sightings Get Mapped</h2>
-                <p>The Observatory map renders <strong>396,158 markers</strong> out of the <strong>614,505 total sightings</strong> &mdash; roughly <strong>64.5%</strong> of the database. The other ~218k sightings exist in the DB but have no coordinates, so they never reach the map.</p>
-
-                <h3>The sighting &harr; location split</h3>
-                <p>The <code>sighting</code> table and the <code>location</code> table are joined through a foreign key: <code>sighting.location_id &rarr; location.id</code>. Multiple sightings can share a single location row &mdash; for example, <em>Phoenix, AZ</em> is one row in <code>location</code>, but hundreds of Phoenix Lights sightings all point at it through their <code>location_id</code>. This is the key to understanding why two different numbers show up in the UI:</p>
-                <table>
-                    <thead><tr><th>Query</th><th>Count</th><th>Meaning</th></tr></thead>
-                    <tbody>
-                        <tr>
-                            <td><code>COUNT(*) FROM sighting</code></td>
-                            <td>614,505</td>
-                            <td>Total sightings in the database</td>
-                        </tr>
-                        <tr>
-                            <td><code>COUNT(*) FROM sighting s JOIN location l ON s.location_id = l.id WHERE l.latitude IS NOT NULL</code></td>
-                            <td><strong>396,158</strong></td>
-                            <td><strong>Sightings on the map</strong> &mdash; the "mapped" chip in the stats badge</td>
-                        </tr>
-                        <tr>
-                            <td><code>COUNT(*) FROM location WHERE latitude IS NOT NULL</code></td>
-                            <td>105,854</td>
-                            <td>Distinct geocoded places (one row per unique coordinate pair)</td>
-                        </tr>
-                    </tbody>
-                </table>
-                <p>The ratio <strong>396,158 / 105,854 &approx; 3.74 sightings per place</strong> reflects the long tail of major UFO hotspots: a few hundred cities accumulate dozens to hundreds of sightings each, while the bulk of the <code>location</code> table is rural or historical one-offs.</p>
-
-                <h3>Why ~35% of sightings have no coordinates</h3>
-                <p>The 218,347 unmapped sightings fall into four rough buckets:</p>
-                <ul>
-                    <li><strong>Pre-GPS historical records</strong> &mdash; UFOCAT and UFO-search contain thousands of entries dating back to antiquity. The original catalogs often record only a country or region ("Ohio, 1952"), which the ETL can't resolve to a single coordinate pair.</li>
-                    <li><strong>Free-text locations</strong> &mdash; "my backyard", "en route to LAX", "over the Bermuda Triangle", "somewhere in the Pacific". The geocoder skips these rather than risk a wrong coordinate.</li>
-                    <li><strong>Ambiguous city names</strong> &mdash; "Springfield" without a state qualifier hits dozens of candidates. The ETL prefers silence over a wrong guess.</li>
-                    <li><strong>Structurally missing data</strong> &mdash; some source records legitimately have no location field at all (the original witness report didn't include one).</li>
-                </ul>
-
-                <h3>Original coordinates vs GeoNames lookup</h3>
-                <p>The <code>location</code> table's <code>geocode_src</code> column distinguishes two provenance paths:</p>
-                <ul>
-                    <li><strong>Original coordinates</strong> (<code>geocode_src IS NULL</code>) &mdash; latitude/longitude came directly from the source catalog. UFOCAT ships these for most records; MUFON and NUFORC ship them when the witness submitted a specific address.</li>
-                    <li><strong>GeoNames lookup</strong> (<code>geocode_src = 'geonames_*'</code>) &mdash; the ETL resolved a city/state/country string against the open GeoNames gazetteer. Three granularity levels are tracked: <code>geonames_exact</code> (city + state + country matched), <code>geonames_city_country</code> (state-level ambiguity resolved by picking the largest city in the country), and <code>geonames_city_only</code> (no country at all; picks the globally largest city with that name).</li>
-                </ul>
-                <p>The Observatory map treats both sources identically &mdash; once a row has a valid <code>latitude</code>/<code>longitude</code>, it's a marker. The <code>geocoded_original</code> and <code>geocoded_geonames</code> counts in the stats popover let you see the split.</p>
-
-                <!-- ============ v0.8.3b classification pipeline ============ -->
-                <h2>Movement + Quality Classification</h2>
-                <p>v0.8.3b added a set of derived columns on the <code>sighting</code> table that enrich each record with structured analysis extracted from its narrative. These are the columns the Observatory rail filters (Data Quality) and the Timeline/Insights dashboards (Quality Score Distribution, Movement Taxonomy, etc.) read from.</p>
-
-                <h3>Movement categories (<code>movement_categories</code>, <code>has_movement_mentioned</code>)</h3>
-                <p>A narrative text classifier scans each description for references to <strong>10 movement categories</strong>. The classifier emits a JSON array of the categories it found, plus a boolean flag indicating any movement at all. <strong>249,217 sightings (40.5% of the database)</strong> carry at least one movement tag.</p>
-                <table>
-                    <thead><tr><th>Category</th><th>Sightings</th><th>Example narrative patterns</th></tr></thead>
-                    <tbody>
-                        <tr><td><code>vanished</code></td><td>102,178</td><td>"disappeared", "faded out", "winked out", "vanished into thin air"</td></tr>
-                        <tr><td><code>hovering</code></td><td>89,964</td><td>"stationary", "stayed in place for several minutes", "hovered silently"</td></tr>
-                        <tr><td><code>followed</code></td><td>51,499</td><td>"followed the car", "paced the aircraft", "tracked us for miles"</td></tr>
-                        <tr><td><code>descending</code></td><td>27,148</td><td>"came down", "dropped altitude", "descended toward the field"</td></tr>
-                        <tr><td><code>ascending</code></td><td>27,067</td><td>"rose straight up", "shot skyward", "climbed at an impossible rate"</td></tr>
-                        <tr><td><code>landed</code></td><td>26,592</td><td>"touched down", "on the ground", "set down in the clearing"</td></tr>
-                        <tr><td><code>accelerating</code></td><td>22,627</td><td>"suddenly sped up", "took off at incredible speed", "bolted"</td></tr>
-                        <tr><td><code>linear</code></td><td>21,106</td><td>"flew straight", "on a direct heading", "steady course"</td></tr>
-                        <tr><td><code>rotating</code></td><td>19,641</td><td>"spinning", "rotating counter-clockwise", "wobbling as it turned"</td></tr>
-                        <tr><td><code>erratic</code></td><td>8,877</td><td>"zig-zagging", "erratic motion", "changed direction abruptly"</td></tr>
-                    </tbody>
-                </table>
-                <p>Categories are <strong>not mutually exclusive</strong> &mdash; a single sighting can carry multiple tags (e.g. "hovered briefly, then accelerated away" gets both <code>hovering</code> and <code>accelerating</code>). The Observatory's Movement cluster uses OR semantics: a sighting matches if <em>any</em> of the checked categories' bits are set.</p>
-                <p>Under the hood, the category set is bit-packed into a <code>uint16</code> on the binary wire format so the client can filter ~396k rows in a few milliseconds without a server round-trip.</p>
-
-                <h3>Quality score (<code>quality_score</code>)</h3>
-                <p>A composite <strong>0&ndash;100 integer</strong> derived from the richness of structured metadata on each row. Higher means more data you can cross-reference, not necessarily "more credible". The rebalanced v0.8.3b formula weights:</p>
-                <ul>
-                    <li><strong>Date precision</strong> (0&ndash;25 points) &mdash; full ISO date beats year-only beats decade-only</li>
-                    <li><strong>Location specificity</strong> (0&ndash;25 points) &mdash; city + state + country beats country-only beats region</li>
-                    <li><strong>Shape classification</strong> (0&ndash;15 points) &mdash; populated <code>standardized_shape</code> (one of the 25 canonical shapes) beats raw shape text beats NULL</li>
-                    <li><strong>Witness count</strong> (0&ndash;15 points) &mdash; multi-witness reports score higher than single-witness</li>
-                    <li><strong>Source reliability</strong> (0&ndash;10 points) &mdash; investigator-vetted sources (MUFON) score higher than self-reported (NUFORC)</li>
-                    <li><strong>Narrative presence</strong> (0&ndash;10 points) &mdash; <code>has_description = 1</code> adds 10; media attachments add another bump</li>
-                </ul>
-                <p>The Observatory's "High quality only" toggle filters to <code>quality_score &ge; 60</code>, which corresponds to <strong>118,320 sightings (19.3% of the database)</strong>. The threshold was calibrated against a hand-reviewed training set &mdash; below 60 the records are typically missing at least one major dimension (no date, no location, or no shape). The Insights tab's <em>Quality Score Distribution</em> chart shows the shape of the distribution; the 60+ buckets are highlighted in the accent colour.</p>
-
-                <h3>Hoax likelihood (<code>hoax_likelihood</code>)</h3>
-                <p>A <strong>0&ndash;100 integer</strong> estimating the probability a record is a hoax, prank, or misidentification, based on patterns like:</p>
-                <ul>
-                    <li>Obvious hoax language in the narrative ("April Fools", "just kidding", "for Halloween")</li>
-                    <li>Shapes that correlate strongly with known-hoax submissions (Chinese lanterns tagged as "triangle formation")</li>
-                    <li>Date/location collisions with known viral hoaxes or film releases</li>
-                    <li>Source reliability priors (some aggregator sub-sources have high hoax rates)</li>
-                </ul>
-                <p>The "Hide likely hoaxes" toggle in the Quality rail filters to <code>hoax_likelihood &le; 50</code>. The Insights tab's <em>Hoax Likelihood Curve</em> shows the distribution; the right tail (80-100) is red-shifted so "likely hoax" is visually distinct from "likely genuine". Like the quality score, this is a heuristic filter, not a verdict &mdash; no records are ever deleted, just de-emphasised.</p>
-
-                <h3>Richness score (<code>richness_score</code>)</h3>
-                <p>A companion to <code>quality_score</code>. Where quality asks "how much structured data do we have", richness asks "how much <em>narrative detail</em> do we have". Higher richness means more distinct observation words (colours, durations, sound descriptions, object count, witness count, reaction details). It's the score that tells you how <em>readable</em> a record is going to be, not how <em>verifiable</em> it is. Also a 0&ndash;100 integer; no explicit threshold filter in the UI but it's available via the binary wire format for future use.</p>
-
-                <h3>Primary color</h3>
-                <p><strong><code>primary_color</code></strong> &mdash; one of 22 colours (red, blue, metallic silver, etc.) extracted from the narrative via keyword matching. Populated for <strong>145,209 sightings</strong>. Available as a dropdown in the Observatory filter bar.</p>
-
-                <!-- ============ v0.11 Emotion & Sentiment Analysis ============ -->
-                <h2>Emotion &amp; Sentiment Analysis (v0.11)</h2>
-                <p>In v0.11, the science team ran <strong>four models</strong> against all 502,985 sightings with narrative text, replacing the earlier 8-class keyword classifier with transformer-based analysis. All models were run offline on the full private corpus; the results ship as 12 derived columns in the public database.</p>
-
-                <h3>Models</h3>
-                <table>
-                    <thead><tr><th>Model</th><th>Type</th><th>Output</th><th>Coverage</th></tr></thead>
-                    <tbody>
-                        <tr>
-                            <td><strong>RoBERTa</strong> (cardiffnlp/twitter-roberta-base-sentiment-latest)</td>
-                            <td>3-class sentiment</td>
-                            <td>positive / negative / neutral + confidence scores</td>
-                            <td>502,985</td>
-                        </tr>
-                        <tr>
-                            <td><strong>RoBERTa</strong> (j-hartmann/emotion-english-distilroberta-base)</td>
-                            <td>7-class emotion</td>
-                            <td>anger, disgust, fear, joy, neutral, sadness, surprise</td>
-                            <td>502,985</td>
-                        </tr>
-                        <tr>
-                            <td><strong>GoEmotions</strong> (SamLowe/roberta-base-go_emotions)</td>
-                            <td>28-class emotion</td>
-                            <td>admiration, amusement, anger, annoyance, approval, caring, confusion, curiosity, desire, disappointment, disapproval, disgust, embarrassment, excitement, fear, gratitude, grief, joy, love, nervousness, optimism, pride, realization, relief, remorse, sadness, surprise, neutral</td>
-                            <td>502,985</td>
-                        </tr>
-                        <tr>
-                            <td><strong>VADER</strong> (rule-based)</td>
-                            <td>Compound sentiment</td>
-                            <td>Score from -1.0 (most negative) to +1.0 (most positive)</td>
-                            <td>502,985</td>
-                        </tr>
-                    </tbody>
-                </table>
-
-                <h3>Why four models?</h3>
-                <p>No single sentiment model captures the nuance of UFO sighting narratives. VADER is fast and rule-based but misses sarcasm and context. RoBERTa sentiment gives a reliable positive/negative/neutral split but lacks granularity. The 7-class RoBERTa emotion model distinguishes fear from sadness from surprise &mdash; crucial for UFO reports where fear and awe often coexist. GoEmotions' 28-class taxonomy catches subtler states like "curiosity", "confusion", and "realization" that are common in witness accounts. Running all four lets the Insights tab cross-reference models and surface patterns that no single classifier would catch.</p>
-
-                <h3>Coverage and neutrality</h3>
-                <p>86.7% of sightings are classified as "neutral" by GoEmotions. This is expected &mdash; most reports are factual descriptions ("I saw a light at 10pm heading north"). The Insights tab's GoEmotions card hides neutral by default (toggle available) so the 13.3% with non-neutral emotion are legible.</p>
-
-                <h3>Derived columns</h3>
-                <p>The 12 new columns on the <code>sighting</code> table:</p>
-                <table>
-                    <thead><tr><th>Column</th><th>Type</th><th>Description</th></tr></thead>
-                    <tbody>
-                        <tr><td><code>emotion_28_dominant</code></td><td>VARCHAR</td><td>Top GoEmotions label (e.g., "fear", "curiosity")</td></tr>
-                        <tr><td><code>emotion_28_group</code></td><td>VARCHAR</td><td>Sentiment group derived from GoEmotions (positive/negative/neutral/ambiguous)</td></tr>
-                        <tr><td><code>emotion_28_scores</code></td><td>JSONB</td><td>Full 28-class probability vector</td></tr>
-                        <tr><td><code>emotion_7_dominant</code></td><td>VARCHAR</td><td>Top 7-class RoBERTa emotion label</td></tr>
-                        <tr><td><code>emotion_7_scores</code></td><td>JSONB</td><td>Full 7-class probability vector</td></tr>
-                        <tr><td><code>vader_compound</code></td><td>REAL</td><td>VADER compound score (-1 to +1)</td></tr>
-                        <tr><td><code>vader_pos</code></td><td>REAL</td><td>VADER positive proportion</td></tr>
-                        <tr><td><code>vader_neg</code></td><td>REAL</td><td>VADER negative proportion</td></tr>
-                        <tr><td><code>vader_neu</code></td><td>REAL</td><td>VADER neutral proportion</td></tr>
-                        <tr><td><code>roberta_sentiment</code></td><td>VARCHAR</td><td>RoBERTa 3-class label (positive/negative/neutral)</td></tr>
-                        <tr><td><code>roberta_positive</code></td><td>REAL</td><td>RoBERTa positive confidence</td></tr>
-                        <tr><td><code>roberta_negative</code></td><td>REAL</td><td>RoBERTa negative confidence</td></tr>
-                    </tbody>
-                </table>
-                <p>All emotion columns are packed into the 40-byte binary bulk buffer for client-side rendering. VADER compound and RoBERTa sentiment scores are scaled from [-1, +1] to [0, 255] uint8 via <code>round((v+1)*127.5)</code>.</p>
-
-                <h3>Replicating the analysis</h3>
-                <p>The transformer analysis can be replicated independently:</p>
+                <!-- ============ Shape Normalization ============ -->
+                <h3>Shape Normalization</h3>
+                <p>Raw shape strings from 6 sources are normalized to 28 canonical shapes using a three-tier matcher:</p>
                 <ol>
-                    <li>Obtain the raw narrative text from the source databases (NUFORC, MUFON, etc.)</li>
-                    <li>Run the three HuggingFace models against the text (model IDs listed in the table above)</li>
-                    <li>Run VADER (<code>vaderSentiment</code> Python package) against the same text</li>
-                    <li>Join results to the UFOSINT sighting table by <code>source_record_id</code></li>
+                    <li><strong>Exact match</strong> against canonical list (286,826 matches)</li>
+                    <li><strong>Substring/alias match</strong> against 70+ extended mappings &mdash; e.g., "ovoid" &rarr; Oval, "V-shape" &rarr; Chevron, "torpedo" &rarr; Cigar (52,448 matches)</li>
+                    <li><strong>Fuzzy match</strong> via rapidfuzz at &ge;85% similarity (41 matches)</li>
                 </ol>
-                <p>The models are deterministic given the same input text and model weights. Minor version differences in the transformer libraries may produce slightly different confidence scores but the dominant labels should be stable.</p>
+                <p><strong>28 canonical shapes:</strong> Sphere, Disc, Triangle, Cigar, Oval, Circle, Light, Fireball, Cylinder, Diamond, Rectangle, Chevron, Cross, Teardrop, Star, Egg, Cone, Cube, Saucer, Boomerang, Flash, Formation, Changing, Crescent, Cloud, Dome, Unknown, Other.</p>
+                <p><strong>Coverage:</strong> 343,602 sightings (55.6%) have a standardized shape.</p>
 
-                <!-- ============ Data Notes ============ -->
-                <h2>Notes on the Current Build</h2>
+                <!-- ============ Duration ============ -->
+                <h3>Duration Parsing</h3>
+                <p>Raw duration strings are parsed to seconds using a multi-strategy parser:</p>
                 <ul>
-                    <li><strong>Raw narrative text is not in the public database.</strong> The <code>description</code>, <code>summary</code>, <code>notes</code>, and <code>raw_json</code> columns were stripped from the public export for privacy. All derived columns (quality scores, movement categories, emotion classifications) were computed from the private corpus before stripping and ship as structured fields.</li>
-                    <li><strong>Deduplication is applied at ingest time.</strong> Known duplicates (1.94M records from UFOCAT-NUFORC and UPDB-MUFON/NUFORC overlaps) are excluded during import. The historical three-tier dedup pipeline documented above produced 126,730 candidate pairs in earlier builds; these are no longer materialized in the current build.</li>
-                    <li><strong>This is a scientific analysis, not an editorial product.</strong> No records are deleted, ranked, or editorially curated. Quality scores, hoax flags, and emotion labels are algorithmic outputs with known limitations. The coverage strips on the Insights tab show exactly what percentage of the visible dataset each metric covers.</li>
+                    <li>Natural language: "5 minutes" &rarr; 300s, "about 2 hours" &rarr; 7200s</li>
+                    <li>UFOCAT codes: "B" (brief) &rarr; 3s, "M" (medium) &rarr; 120s, "H" (hour) &rarr; 3600s</li>
+                    <li>Bare numbers: "5" &rarr; 300s (UFOCAT convention: decimal minutes)</li>
+                    <li>Ranges: "5-10 minutes" &rarr; 450s (midpoint)</li>
                 </ul>
+                <p>Parsed durations are bucketed: <strong>instant</strong> (&lt;5s), <strong>seconds</strong> (&lt;60s), <strong>minutes</strong> (&lt;1h), <strong>hours</strong> (&lt;24h), <strong>days</strong> (&ge;24h).</p>
+                <p><strong>Coverage:</strong> 232,438 sightings (37.6%) have parsed durations.</p>
+
+                <!-- ============ Emotion Classification ============ -->
+                <h3>Emotion &amp; Sentiment Analysis</h3>
+                <p>Four models classify the emotional content of sighting narratives:</p>
+
+                <table>
+                    <thead><tr><th>Model</th><th>Output</th><th>Coverage</th></tr></thead>
+                    <tbody>
+                        <tr>
+                            <td><a href="https://huggingface.co/SamLowe/roberta-base-go_emotions" target="_blank" rel="noopener">GoEmotions 28-class</a></td>
+                            <td>Dominant emotion label + sentiment group (positive/negative/ambiguous/neutral)</td>
+                            <td>506,788</td>
+                        </tr>
+                        <tr>
+                            <td><a href="https://huggingface.co/j-hartmann/emotion-english-distilroberta-base" target="_blank" rel="noopener">7-class RoBERTa</a></td>
+                            <td>Emotion label (surprise/fear/neutral/anger/disgust/sadness/joy) + full softmax probabilities</td>
+                            <td>506,788</td>
+                        </tr>
+                        <tr>
+                            <td><a href="https://huggingface.co/cardiffnlp/twitter-roberta-base-sentiment-latest" target="_blank" rel="noopener">RoBERTa Sentiment</a></td>
+                            <td>Compound sentiment score (-1.0 to +1.0)</td>
+                            <td>506,788</td>
+                        </tr>
+                        <tr>
+                            <td>VADER + NRC Lexicon</td>
+                            <td>VADER compound score + 10 NRC emotion word counts (joy, fear, anger, sadness, surprise, disgust, trust, anticipation, positive, negative)</td>
+                            <td>506,788</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <!-- ============ Nuclear Proximity ============ -->
+                <h3>Nuclear Proximity Analysis</h3>
+                <p>Haversine distance computed from every geocoded sighting to the nearest of 50 nuclear-relevant facilities (military bases, national labs, nuclear test sites, weapons storage areas).</p>
+                <p><strong>Results:</strong> 35,203 sightings within 50 km of a nuclear site. 69,912 within 100 km.</p>
+                <p>Supplemented by 14 crash-retrieval cases and 35 nuclear encounter records from the UAP Gerb research bundle.</p>
+
+                <!-- ============ Movement ============ -->
+                <h3>Movement &amp; Behavior Classification</h3>
+                <p>Regex-based extraction from narrative text identifies 10 movement categories and 14 behavior tags:</p>
+                <ul>
+                    <li><strong>Movement:</strong> hovering, linear, erratic, accelerating, rotating, ascending, descending, vanished, followed, landed</li>
+                    <li><strong>Behavior:</strong> hovering, silent, bright, pulsing, rotating, zigzag, vanished, accelerated, split, merged, formation, chased, followed, landed</li>
+                </ul>
+                <p><strong>Coverage:</strong> 250,820 sightings (40.6%) have at least one movement category.</p>
+
+                <!-- ============ Deduplication ============ -->
+                <h3>Cross-Source Deduplication</h3>
+                <p>A three-tier engine flags potential duplicates across sources. <strong>No records are deleted</strong> &mdash; duplicates are flagged for review.</p>
+                <table>
+                    <thead><tr><th>Tier</th><th>Method</th><th>Pairs Flagged</th></tr></thead>
+                    <tbody>
+                        <tr><td>1</td><td>MUFON &harr; NUFORC: date + city + state exact match</td><td>~48K</td></tr>
+                        <tr><td>2</td><td>All remaining cross-source pairs: date + city + state</td><td>~69K</td></tr>
+                        <tr><td>3</td><td>Date-only matches with description fuzzy similarity &ge;60%</td><td>~10K</td></tr>
+                    </tbody>
+                </table>
+                <p><strong>Total:</strong> 126,729 duplicate candidate pairs across 618,316 sightings.</p>
+
+                <!-- ============ Content Policy ============ -->
+                <h3>Content Policy &amp; Privacy</h3>
+                <p>The public database (<code>ufo_public.db</code>) contains <strong>only derived, non-copyrighted fields</strong>. Raw narrative text from NUFORC, MUFON, UFOCAT, UPDB, and UFO-search is stripped during export. Reddit sighting descriptions are LLM-generated summaries (transformative derivative works), not original Reddit posts.</p>
+                <p>No personally identifiable information (PII) is published. The <code>witness_names</code> column is NULL in the public export.</p>
+
+                <!-- ============ How to Reproduce ============ -->
+                <h3>How to Reproduce This Database</h3>
+                <div class="meth-banner">
+                    <strong>Full instructions:</strong>
+                    <a href="https://github.com/UFOSINT/ufo-dedup/blob/main/docs/PIPELINE.md" target="_blank" rel="noopener">docs/PIPELINE.md</a>
+                    in the ufo-dedup repository.
+                </div>
+                <pre style="font-family: monospace; font-size: 0.85em; background: var(--bg-card, #1a1a2e); padding: 1em; border-radius: 8px;">
+            pip install -r requirements-etl.txt
+            python geocode.py --download              # one-time gazetteer (~30 MB)
+            python rebuild_db.py                       # 17-step pipeline (~30 min)
+            python emotions.py                         # GPU emotion classification (~35 min)
+            python run_enrich.py --limit 378000        # LLM field extraction (~$8, optional)
+            python run_enrich.py --apply               # apply extractions to DB
+            python export_public.py                    # clean public export
+                </pre>
+                <p>LLM-derived results (location normalization, field extraction, emotion classification) are cached to CSV files in <code>data/output/</code> and replayed automatically on future rebuilds without re-calling APIs or re-running GPU inference.</p>
 
             </div>
         </div>
