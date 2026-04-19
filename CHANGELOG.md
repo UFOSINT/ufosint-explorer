@@ -15,6 +15,25 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 ## [Unreleased]
 
+### Changed (v0.14 — NRC donut now lives in the bulk buffer)
+- **Bulk points buffer grew from 40 → 48 bytes per row.** Schema
+  version bumped from `v011-1` to `v014-1`. The 8 new bytes carry
+  NRC Emotion Lexicon word counts (joy/fear/anger/sadness/surprise/
+  disgust/trust/anticipation) as uint8-clamped counts at offsets 40-47.
+  Only ~20 rows of 618k exceed 255 (max observed: trust=475) so the
+  clamp is visually invisible in aggregate donut sums.
+- **NRC Lexicon donut card is now client-aggregated** like the other
+  5 Emotion cards. Removes the `/api/sentiment/nrc` round-trip and
+  makes the donut animate smoothly during TimeBrush scrubbing, bbox
+  pan, and every other cross-filter.
+- **Bulk payload: +~5 MB uncompressed** (~25 → ~30 MB pre-gzip) for
+  the 8 extra uint8 columns across 618k rows. One-time cost that
+  pays for itself after the first TimeBrush scrub.
+- Valence footnote on the NRC card simplified to show visible-sighting
+  count + total emotion-word count (upstream `nrc_positive` /
+  `nrc_negative` columns are NULL across every row in the shipped
+  dataset, so the old "X positive · Y negative" display was always 0).
+
 ### Added (v0.14 — science team data-quality overhaul)
 - **9 new `audit_*` columns on `sighting`** — metadata about the
   ufo-dedup LLM-assisted audit pipeline. Populated for 378,383 of

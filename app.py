@@ -1772,9 +1772,9 @@ def api_hexbin():
 # Row grows from 28 to 32 bytes, staying 4-byte aligned so V8's
 # optimized Uint32Array reads on `id` don't fall on unaligned
 # offsets. See docs/V085_MOVEMENT_PLAN.md for the full layout.
-_POINTS_BULK_SCHEMA_VERSION = "v011-1"
-_POINTS_BULK_BYTES_PER_ROW = 40
-# Little-endian row format, 40 bytes:
+_POINTS_BULK_SCHEMA_VERSION = "v014-1"
+_POINTS_BULK_BYTES_PER_ROW = 48
+# Little-endian row format, 48 bytes:
 #   I  uint32  id                (offset 0)
 #   f  float32 lat               (offset 4)
 #   f  float32 lng               (offset 8)
@@ -1801,7 +1801,21 @@ _POINTS_BULK_BYTES_PER_ROW = 40
 #   B  uint8   _reserved3a       (offset 37)
 #   B  uint8   _reserved3b       (offset 38)
 #   B  uint8   _reserved3c       (offset 39)
-_POINTS_BULK_STRUCT = "<IffIBBBBBBBBBBHHHBBBBBBBB"
+# --- v0.14 NRC Lexicon word counts (bytes 40-47) ---
+# uint8 clamped 0-255 per emotion. Max observed is ~475 (trust);
+# only ~20 rows of 618k exceed 255, so clamp-truncation is visually
+# invisible in donut sums. Adding these 8 bytes raises the bulk
+# payload by ~5 MB gzipped — worth it so the NRC donut animates
+# in sync with TimeBrush scrubbing instead of triggering a round-trip.
+#   B  uint8   nrc_joy           (offset 40)
+#   B  uint8   nrc_fear          (offset 41)
+#   B  uint8   nrc_anger         (offset 42)
+#   B  uint8   nrc_sadness       (offset 43)
+#   B  uint8   nrc_surprise      (offset 44)
+#   B  uint8   nrc_disgust       (offset 45)
+#   B  uint8   nrc_trust         (offset 46)
+#   B  uint8   nrc_anticipation  (offset 47)
+_POINTS_BULK_STRUCT = "<IffIBBBBBBBBBBHHHBBBBBBBBBBBBBBBB"
 
 # v0.8.5 — Canonical movement category order. The science-team
 # analyze.py produces at most these 10 categories; the index in this
@@ -1854,6 +1868,16 @@ _POINTS_BULK_DERIVED_COLS = (
     "emotion_7_dominant",
     "vader_compound",
     "roberta_sentiment",
+    # v0.14 — NRC Emotion Lexicon word counts (8 Plutchik emotions).
+    # Packed as uint8 with clamp; see _POINTS_BULK_STRUCT comment.
+    "nrc_joy",
+    "nrc_fear",
+    "nrc_anger",
+    "nrc_sadness",
+    "nrc_surprise",
+    "nrc_disgust",
+    "nrc_trust",
+    "nrc_anticipation",
 )
 
 
@@ -2333,6 +2357,15 @@ def _points_bulk_build_cached(etag: str) -> tuple[bytes, bytes, dict]:
             _col_expr("emotion_7_dominant"),
             _col_expr("vader_compound"),
             _col_expr("roberta_sentiment"),
+            # v0.14 — NRC Emotion Lexicon word counts (8 Plutchik emotions).
+            _col_expr("nrc_joy"),
+            _col_expr("nrc_fear"),
+            _col_expr("nrc_anger"),
+            _col_expr("nrc_sadness"),
+            _col_expr("nrc_surprise"),
+            _col_expr("nrc_disgust"),
+            _col_expr("nrc_trust"),
+            _col_expr("nrc_anticipation"),
         ]
         select_sql = ",\n                   ".join(select_parts)
 
@@ -2389,6 +2422,9 @@ def _points_bulk_build_cached(etag: str) -> tuple[bytes, bytes, dict]:
                 # v0.11 — transformer emotion columns
                 emo28_dom, emo28_group, emo7_dom,
                 vader_comp, roberta_sent,
+                # v0.14 — NRC Lexicon word counts
+                nrc_joy, nrc_fear, nrc_anger, nrc_sadness,
+                nrc_surprise, nrc_disgust, nrc_trust, nrc_anticipation,
             ) = row
 
             # Prefer the explicit sighting_datetime when present, fall
@@ -2519,6 +2555,26 @@ def _points_bulk_build_cached(etag: str) -> tuple[bytes, bytes, dict]:
             vader_u8 = _scale_score(vader_comp)
             roberta_u8 = _scale_score(roberta_sent)
 
+            # v0.14 — clamp NRC counts to uint8. Max observed is ~475
+            # (trust); only ~20 of 618k rows exceed 255 so truncation
+            # is invisible in aggregate sums.
+            def _clamp_u8(v):
+                if v is None:
+                    return 0
+                try:
+                    return max(0, min(255, int(v)))
+                except (TypeError, ValueError):
+                    return 0
+
+            nrc_joy_u8          = _clamp_u8(nrc_joy)
+            nrc_fear_u8         = _clamp_u8(nrc_fear)
+            nrc_anger_u8        = _clamp_u8(nrc_anger)
+            nrc_sadness_u8      = _clamp_u8(nrc_sadness)
+            nrc_surprise_u8     = _clamp_u8(nrc_surprise)
+            nrc_disgust_u8      = _clamp_u8(nrc_disgust)
+            nrc_trust_u8        = _clamp_u8(nrc_trust)
+            nrc_anticipation_u8 = _clamp_u8(nrc_anticipation)
+
             buf.extend(
                 pack(
                     int(sid),
@@ -2545,6 +2601,15 @@ def _points_bulk_build_cached(etag: str) -> tuple[bytes, bytes, dict]:
                     vader_u8,       # VADER compound scaled 0-255
                     roberta_u8,     # RoBERTa sentiment scaled 0-255
                     0, 0, 0,        # _reserved3 (padding to 40 bytes)
+                    # --- v0.14 NRC Lexicon word counts (bytes 40-47) ---
+                    nrc_joy_u8,
+                    nrc_fear_u8,
+                    nrc_anger_u8,
+                    nrc_sadness_u8,
+                    nrc_surprise_u8,
+                    nrc_disgust_u8,
+                    nrc_trust_u8,
+                    nrc_anticipation_u8,
                 )
             )
             count += 1
@@ -2613,6 +2678,15 @@ def _points_bulk_build_cached(etag: str) -> tuple[bytes, bytes, dict]:
                 {"name": "_reserved3a",        "offset": 37, "type": "uint8",  "len": 1},
                 {"name": "_reserved3b",        "offset": 38, "type": "uint8",  "len": 1},
                 {"name": "_reserved3c",        "offset": 39, "type": "uint8",  "len": 1},
+                # v0.14 — NRC Emotion Lexicon word counts (uint8 clamped).
+                {"name": "nrc_joy",            "offset": 40, "type": "uint8",  "len": 1},
+                {"name": "nrc_fear",           "offset": 41, "type": "uint8",  "len": 1},
+                {"name": "nrc_anger",          "offset": 42, "type": "uint8",  "len": 1},
+                {"name": "nrc_sadness",        "offset": 43, "type": "uint8",  "len": 1},
+                {"name": "nrc_surprise",       "offset": 44, "type": "uint8",  "len": 1},
+                {"name": "nrc_disgust",        "offset": 45, "type": "uint8",  "len": 1},
+                {"name": "nrc_trust",          "offset": 46, "type": "uint8",  "len": 1},
+                {"name": "nrc_anticipation",   "offset": 47, "type": "uint8",  "len": 1},
             ],
             "flag_bits": {
                 "has_description": 0,
