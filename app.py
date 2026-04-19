@@ -117,13 +117,30 @@ def _rate_limit_key():
     """Prefer the real client IP from X-Forwarded-For over Azure's LB IP.
 
     Azure App Service sets X-Forwarded-For to the chain of upstream
-    proxies; the *leftmost* entry is the original client. Falls back
-    to remote_addr when the header isn't present (local dev, tests).
+    proxies with the *leftmost* entry being the original client —
+    AND ON AZURE the entry includes the ephemeral client port:
+    ``X-Forwarded-For: 1.2.3.4:51234, 10.0.0.1``. A naive strip would
+    use ``1.2.3.4:51234`` as the key, which changes every connection
+    because the OS picks a new port each time — so the limiter would
+    see every request as a new client and never rate-limit anyone.
+    We strip the port so the key is just the IP.
+
+    Falls back to remote_addr when the header isn't present (local
+    dev, tests).
     """
     xff = request.headers.get("X-Forwarded-For", "")
     if xff:
-        # Leftmost = original client per RFC 7239 / Azure docs
-        return xff.split(",")[0].strip()
+        client = xff.split(",")[0].strip()
+        # IPv6 literal with port: [::1]:51234 → [::1]
+        if client.startswith("["):
+            return client.split("]")[0] + "]"
+        # IPv4 with port: 1.2.3.4:51234 → 1.2.3.4
+        # (Bare IPv6 without brackets can't reliably coexist with a
+        # port; Azure only uses bracketed form for IPv6.)
+        if client.count(":") == 1:
+            return client.split(":")[0]
+        # Bare IPv4 or bracketless IPv6 (no port), use as-is.
+        return client
     return get_remote_address()
 
 
