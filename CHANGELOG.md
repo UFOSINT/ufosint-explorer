@@ -15,6 +15,8 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 ## [Unreleased]
 
+## [0.14.1] — 2026-04-19 — NRC donut animates live (bulk-buffer integration)
+
 ### Changed (v0.14 — NRC donut now lives in the bulk buffer)
 - **Bulk points buffer grew from 40 → 48 bytes per row.** Schema
   version bumped from `v011-1` to `v014-1`. The 8 new bytes carry
