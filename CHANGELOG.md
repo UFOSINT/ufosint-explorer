@@ -36,6 +36,8 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
   `nrc_negative` columns are NULL across every row in the shipped
   dataset, so the old "X positive · Y negative" display was always 0).
 
+## [0.14.0] — 2026-04-19 — Reddit r/UFOs + data-quality overhaul
+
 ### Added (v0.14 — science team data-quality overhaul)
 - **9 new `audit_*` columns on `sighting`** — metadata about the
   ufo-dedup LLM-assisted audit pipeline. Populated for 378,383 of
@@ -81,8 +83,13 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 - `scripts/migrate_sqlite_to_pg.py` — column list extended with the
   9 audit fields so future rebuilds carry them through.
 
+## [0.13.0] — 2026-04-18 — Reddit r/UFOs integration + rate limiting
 
-### Added (v0.13 rate limiting + LLM bulk-access guidance)
+Shipped to production across 2026-04-16…2026-04-18 but never tagged
+standalone; scope was bundled into the v0.14.0 release tarball and
+tagged there. Dated from the last v0.13 commit on `main`.
+
+### Added (rate limiting + LLM bulk-access guidance)
 - **Rate limiting** via `flask-limiter` (3.8.0). `/api/tool/<name>` and
   the `/mcp` JSON-RPC endpoint: 60 req/min per client. `/api/map` and
   `/api/heatmap`: 30 req/min per client. `/health`, `/api/stats`,
@@ -106,9 +113,7 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
   **468,349 mapped**, six sources (r/UFOs added at 3,811).
 - `requirements.txt` adds `flask-limiter==3.8.0`.
 
-## [Unreleased previous entries below — will move to v0.13 on tag cut]
-
-### Added (v0.13 Reddit UI — staging)
+### Added (Reddit UI — staging)
 - **Reddit r/UFOs source surfacing on the sighting popup.** A new
   "View original on r/UFOs" link in the Source section, a full-width
   Narrative section rendering the LLM-generated summary, and an
