@@ -217,9 +217,13 @@ def test_apply_client_filters_reads_movement_cats():
         "applyClientFilters must pass movementCats into the filter "
         "descriptor for _rebuildVisible to read"
     )
-    assert "_readMovementCats" in body, (
-        "applyClientFilters must call _readMovementCats() to collect "
-        "the currently checked categories"
+    # v0.15 — Movement became a multi-select dropdown; the list of
+    # checked categories is read from _msDropdowns.movement via the
+    # shared _msSel() helper instead of the legacy
+    # _readMovementCats() DOM scan (the chip row is hidden).
+    assert ('_readMovementCats' in body) or ('_msSel("movement")' in body), (
+        "applyClientFilters must collect movement categories either "
+        "from the legacy chip row or from the v0.15 multi-select dropdown"
     )
 
 
@@ -335,10 +339,15 @@ def test_index_html_new_filter_ids_present():
 
 
 def test_index_html_movement_row_classes():
+    # v0.15 — Movement moved from the always-visible chip row into a
+    # dropdown on the main filter bar. The chip-row host + cluster
+    # div are kept (hidden) so _mountMovementCluster can still render
+    # into them during the transition, but the visible .movement-label
+    # is gone. The dropdown wrap replaces it.
     html = _read(INDEX_HTML)
     assert 'class="filter-movement-row"' in html
     assert 'class="movement-cluster"' in html
-    assert 'class="movement-label"' in html
+    assert 'id="ms-movement"' in html
 
 
 def test_index_html_still_has_shape_and_source():

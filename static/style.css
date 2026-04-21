@@ -6169,7 +6169,11 @@ body[data-hide-brush] .observatory-time-brush {
     position: absolute;
     top: calc(100% + 4px);
     left: 0;
-    z-index: 50;
+    /* z-index: the map-control overlay buttons (POINTS / HEATMAP /
+       HEX BINS) and the COLOR / SIZE / REGION rail sit at ~600 via
+       Leaflet's control-pane stacking. 9999 clears them and any
+       future overlay layers without having to hand-tune each one. */
+    z-index: 9999;
     min-width: 220px;
     max-width: 320px;
     background: var(--bg-panel);
@@ -6299,6 +6303,59 @@ body[data-hide-brush] .observatory-time-brush {
 .ms-panel--right {
     left: auto;
     right: 0;
+}
+
+/* v0.15 — Date Range dropdown custom body. Two labeled text inputs +
+   a clear-dates link, rendered inside the shared .ms-panel chrome. */
+.ms-date-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 4px;
+}
+.ms-date-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    min-width: 36px;
+}
+.ms-date-input {
+    flex: 1;
+    padding: 5px 8px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font-size: 12px;
+    outline: none;
+    box-sizing: border-box;
+}
+.ms-date-input:focus {
+    border-color: var(--accent);
+}
+.ms-date-footer {
+    display: flex;
+    justify-content: flex-end;
+    padding: 4px 4px 2px;
+    margin-top: 4px;
+    border-top: 1px solid var(--border);
+}
+.ms-date-clear {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 11px;
+    font-family: inherit;
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.ms-date-clear:hover {
+    color: var(--accent);
+    background: var(--accent-bg);
 }
 
 @media (max-width: 540px) {

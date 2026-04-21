@@ -423,10 +423,19 @@
         // not in the lookup → every row fails → empty result".
         const unknownName = _ensureScratch().subarray(0, 0);
 
+        // v0.15 — Source multi-select. Same Uint8Array allow-set pattern
+        // as Shape below. Legacy f.sourceName scalar still honored.
+        let srcAllow = null;
         let srcIdxTarget = -1;
-        if (f.sourceName) {
-            srcIdxTarget = POINTS.sources.indexOf(f.sourceName);
-            if (srcIdxTarget === -1) { POINTS.visibleIdx = unknownName; return unknownName; }
+        const srcNameList = Array.isArray(f.sourceNames) ? f.sourceNames : (f.sourceName ? [f.sourceName] : []);
+        if (srcNameList.length > 0) {
+            srcAllow = new Uint8Array(POINTS.sources.length);
+            let anyHit = false;
+            for (const name of srcNameList) {
+                const idx = POINTS.sources.indexOf(name);
+                if (idx >= 0) { srcAllow[idx] = 1; anyHit = true; }
+            }
+            if (!anyHit) { POINTS.visibleIdx = unknownName; return unknownName; }
         }
         // v0.11.3: __has_data__ sentinel means "any non-zero index"
         // (i.e., the field has a value defined). Uses -2 as the
@@ -460,20 +469,38 @@
                 if (!anyHit) { POINTS.visibleIdx = unknownName; return unknownName; }
             }
         }
+        // v0.15 — Color multi-select (same allow-set pattern).
+        let colorAllow = null;
         let colorIdxTarget = -1;
-        if (f.colorName) {
-            if (f.colorName === HAS_DATA) { colorIdxTarget = -2; }
-            else {
-                colorIdxTarget = POINTS.colors.indexOf(f.colorName);
-                if (colorIdxTarget === -1) { POINTS.visibleIdx = unknownName; return unknownName; }
+        const colorNameList = Array.isArray(f.colorNames) ? f.colorNames : (f.colorName ? [f.colorName] : []);
+        if (colorNameList.length > 0) {
+            if (colorNameList.length === 1 && colorNameList[0] === HAS_DATA) {
+                colorIdxTarget = -2;
+            } else {
+                colorAllow = new Uint8Array(POINTS.colors.length);
+                let anyHit = false;
+                for (const name of colorNameList) {
+                    const idx = POINTS.colors.indexOf(name);
+                    if (idx >= 0) { colorAllow[idx] = 1; anyHit = true; }
+                }
+                if (!anyHit) { POINTS.visibleIdx = unknownName; return unknownName; }
             }
         }
+        // v0.15 — Emotion multi-select (same allow-set pattern).
+        let emotionAllow = null;
         let emotionIdxTarget = -1;
-        if (f.emotionName) {
-            if (f.emotionName === HAS_DATA) { emotionIdxTarget = -2; }
-            else {
-                emotionIdxTarget = POINTS.emotions.indexOf(f.emotionName);
-                if (emotionIdxTarget === -1) { POINTS.visibleIdx = unknownName; return unknownName; }
+        const emotionNameList = Array.isArray(f.emotionNames) ? f.emotionNames : (f.emotionName ? [f.emotionName] : []);
+        if (emotionNameList.length > 0) {
+            if (emotionNameList.length === 1 && emotionNameList[0] === HAS_DATA) {
+                emotionIdxTarget = -2;
+            } else {
+                emotionAllow = new Uint8Array(POINTS.emotions.length);
+                let anyHit = false;
+                for (const name of emotionNameList) {
+                    const idx = POINTS.emotions.indexOf(name);
+                    if (idx >= 0) { emotionAllow[idx] = 1; anyHit = true; }
+                }
+                if (!anyHit) { POINTS.visibleIdx = unknownName; return unknownName; }
             }
         }
 
@@ -585,19 +612,30 @@
         const out = _ensureScratch();
         let j = 0;
         for (let i = 0; i < N; i++) {
-            if (srcIdxTarget     !== -1 && src[i] !== srcIdxTarget)     continue;
-            // v0.15 — Shape allow-set takes precedence over the legacy
-            // scalar. -2 is still the "has data" sentinel path.
+            // v0.15 — Source/Shape/Color/Emotion allow-sets take
+            // precedence over legacy scalars. -2 is still the "has
+            // data" sentinel (any non-zero index) path.
+            if (srcAllow !== null) {
+                if (srcAllow[src[i]] === 0) continue;
+            } else if (srcIdxTarget !== -1 && src[i] !== srcIdxTarget) continue;
+
             if (shapeAllow !== null) {
                 if (shapeAllow[shp[i]] === 0) continue;
             } else if (shapeIdxTarget === -2) {
                 if (shp[i] === 0) continue;
             }
-            // (shapeIdxTarget !== -1 && ... !== shapeIdxTarget) is
-            // no longer reachable: when shapeAllow is null, the
-            // shapeNames array was empty, so no shape filter applies.
-            if (colorIdxTarget   === -2 ? ci[i]  === 0 : (colorIdxTarget !== -1 && ci[i]  !== colorIdxTarget)) continue;
-            if (emotionIdxTarget === -2 ? ei[i]  === 0 : (emotionIdxTarget !== -1 && ei[i] !== emotionIdxTarget)) continue;
+
+            if (colorAllow !== null) {
+                if (colorAllow[ci[i]] === 0) continue;
+            } else if (colorIdxTarget === -2) {
+                if (ci[i] === 0) continue;
+            }
+
+            if (emotionAllow !== null) {
+                if (emotionAllow[ei[i]] === 0) continue;
+            } else if (emotionIdxTarget === -2) {
+                if (ei[i] === 0) continue;
+            }
 
             // Score filters. 255-sentinel fails any threshold test,
             // which is the right semantic: a row with unknown quality
