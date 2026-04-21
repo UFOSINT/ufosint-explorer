@@ -448,6 +448,11 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
     flex-wrap: wrap;
     flex-shrink: 0;
 }
+/* v0.15 — explicit [hidden] override. The `display: flex` above
+   overrides the browser default `display: none` from the HTML
+   `hidden` attribute; this restores the attribute's semantics so
+   we can hide the pre-v0.15 chip row via markup. */
+.filter-movement-row[hidden] { display: none !important; }
 .movement-label {
     font-size: 10px;
     color: var(--text-muted);
@@ -3764,6 +3769,11 @@ body.is-touch:not(.mobile-filters-hidden)::before {
     gap: var(--s-5);
 }
 .rail-section { display: flex; flex-direction: column; gap: var(--s-2); }
+/* v0.15 — explicit [hidden] override so `section.rail-quality` (whose
+   toggles moved into the top-bar Quality dropdown) actually stays
+   hidden. Without this the display:flex above wins and mountQualityRail
+   renders a duplicate rail in the sidebar. */
+.rail-section[hidden] { display: none !important; }
 .rail-label {
     font-size: 9px;
     letter-spacing: 0.25em;
