@@ -434,12 +434,30 @@
         // index" (-1 = no filter, >=0 = exact match) from "match
         // any non-zero" (-2).
         const HAS_DATA = "__has_data__";
-        let shapeIdxTarget = -1;
-        if (f.shapeName) {
-            if (f.shapeName === HAS_DATA) { shapeIdxTarget = -2; }
-            else {
-                shapeIdxTarget = POINTS.shapes.indexOf(f.shapeName);
-                if (shapeIdxTarget === -1) { POINTS.visibleIdx = unknownName; return unknownName; }
+        // v0.15 — Shape is now multi-select. `shapeNames` (array) takes
+        // precedence over `shapeName` (scalar legacy). We build a
+        // Uint8Array allow-set indexed by POINTS.shapeIdx: byte is 1 if
+        // the index is selected, 0 otherwise. The hot-loop check
+        // becomes a single byte read — same cost as the scalar compare.
+        let shapeAllow = null;   // Uint8Array | null (null = no filter)
+        let shapeIdxTarget = -1; // legacy scalar path (kept for has-data sentinel)
+        const shapeNameList = Array.isArray(f.shapeNames) ? f.shapeNames : (f.shapeName ? [f.shapeName] : []);
+        if (shapeNameList.length > 0) {
+            // Handle the legacy __has_data__ sentinel (only meaningful
+            // as a single-element "selection" — multi-select doesn't
+            // expose it in the UI).
+            if (shapeNameList.length === 1 && shapeNameList[0] === HAS_DATA) {
+                shapeIdxTarget = -2;
+            } else {
+                shapeAllow = new Uint8Array(POINTS.shapes.length);
+                let anyHit = false;
+                for (const name of shapeNameList) {
+                    const idx = POINTS.shapes.indexOf(name);
+                    if (idx >= 0) { shapeAllow[idx] = 1; anyHit = true; }
+                }
+                // User picked only unknown names → empty result set
+                // (consistent with the -1 early-return pattern above).
+                if (!anyHit) { POINTS.visibleIdx = unknownName; return unknownName; }
             }
         }
         let colorIdxTarget = -1;
@@ -568,8 +586,16 @@
         let j = 0;
         for (let i = 0; i < N; i++) {
             if (srcIdxTarget     !== -1 && src[i] !== srcIdxTarget)     continue;
-            // -2 = "has data" (any non-zero index); >=0 = exact match
-            if (shapeIdxTarget   === -2 ? shp[i] === 0 : (shapeIdxTarget !== -1 && shp[i] !== shapeIdxTarget)) continue;
+            // v0.15 — Shape allow-set takes precedence over the legacy
+            // scalar. -2 is still the "has data" sentinel path.
+            if (shapeAllow !== null) {
+                if (shapeAllow[shp[i]] === 0) continue;
+            } else if (shapeIdxTarget === -2) {
+                if (shp[i] === 0) continue;
+            }
+            // (shapeIdxTarget !== -1 && ... !== shapeIdxTarget) is
+            // no longer reachable: when shapeAllow is null, the
+            // shapeNames array was empty, so no shape filter applies.
             if (colorIdxTarget   === -2 ? ci[i]  === 0 : (colorIdxTarget !== -1 && ci[i]  !== colorIdxTarget)) continue;
             if (emotionIdxTarget === -2 ? ei[i]  === 0 : (emotionIdxTarget !== -1 && ei[i] !== emotionIdxTarget)) continue;
 

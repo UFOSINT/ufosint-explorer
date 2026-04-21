@@ -224,9 +224,16 @@
              standardized lists. Country / State / Hynek / Vallee /
              Collection were deleted because they had no client-side
              filter wiring and the data wasn't in the buffer anyway. -->
+        <!-- v0.15 — Shape is now a multi-select dropdown. The
+             <div class="ms-wrap"> scaffold is populated at runtime
+             by buildMultiSelect() in app.js. A hidden legacy <select>
+             stays in the DOM during the v0.15 transition so any code
+             paths that still read filter-shape.value don't explode;
+             it's kept in sync with the multi-select in applyClientFilters
+             for a single selection, and ignored otherwise. -->
         <div class="filter-group">
-            <label for="filter-shape">Shape</label>
-            <select id="filter-shape"><option value="">All shapes</option></select>
+            <div id="ms-shape" class="ms-wrap" data-filter="shape"></div>
+            <select id="filter-shape" hidden aria-hidden="true"><option value="">All shapes</option></select>
         </div>
         <div class="filter-group">
             <label for="filter-source">Source</label>

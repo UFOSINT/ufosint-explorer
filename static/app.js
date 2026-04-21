@@ -640,10 +640,42 @@ function populateFilterDropdownsFromDeck() {
         return;
     }
     const P = window.UFODeck.POINTS;
+    // v0.15 — Shape is now a multi-select dropdown (buildMultiSelect
+    // factory). The legacy <select> is still populated in parallel so
+    // any DOM-reading code that hasn't been migrated yet still works.
     _populateLookupDropdown("filter-shape",   P.shapes,   "All shapes");
     _populateLookupDropdown("filter-color",   P.colors,   "All colors");
     _populateLookupDropdown("filter-emotion", P.emotions, "All emotions");
     _mountMovementCluster(P.movements);
+
+    // v0.15 — mount the Shape multi-select.
+    _mountShapeMultiSelect(P.shapes);
+}
+
+// v0.15 — populate the Shape multi-select from POINTS.shapes. Called
+// after deck.gl boots so we have the canonical standardized list.
+// Idempotent: re-uses the existing instance if already mounted.
+function _mountShapeMultiSelect(shapes) {
+    const wrap = document.getElementById("ms-shape");
+    if (!wrap) return;
+    const opts = (shapes || [])
+        .filter(s => !!s)  // drop the index-0 "(unknown)" placeholder
+        .map(s => ({ value: s, text: s }));
+    if (_msDropdowns.shape) {
+        _msDropdowns.shape.setOptions(opts);
+        return;
+    }
+    _msDropdowns.shape = buildMultiSelect({
+        wrapEl: wrap,
+        label: "Shape",
+        options: opts,
+        onChange: () => {
+            // Fire applyFilters with no debounce — the factory already
+            // dedupes against no-op toggles, and the user expects the
+            // map to react instantly on every click.
+            if (typeof applyFilters === "function") applyFilters();
+        },
+    });
 }
 
 // Blank a <select>, write a placeholder option, then append one
@@ -679,6 +711,262 @@ function _populateLookupDropdown(id, values, placeholder) {
         if (hit) el.value = prev;
     }
 }
+
+// =========================================================================
+// v0.15 — Multi-select filter dropdown factory
+// =========================================================================
+// Shared chrome for every top-bar filter control so Shape / Source / Color
+// / Emotion / Movement / Quality all read as one visual family. Each call
+// takes over a pre-existing `<div class="ms-wrap">` scaffold in index.html
+// and wires the interaction.
+//
+// Options + selection live inside the closure. Callers talk to the
+// instance via the returned API:
+//
+//   const ms = buildMultiSelect({
+//       wrapEl:    <div.ms-wrap>,
+//       label:     "Shape",
+//       options:   [{value:"Circle", text:"Circle", count:42901}, ...],
+//       onChange:  (selected) => { ... selected is string[] ... },
+//   });
+//   ms.setOptions(newOptions);   // refresh list, preserve selection
+//   ms.getSelection();           // current selected values (string[])
+//   ms.setSelection(["Circle"]); // programmatic set (e.g. hash restore)
+//   ms.clear();                  // deselect all
+//
+// The trigger badge auto-updates; the onChange callback fires on every
+// user check/uncheck. Empty selection means "no filter" — callers
+// should map `[]` to null in their filter state.
+function buildMultiSelect(config) {
+    const wrap = config.wrapEl;
+    if (!wrap) {
+        console.warn("buildMultiSelect: no wrapEl");
+        return null;
+    }
+    const label = config.label || "Filter";
+    const placeholder = config.placeholder || `Search ${label.toLowerCase()}…`;
+    const onChange = typeof config.onChange === "function" ? config.onChange : () => {};
+
+    // Build the DOM once. The wrap element just needs to exist; we
+    // write the trigger + panel into it.
+    wrap.innerHTML = "";
+    const trigger = document.createElement("button");
+    trigger.type = "button";
+    trigger.className = "ms-trigger";
+    trigger.setAttribute("aria-haspopup", "listbox");
+    trigger.setAttribute("aria-expanded", "false");
+    trigger.innerHTML = `
+        <span class="ms-trigger-label">${escapeHtml(label)}</span>
+        <span class="ms-trigger-badge" hidden>0</span>
+        <span class="ms-trigger-chevron" aria-hidden="true">▾</span>
+    `;
+
+    const panel = document.createElement("div");
+    panel.className = "ms-panel";
+    panel.hidden = true;
+    panel.setAttribute("role", "listbox");
+    panel.innerHTML = `
+        <input class="ms-search" type="text" placeholder="${escapeHtml(placeholder)}" />
+        <div class="ms-options"></div>
+        <div class="ms-footer">
+            <button class="ms-clear" type="button">Clear</button>
+            <button class="ms-all" type="button">Select all</button>
+        </div>
+    `;
+
+    wrap.appendChild(trigger);
+    wrap.appendChild(panel);
+
+    const badge = trigger.querySelector(".ms-trigger-badge");
+    const searchInput = panel.querySelector(".ms-search");
+    const optsHost = panel.querySelector(".ms-options");
+    const clearBtn = panel.querySelector(".ms-clear");
+    const allBtn = panel.querySelector(".ms-all");
+
+    // Selection is a Set of string values for O(1) toggle + dedup.
+    const selected = new Set();
+    // Current options list. Kept as the source of truth for re-render.
+    let options = Array.isArray(config.options) ? config.options.slice() : [];
+
+    function _updateBadge() {
+        const n = selected.size;
+        if (n > 0) {
+            badge.textContent = String(n);
+            badge.hidden = false;
+        } else {
+            badge.hidden = true;
+        }
+    }
+
+    function _render() {
+        optsHost.innerHTML = "";
+        if (options.length === 0) {
+            const empty = document.createElement("div");
+            empty.className = "ms-empty";
+            empty.textContent = "No options yet";
+            optsHost.appendChild(empty);
+            // Hide the search input too when empty — nothing to filter.
+            searchInput.style.display = "none";
+            return;
+        }
+        // Show search only when the list is long enough to warrant it.
+        searchInput.style.display = options.length > 8 ? "" : "none";
+        for (const opt of options) {
+            const row = document.createElement("label");
+            row.className = "ms-option";
+            row.dataset.value = opt.value;
+            row.innerHTML = `
+                <input type="checkbox" ${selected.has(opt.value) ? "checked" : ""} />
+                <span class="ms-option-label">${escapeHtml(opt.text || opt.value)}</span>
+                ${opt.count != null ? `<span class="ms-option-count">${Number(opt.count).toLocaleString()}</span>` : ""}
+            `;
+            const cb = row.querySelector("input");
+            cb.addEventListener("change", () => {
+                if (cb.checked) selected.add(opt.value);
+                else selected.delete(opt.value);
+                _updateBadge();
+                onChange(Array.from(selected));
+            });
+            optsHost.appendChild(row);
+        }
+        // Apply any active search filter to the re-rendered rows.
+        _applySearch();
+    }
+
+    function _applySearch() {
+        const q = (searchInput.value || "").trim().toLowerCase();
+        const rows = optsHost.querySelectorAll(".ms-option");
+        if (!q) {
+            rows.forEach(r => r.classList.remove("is-hidden"));
+            return;
+        }
+        rows.forEach(r => {
+            const label = (r.querySelector(".ms-option-label")?.textContent || "").toLowerCase();
+            r.classList.toggle("is-hidden", !label.includes(q));
+        });
+    }
+
+    // ----- Open / close plumbing -----
+
+    function open() {
+        if (!panel.hidden) return;
+        // Close any other open panels first — one at a time.
+        document.querySelectorAll(".ms-panel:not([hidden])").forEach(p => {
+            if (p !== panel) p.hidden = true;
+            const otherTrigger = p.parentElement?.querySelector(".ms-trigger");
+            if (otherTrigger && otherTrigger !== trigger) {
+                otherTrigger.setAttribute("aria-expanded", "false");
+            }
+        });
+        panel.hidden = false;
+        trigger.setAttribute("aria-expanded", "true");
+        // Panel defaults to left-anchored. If its right edge would
+        // clip the viewport, flip to right-anchored.
+        panel.classList.remove("ms-panel--right");
+        const rect = panel.getBoundingClientRect();
+        if (rect.right > window.innerWidth - 8) {
+            panel.classList.add("ms-panel--right");
+        }
+        // Focus the search (if visible) for keyboard users.
+        if (searchInput.style.display !== "none") {
+            setTimeout(() => searchInput.focus(), 0);
+        }
+    }
+
+    function close() {
+        if (panel.hidden) return;
+        panel.hidden = true;
+        trigger.setAttribute("aria-expanded", "false");
+    }
+
+    trigger.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (panel.hidden) open();
+        else close();
+    });
+
+    // Click-outside closes the panel. Registered once globally and
+    // guarded so each instance only reacts to outside clicks.
+    document.addEventListener("click", (e) => {
+        if (panel.hidden) return;
+        if (wrap.contains(e.target)) return;
+        close();
+    });
+
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && !panel.hidden) close();
+    });
+
+    searchInput.addEventListener("input", _applySearch);
+
+    clearBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (selected.size === 0) return;
+        selected.clear();
+        _render();
+        _updateBadge();
+        onChange([]);
+    });
+
+    allBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        // "Select all" respects the current search filter so the user
+        // can narrow by typing then bulk-check only the visible matches.
+        const q = (searchInput.value || "").trim().toLowerCase();
+        for (const opt of options) {
+            if (!q || (opt.text || opt.value).toLowerCase().includes(q)) {
+                selected.add(opt.value);
+            }
+        }
+        _render();
+        _updateBadge();
+        onChange(Array.from(selected));
+    });
+
+    _render();
+    _updateBadge();
+
+    // ----- Public API -----
+    return {
+        setOptions(opts) {
+            options = Array.isArray(opts) ? opts.slice() : [];
+            // Prune selections that are no longer valid options.
+            const valid = new Set(options.map(o => o.value));
+            for (const v of Array.from(selected)) {
+                if (!valid.has(v)) selected.delete(v);
+            }
+            _render();
+            _updateBadge();
+        },
+        getSelection() {
+            return Array.from(selected);
+        },
+        setSelection(values) {
+            selected.clear();
+            if (Array.isArray(values)) {
+                for (const v of values) selected.add(v);
+            }
+            _render();
+            _updateBadge();
+        },
+        clear() {
+            if (selected.size === 0) return;
+            selected.clear();
+            _render();
+            _updateBadge();
+        },
+        open,
+        close,
+        // Escape hatch for tests / debugging. Don't depend on this in
+        // production code paths.
+        _internals: { trigger, panel, options: () => options },
+    };
+}
+
+// Registry of live multi-select instances, keyed by filter name.
+// Populated as each dropdown is wired; consulted by applyClientFilters
+// and reset/hash-sync code paths.
+const _msDropdowns = Object.create(null);
 
 // Render the 10-pill movement cluster. Each pill is a checkbox
 // labelled with the category name; the checkbox value matches
@@ -1008,6 +1296,14 @@ function clearFilters() {
         const el = document.getElementById(id);
         if (el) el.value = "";
     });
+    // v0.15 — clear any multi-select dropdowns that have been migrated.
+    // Iterating the registry means future conversions (Source, Color,
+    // Emotion, Movement, Quality) hook in here automatically.
+    for (const key in _msDropdowns) {
+        if (_msDropdowns[key] && typeof _msDropdowns[key].clear === "function") {
+            _msDropdowns[key].clear();
+        }
+    }
     // Uncheck every movement category
     document.querySelectorAll(".movement-cluster input[type='checkbox']")
         .forEach(b => { b.checked = false; });
@@ -1818,9 +2114,27 @@ function applyClientFilters() {
     const srcVal = srcEl?.value;
     const srcName = srcVal ? (srcEl.selectedOptions?.[0]?.text || null) : null;
 
+    // v0.15 — Shape is now multi-select. Read from the factory instance
+    // if mounted; fall back to the legacy <select> for the boot window
+    // before the instance is created. Empty array === no filter.
+    let shapeNames = null;
+    const shapeMs = _msDropdowns.shape;
+    if (shapeMs) {
+        const sel = shapeMs.getSelection();
+        shapeNames = sel.length > 0 ? sel : null;
+    } else {
+        const v = document.getElementById("filter-shape")?.value || "";
+        shapeNames = v ? [v] : null;
+    }
+
     const filter = {
         sourceName: srcName,
-        shapeName:  document.getElementById("filter-shape")?.value  || null,
+        // v0.15 — `shapeName` (scalar) is superseded by `shapeNames`
+        // (array). Both fields are emitted during the transition so
+        // deck.js can accept either form; once all filters are
+        // multi-select the scalar will be deleted.
+        shapeName:  (shapeNames && shapeNames.length === 1) ? shapeNames[0] : null,
+        shapeNames: shapeNames,
         colorName:  document.getElementById("filter-color")?.value  || null,
         emotionName: document.getElementById("filter-emotion")?.value || null,
         // v0.8.7 — multi-select movement category cluster. Array of
