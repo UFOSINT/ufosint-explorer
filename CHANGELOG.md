@@ -15,6 +15,51 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-04-21 — Unified multi-select filter dropdowns
+
+### Changed
+- **All seven filter controls rewritten as multi-select dropdowns.**
+  The pre-v0.15 patchwork — two text inputs for Date, four native
+  `<select>` dropdowns, a 10-chip Movement row, and five sidebar
+  Quality checkboxes — consolidates into one row with the user's
+  chosen order: `Date Range | Shape | Source | Color | Emotion |
+  Quality | Movement | Reset`. Shared chrome (`.ms-trigger` /
+  `.ms-panel`) makes every control visually identical.
+- **Shape / Source / Color / Emotion / Movement** become multi-select:
+  users can pick any combination (e.g. Circle + Triangle + Light),
+  not just one value at a time. Empty selection = no filter.
+  Dropdown panels include a search input (when > 8 options) and
+  a Clear / Select-all footer.
+- **Quality dropdown** holds seven boolean toggles: High quality
+  only, Hide narrative red flags, Had description in source, Has
+  media, Has movement described, **Has color (categorized)**, and
+  **Has shape (categorized)**. The last two are new in v0.15 —
+  they require the standardized_shape / primary_color column to be
+  populated for a row to pass.
+- **Date Range dropdown** uses the same trigger chrome with a custom
+  body containing the two From / To year inputs.
+
+### Added
+- `buildMultiSelect()` factory in `static/app.js` (~250 lines). Owns
+  the trigger + panel DOM, click-outside / escape / search, and fires
+  `onChange(selection[])` on every toggle. `customBody` escape hatch
+  lets the Date dropdown render its range inputs inside the same
+  chrome.
+- `Uint8Array` allow-sets in `deck.js` `_rebuildVisible` for
+  Shape / Source / Color / Emotion. Hot-loop cost stays one byte
+  read per filter per row — same as the pre-v0.15 scalar compare.
+
+### Fixed
+- Dropdown panels were falling beneath the map's POINTS / HEATMAP /
+  HEX BINS overlay controls on first open. Bumped `.ms-panel`
+  z-index 50 → 9999 to clear Leaflet's control pane stacking.
+- Pre-v0.15 movement chip row and sidebar quality toggles stayed
+  visible alongside the new dropdowns because `.rail-section` and
+  `.filter-movement-row` set `display: flex` which overrides the
+  browser's default `display: none` for the HTML `hidden` attribute.
+  Added explicit `[hidden] { display: none !important }` overrides
+  so the attribute actually hides the pre-v0.15 hosts.
+
 ## [0.14.1] — 2026-04-19 — NRC donut animates live (bulk-buffer integration)
 
 ### Changed (v0.14 — NRC donut now lives in the bulk buffer)
