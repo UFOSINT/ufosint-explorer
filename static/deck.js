@@ -541,6 +541,12 @@
         const fMedia = (f.hasMedia != null) ? !!f.hasMedia : null;
         // v0.8.5 — has_movement_mentioned is flag bit 2.
         const fMove = (f.hasMovement != null) ? !!f.hasMovement : null;
+        // v0.15.1 — "Has color" / "Has shape" require a non-zero byte
+        // index (index 0 == "(unknown)" placeholder slot). Only active
+        // when the flag is literally true; null / false / missing =
+        // no filter.
+        const fHasColor = (f.hasColor === true);
+        const fHasShape = (f.hasShape === true);
 
         // Time window → day range. Timeline playback wins; otherwise
         // fall back to the UI year range (converted to days).
@@ -652,6 +658,11 @@
                 const r = rs[i];
                 if (r === UNK || r < rMin) continue;
             }
+
+            // v0.15.1 — "Has color" / "Has shape" require categorized
+            // data. shp/ci byte == 0 means the "(unknown)" slot.
+            if (fHasShape && shp[i] === 0) continue;
+            if (fHasColor && ci[i]  === 0) continue;
 
             // Flag bit filters.
             if (fDesc !== null) {

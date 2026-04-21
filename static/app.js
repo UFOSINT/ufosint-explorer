@@ -732,6 +732,13 @@ const _QUALITY_OPTIONS = [
     { value: "hasDescription", text: "Had description in source" },
     { value: "hasMedia",       text: "Has media (photo / video)" },
     { value: "hasMovement",    text: "Has movement described" },
+    // v0.15.1 — "Has color" / "Has shape" require the standardized_color
+    // / standardized_shape column to be populated (byte index > 0 in
+    // the bulk buffer). Implemented in deck.js via a separate
+    // `hasColor` / `hasShape` filter flag so the main Color / Shape
+    // multi-selects stay free for specific-value picking.
+    { value: "hasColor",       text: "Has color (categorized)" },
+    { value: "hasShape",       text: "Has shape (categorized)" },
 ];
 function _mountQualityMultiSelect() {
     const wrap = document.getElementById("ms-quality");
@@ -746,13 +753,15 @@ function _mountQualityMultiSelect() {
             const q = state.qualityFilter = state.qualityFilter || {};
             q.highQuality    = set.has("highQuality");
             q.hideHoaxes     = set.has("hideHoaxes");
-            // Nullable trio: null (no filter) when unchecked, true when
+            // Nullable group: null (no filter) when unchecked, true when
             // checked. We never emit `false` from this dropdown — the
             // UX is "require presence" or "don't care", not "require
             // absence".
             q.hasDescription = set.has("hasDescription") ? true : null;
             q.hasMedia       = set.has("hasMedia")       ? true : null;
             q.hasMovement    = set.has("hasMovement")    ? true : null;
+            q.hasColor       = set.has("hasColor")       ? true : null;
+            q.hasShape       = set.has("hasShape")       ? true : null;
             if (typeof applyFilters === "function") applyFilters();
         },
     });
@@ -765,6 +774,8 @@ function _mountQualityMultiSelect() {
     if (q.hasDescription) seed.push("hasDescription");
     if (q.hasMedia)       seed.push("hasMedia");
     if (q.hasMovement)    seed.push("hasMovement");
+    if (q.hasColor)       seed.push("hasColor");
+    if (q.hasShape)       seed.push("hasShape");
     if (seed.length) _msDropdowns.quality.setSelection(seed);
 }
 
@@ -2341,6 +2352,9 @@ function applyClientFilters() {
         hasMedia:       q.hasMedia,
         // v0.8.5 — v0.8.3b movement classification (boolean: any bit)
         hasMovement:    q.hasMovement,
+        // v0.15.1 — require categorized shape/color (non-zero byte index)
+        hasColor:       q.hasColor,
+        hasShape:       q.hasShape,
     };
     window.UFODeck.applyClientFilters(filter);
     window.UFODeck.refreshActiveLayer();
@@ -2399,6 +2413,8 @@ function _countActiveFilters(f) {
     if (f.hasDescription !== undefined && f.hasDescription !== null) n++;
     if (f.hasMedia !== undefined && f.hasMedia !== null) n++;
     if (f.hasMovement !== undefined && f.hasMovement !== null) n++;
+    if (f.hasColor !== undefined && f.hasColor !== null) n++;
+    if (f.hasShape !== undefined && f.hasShape !== null) n++;
     return n;
 }
 
