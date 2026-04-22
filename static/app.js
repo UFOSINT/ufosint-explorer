@@ -8323,6 +8323,12 @@ function closeModal() {
 
 const TOUR_STORAGE_KEY = "ufosint-intro-seen";
 
+// v0.15.6 — Tour reflects the unified filter bar (v0.15.0) and the
+// FULL VIEW / FOCUSED VIEW TimeBrush toggle (v0.15.4). The pre-v0.15
+// step 2 pointed users at the sidebar for quality toggles, which
+// have since moved into the top-bar Quality dropdown — that step
+// now points at the filter bar itself, and the sidebar gets its
+// own step reframed around the live analytics it actually hosts.
 const TOUR_STEPS = [
     {
         target: ".observatory-canvas-wrap",
@@ -8330,8 +8336,13 @@ const TOUR_STEPS = [
         position: "left",
     },
     {
+        target: "#filters-bar",
+        body: "The <strong>filter bar</strong> — seven multi-select dropdowns: Date · Shape · Source · Color · Emotion · Quality · Movement. Pick any combination (Circle + Triangle + Light, say) and the map re-filters live. The <em>Quality</em> dropdown includes <em>Has color</em> and <em>Has shape</em> toggles to find records the pipeline successfully categorized.",
+        position: "bottom",
+    },
+    {
         target: ".observatory-rail",
-        body: "<strong>Data Quality filters</strong> live here. Toggle high-quality only, narrative red flags, media, movement categories, and more. Filters update the map in real time.",
+        body: "<strong>Live Analytics</strong> — Top Shapes, By Source, and Quality Distribution. Every chart re-tallies instantly against your current filter, so you can see the shape of whatever slice you're exploring.",
         position: "right",
     },
     {
@@ -8341,7 +8352,7 @@ const TOUR_STEPS = [
     },
     {
         target: ".observatory-time-brush",
-        body: "The <strong>TimeBrush</strong>. Drag handles to select a time window. Scroll to zoom into a decade or month. Hit Play to animate through history.",
+        body: "The <strong>TimeBrush</strong>. Drag handles to select a time window. Scroll to zoom into a decade or month. Hit ▶ PLAY to animate through history. The <em>FULL VIEW</em> button on the left of the bottom bar expands the scale to the full 34 AD → 2028 range.",
         position: "top",
     },
     {
