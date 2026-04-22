@@ -194,6 +194,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     // text inputs, "More filters" drawer, mobile filter bar toggle.
     initFilterBarPolish();
 
+    // v0.15 — mount the Quality + Date multi-selects immediately. They
+    // don't depend on remote data; Source/Shape/Color/Emotion/Movement
+    // mount later once /api/filters + POINTS finish loading.
+    _mountQualityMultiSelect();
+    _mountDateDropdown();
+
     // Map place search (Nominatim) + browser geolocation
     initMapPlaceSearch();
 
@@ -623,6 +629,9 @@ function populateFilterDropdowns(data) {
             sourceSelect.appendChild(opt);
         });
     }
+    // v0.15 — also mount the Source multi-select now that we have the
+    // canonical source_database list from the server.
+    _mountSourceMultiSelect(data.sources || []);
     // Shape / color / emotion / movement arrive later via
     // populateFilterDropdownsFromDeck(), called from bootDeckGL()
     // and _wireTimeBrushToDeck() once POINTS.ready flips.
@@ -640,10 +649,205 @@ function populateFilterDropdownsFromDeck() {
         return;
     }
     const P = window.UFODeck.POINTS;
+    // v0.15 — Shape is now a multi-select dropdown (buildMultiSelect
+    // factory). The legacy <select> is still populated in parallel so
+    // any DOM-reading code that hasn't been migrated yet still works.
     _populateLookupDropdown("filter-shape",   P.shapes,   "All shapes");
     _populateLookupDropdown("filter-color",   P.colors,   "All colors");
     _populateLookupDropdown("filter-emotion", P.emotions, "All emotions");
     _mountMovementCluster(P.movements);
+
+    // v0.15 — mount the Shape / Color / Emotion / Movement
+    // multi-selects. All four are lookup-driven (POINTS.*).
+    _mountShapeMultiSelect(P.shapes);
+    _mountLookupMultiSelect("color",    "Color",    P.colors);
+    _mountLookupMultiSelect("emotion",  "Emotion",  P.emotions);
+    _mountLookupMultiSelect("movement", "Movement", P.movements);
+}
+
+// v0.15 — populate the Shape multi-select from POINTS.shapes. Called
+// after deck.gl boots so we have the canonical standardized list.
+// Idempotent: re-uses the existing instance if already mounted.
+function _mountShapeMultiSelect(shapes) {
+    _mountLookupMultiSelect("shape", "Shape", shapes);
+}
+
+// v0.15 — generic lookup-driven multi-select mount. Used by Shape,
+// Color, Emotion, Movement — all of which drop the index-0 "(unknown)"
+// placeholder and map each remaining name to an {value, text} option.
+// Source is a special case (it needs the /api/filters payload, not
+// POINTS) so it has its own mount below.
+function _mountLookupMultiSelect(key, label, values) {
+    const wrap = document.getElementById(`ms-${key}`);
+    if (!wrap) return;
+    const opts = (values || [])
+        .filter(v => !!v)  // drop the index-0 "(unknown)" / null placeholder
+        .map(v => ({ value: v, text: v }));
+    if (_msDropdowns[key]) {
+        _msDropdowns[key].setOptions(opts);
+        return;
+    }
+    _msDropdowns[key] = buildMultiSelect({
+        wrapEl: wrap,
+        label: label,
+        options: opts,
+        onChange: () => {
+            if (typeof applyFilters === "function") applyFilters();
+        },
+    });
+}
+
+// v0.15 — Source multi-select. Options ship with numeric IDs from
+// /api/filters (source_database.id), but the factory stores the
+// NAME as the selection value because that's what _rebuildVisible's
+// POINTS.sources.indexOf() lookup expects. Called from
+// populateFilterDropdowns() after /api/filters resolves.
+function _mountSourceMultiSelect(sources) {
+    const wrap = document.getElementById("ms-source");
+    if (!wrap) return;
+    const opts = (sources || []).map(s => ({ value: s.name, text: s.name }));
+    if (_msDropdowns.source) {
+        _msDropdowns.source.setOptions(opts);
+        return;
+    }
+    _msDropdowns.source = buildMultiSelect({
+        wrapEl: wrap,
+        label: "Source",
+        options: opts,
+        onChange: () => {
+            if (typeof applyFilters === "function") applyFilters();
+        },
+    });
+}
+
+// v0.15 — Quality multi-select. Five boolean toggles keyed by the
+// state.qualityFilter flag they flip. Selecting "highQuality" sets
+// state.qualityFilter.highQuality = true, etc. Cleared state = null
+// for the nullable trio (hasDescription / hasMedia / hasMovement) so
+// the deck.js filter treats them as "no filter" rather than "must
+// be false".
+const _QUALITY_OPTIONS = [
+    { value: "highQuality",    text: "High quality only (score ≥ 60)" },
+    { value: "hideHoaxes",     text: "Hide narrative red flags" },
+    { value: "hasDescription", text: "Had description in source" },
+    { value: "hasMedia",       text: "Has media (photo / video)" },
+    { value: "hasMovement",    text: "Has movement described" },
+    // v0.15.1 — "Has color" / "Has shape" require the standardized_color
+    // / standardized_shape column to be populated (byte index > 0 in
+    // the bulk buffer). Implemented in deck.js via a separate
+    // `hasColor` / `hasShape` filter flag so the main Color / Shape
+    // multi-selects stay free for specific-value picking.
+    { value: "hasColor",       text: "Has color (categorized)" },
+    { value: "hasShape",       text: "Has shape (categorized)" },
+];
+function _mountQualityMultiSelect() {
+    const wrap = document.getElementById("ms-quality");
+    if (!wrap) return;
+    if (_msDropdowns.quality) return;  // already mounted
+    _msDropdowns.quality = buildMultiSelect({
+        wrapEl: wrap,
+        label: "Quality",
+        options: _QUALITY_OPTIONS,
+        onChange: (selected) => {
+            const set = new Set(selected);
+            const q = state.qualityFilter = state.qualityFilter || {};
+            q.highQuality    = set.has("highQuality");
+            q.hideHoaxes     = set.has("hideHoaxes");
+            // Nullable group: null (no filter) when unchecked, true when
+            // checked. We never emit `false` from this dropdown — the
+            // UX is "require presence" or "don't care", not "require
+            // absence".
+            q.hasDescription = set.has("hasDescription") ? true : null;
+            q.hasMedia       = set.has("hasMedia")       ? true : null;
+            q.hasMovement    = set.has("hasMovement")    ? true : null;
+            q.hasColor       = set.has("hasColor")       ? true : null;
+            q.hasShape       = set.has("hasShape")       ? true : null;
+            if (typeof applyFilters === "function") applyFilters();
+        },
+    });
+    // Seed from whatever state.qualityFilter already holds (e.g. from
+    // URL hash restore or a prior session).
+    const q = state.qualityFilter || {};
+    const seed = [];
+    if (q.highQuality)    seed.push("highQuality");
+    if (q.hideHoaxes)     seed.push("hideHoaxes");
+    if (q.hasDescription) seed.push("hasDescription");
+    if (q.hasMedia)       seed.push("hasMedia");
+    if (q.hasMovement)    seed.push("hasMovement");
+    if (q.hasColor)       seed.push("hasColor");
+    if (q.hasShape)       seed.push("hasShape");
+    if (seed.length) _msDropdowns.quality.setSelection(seed);
+}
+
+// v0.15 — Date Range dropdown. Custom-body panel with the two year
+// inputs that used to live directly in the filter bar. The hidden
+// <input>s in the HTML (filter-date-from / filter-date-to) mirror
+// the panel's values so everything that reads them (URL hash write,
+// applyClientFilters, legacy code) keeps working unchanged.
+function _mountDateDropdown() {
+    const wrap = document.getElementById("ms-date");
+    if (!wrap) return;
+    if (_msDropdowns.date) return;
+    const hiddenFrom = document.getElementById("filter-date-from");
+    const hiddenTo   = document.getElementById("filter-date-to");
+
+    let fromInput, toInput;
+    _msDropdowns.date = buildMultiSelect({
+        wrapEl: wrap,
+        label: "Date Range",
+        options: [],
+        getBadgeCount: () => {
+            // Count = 1 if either end is set (treat the range as a
+            // single compound filter, like Movement was treated pre-v0.15).
+            const fv = hiddenFrom?.value?.trim() || "";
+            const tv = hiddenTo?.value?.trim()   || "";
+            return (fv || tv) ? 1 : 0;
+        },
+        customBody: (bodyEl) => {
+            bodyEl.innerHTML = `
+                <div class="ms-date-row">
+                    <label for="ms-date-from-input" class="ms-date-label">From</label>
+                    <input type="text" id="ms-date-from-input" class="ms-date-input" placeholder="YYYY or YYYY-MM-DD" />
+                </div>
+                <div class="ms-date-row">
+                    <label for="ms-date-to-input" class="ms-date-label">To</label>
+                    <input type="text" id="ms-date-to-input" class="ms-date-input" placeholder="YYYY or YYYY-MM-DD" />
+                </div>
+                <div class="ms-date-footer">
+                    <button type="button" class="ms-date-clear">Clear dates</button>
+                </div>
+            `;
+            fromInput = bodyEl.querySelector("#ms-date-from-input");
+            toInput   = bodyEl.querySelector("#ms-date-to-input");
+            // Seed from hidden inputs (hash restore etc.)
+            fromInput.value = hiddenFrom?.value || "";
+            toInput.value   = hiddenTo?.value   || "";
+
+            const commit = () => {
+                if (hiddenFrom) hiddenFrom.value = fromInput.value;
+                if (hiddenTo)   hiddenTo.value   = toInput.value;
+                _msDropdowns.date.refreshBadge();
+                if (typeof applyFilters === "function") applyFilters();
+            };
+            // Debounce like the old inline inputs did — users type a
+            // full year / date and we don't want thrash on every keystroke.
+            let t = null;
+            const onInput = () => {
+                clearTimeout(t);
+                t = setTimeout(commit, 400);
+            };
+            fromInput.addEventListener("input", onInput);
+            toInput.addEventListener("input", onInput);
+            fromInput.addEventListener("blur", () => { clearTimeout(t); commit(); });
+            toInput.addEventListener("blur",   () => { clearTimeout(t); commit(); });
+
+            bodyEl.querySelector(".ms-date-clear").addEventListener("click", () => {
+                fromInput.value = "";
+                toInput.value = "";
+                commit();
+            });
+        },
+    });
 }
 
 // Blank a <select>, write a placeholder option, then append one
@@ -679,6 +883,283 @@ function _populateLookupDropdown(id, values, placeholder) {
         if (hit) el.value = prev;
     }
 }
+
+// =========================================================================
+// v0.15 — Multi-select filter dropdown factory
+// =========================================================================
+// Shared chrome for every top-bar filter control so Shape / Source / Color
+// / Emotion / Movement / Quality all read as one visual family. Each call
+// takes over a pre-existing `<div class="ms-wrap">` scaffold in index.html
+// and wires the interaction.
+//
+// Options + selection live inside the closure. Callers talk to the
+// instance via the returned API:
+//
+//   const ms = buildMultiSelect({
+//       wrapEl:    <div.ms-wrap>,
+//       label:     "Shape",
+//       options:   [{value:"Circle", text:"Circle", count:42901}, ...],
+//       onChange:  (selected) => { ... selected is string[] ... },
+//   });
+//   ms.setOptions(newOptions);   // refresh list, preserve selection
+//   ms.getSelection();           // current selected values (string[])
+//   ms.setSelection(["Circle"]); // programmatic set (e.g. hash restore)
+//   ms.clear();                  // deselect all
+//
+// The trigger badge auto-updates; the onChange callback fires on every
+// user check/uncheck. Empty selection means "no filter" — callers
+// should map `[]` to null in their filter state.
+function buildMultiSelect(config) {
+    const wrap = config.wrapEl;
+    if (!wrap) {
+        console.warn("buildMultiSelect: no wrapEl");
+        return null;
+    }
+    const label = config.label || "Filter";
+    const placeholder = config.placeholder || `Search ${label.toLowerCase()}…`;
+    const onChange = typeof config.onChange === "function" ? config.onChange : () => {};
+    // v0.15 — escape hatch for non-checkbox panels (Date range, etc.).
+    // When present, the .ms-options container is handed to the caller
+    // to render whatever controls they want. The factory still owns
+    // the trigger chrome, open/close, click-outside, and badge —
+    // badge count comes from config.getBadgeCount() in this mode.
+    const customBody = typeof config.customBody === "function" ? config.customBody : null;
+    const getBadgeCount = typeof config.getBadgeCount === "function" ? config.getBadgeCount : null;
+
+    // Build the DOM once. The wrap element just needs to exist; we
+    // write the trigger + panel into it.
+    wrap.innerHTML = "";
+    const trigger = document.createElement("button");
+    trigger.type = "button";
+    trigger.className = "ms-trigger";
+    trigger.setAttribute("aria-haspopup", "listbox");
+    trigger.setAttribute("aria-expanded", "false");
+    trigger.innerHTML = `
+        <span class="ms-trigger-label">${escapeHtml(label)}</span>
+        <span class="ms-trigger-badge" hidden>0</span>
+        <span class="ms-trigger-chevron" aria-hidden="true">▾</span>
+    `;
+
+    const panel = document.createElement("div");
+    panel.className = "ms-panel";
+    panel.hidden = true;
+    panel.setAttribute("role", "listbox");
+    panel.innerHTML = `
+        <input class="ms-search" type="text" placeholder="${escapeHtml(placeholder)}" />
+        <div class="ms-options"></div>
+        <div class="ms-footer">
+            <button class="ms-clear" type="button">Clear</button>
+            <button class="ms-all" type="button">Select all</button>
+        </div>
+    `;
+
+    wrap.appendChild(trigger);
+    wrap.appendChild(panel);
+
+    const badge = trigger.querySelector(".ms-trigger-badge");
+    const searchInput = panel.querySelector(".ms-search");
+    const optsHost = panel.querySelector(".ms-options");
+    const clearBtn = panel.querySelector(".ms-clear");
+    const allBtn = panel.querySelector(".ms-all");
+
+    // Selection is a Set of string values for O(1) toggle + dedup.
+    const selected = new Set();
+    // Current options list. Kept as the source of truth for re-render.
+    let options = Array.isArray(config.options) ? config.options.slice() : [];
+
+    function _updateBadge() {
+        // Custom-body dropdowns (Date) supply their own count via
+        // getBadgeCount; checkbox-list dropdowns use selection size.
+        const n = customBody ? (getBadgeCount ? (getBadgeCount() | 0) : 0) : selected.size;
+        if (n > 0) {
+            badge.textContent = String(n);
+            badge.hidden = false;
+        } else {
+            badge.hidden = true;
+        }
+    }
+
+    function _render() {
+        optsHost.innerHTML = "";
+        // Custom-body mode: hand the container to the caller and bail.
+        // Search + Clear/Select-all footer are hidden in this mode.
+        if (customBody) {
+            searchInput.style.display = "none";
+            panel.querySelector(".ms-footer").style.display = "none";
+            customBody(optsHost);
+            return;
+        }
+        if (options.length === 0) {
+            const empty = document.createElement("div");
+            empty.className = "ms-empty";
+            empty.textContent = "No options yet";
+            optsHost.appendChild(empty);
+            // Hide the search input too when empty — nothing to filter.
+            searchInput.style.display = "none";
+            return;
+        }
+        // Show search only when the list is long enough to warrant it.
+        searchInput.style.display = options.length > 8 ? "" : "none";
+        for (const opt of options) {
+            const row = document.createElement("label");
+            row.className = "ms-option";
+            row.dataset.value = opt.value;
+            row.innerHTML = `
+                <input type="checkbox" ${selected.has(opt.value) ? "checked" : ""} />
+                <span class="ms-option-label">${escapeHtml(opt.text || opt.value)}</span>
+                ${opt.count != null ? `<span class="ms-option-count">${Number(opt.count).toLocaleString()}</span>` : ""}
+            `;
+            const cb = row.querySelector("input");
+            cb.addEventListener("change", () => {
+                if (cb.checked) selected.add(opt.value);
+                else selected.delete(opt.value);
+                _updateBadge();
+                onChange(Array.from(selected));
+            });
+            optsHost.appendChild(row);
+        }
+        // Apply any active search filter to the re-rendered rows.
+        _applySearch();
+    }
+
+    function _applySearch() {
+        const q = (searchInput.value || "").trim().toLowerCase();
+        const rows = optsHost.querySelectorAll(".ms-option");
+        if (!q) {
+            rows.forEach(r => r.classList.remove("is-hidden"));
+            return;
+        }
+        rows.forEach(r => {
+            const label = (r.querySelector(".ms-option-label")?.textContent || "").toLowerCase();
+            r.classList.toggle("is-hidden", !label.includes(q));
+        });
+    }
+
+    // ----- Open / close plumbing -----
+
+    function open() {
+        if (!panel.hidden) return;
+        // Close any other open panels first — one at a time.
+        document.querySelectorAll(".ms-panel:not([hidden])").forEach(p => {
+            if (p !== panel) p.hidden = true;
+            const otherTrigger = p.parentElement?.querySelector(".ms-trigger");
+            if (otherTrigger && otherTrigger !== trigger) {
+                otherTrigger.setAttribute("aria-expanded", "false");
+            }
+        });
+        panel.hidden = false;
+        trigger.setAttribute("aria-expanded", "true");
+        // Panel defaults to left-anchored. If its right edge would
+        // clip the viewport, flip to right-anchored.
+        panel.classList.remove("ms-panel--right");
+        const rect = panel.getBoundingClientRect();
+        if (rect.right > window.innerWidth - 8) {
+            panel.classList.add("ms-panel--right");
+        }
+        // Focus the search (if visible) for keyboard users.
+        if (searchInput.style.display !== "none") {
+            setTimeout(() => searchInput.focus(), 0);
+        }
+    }
+
+    function close() {
+        if (panel.hidden) return;
+        panel.hidden = true;
+        trigger.setAttribute("aria-expanded", "false");
+    }
+
+    trigger.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (panel.hidden) open();
+        else close();
+    });
+
+    // Click-outside closes the panel. Registered once globally and
+    // guarded so each instance only reacts to outside clicks.
+    document.addEventListener("click", (e) => {
+        if (panel.hidden) return;
+        if (wrap.contains(e.target)) return;
+        close();
+    });
+
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && !panel.hidden) close();
+    });
+
+    searchInput.addEventListener("input", _applySearch);
+
+    clearBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (selected.size === 0) return;
+        selected.clear();
+        _render();
+        _updateBadge();
+        onChange([]);
+    });
+
+    allBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        // "Select all" respects the current search filter so the user
+        // can narrow by typing then bulk-check only the visible matches.
+        const q = (searchInput.value || "").trim().toLowerCase();
+        for (const opt of options) {
+            if (!q || (opt.text || opt.value).toLowerCase().includes(q)) {
+                selected.add(opt.value);
+            }
+        }
+        _render();
+        _updateBadge();
+        onChange(Array.from(selected));
+    });
+
+    _render();
+    _updateBadge();
+
+    // ----- Public API -----
+    return {
+        setOptions(opts) {
+            options = Array.isArray(opts) ? opts.slice() : [];
+            // Prune selections that are no longer valid options.
+            const valid = new Set(options.map(o => o.value));
+            for (const v of Array.from(selected)) {
+                if (!valid.has(v)) selected.delete(v);
+            }
+            _render();
+            _updateBadge();
+        },
+        getSelection() {
+            return Array.from(selected);
+        },
+        setSelection(values) {
+            selected.clear();
+            if (Array.isArray(values)) {
+                for (const v of values) selected.add(v);
+            }
+            _render();
+            _updateBadge();
+        },
+        clear() {
+            if (selected.size === 0) return;
+            selected.clear();
+            _render();
+            _updateBadge();
+        },
+        // v0.15 — custom-body dropdowns (Date) call this to refresh
+        // the count badge after their internal state changes. Checkbox
+        // dropdowns update the badge automatically on each toggle.
+        refreshBadge: _updateBadge,
+        open,
+        close,
+        // Escape hatch for tests / debugging. Don't depend on this in
+        // production code paths.
+        _internals: { trigger, panel, options: () => options },
+    };
+}
+
+// Registry of live multi-select instances, keyed by filter name.
+// Populated as each dropdown is wired; consulted by applyClientFilters
+// and reset/hash-sync code paths.
+const _msDropdowns = Object.create(null);
 
 // Render the 10-pill movement cluster. Each pill is a checkbox
 // labelled with the category name; the checkbox value matches
@@ -1008,6 +1489,14 @@ function clearFilters() {
         const el = document.getElementById(id);
         if (el) el.value = "";
     });
+    // v0.15 — clear any multi-select dropdowns that have been migrated.
+    // Iterating the registry means future conversions (Source, Color,
+    // Emotion, Movement, Quality) hook in here automatically.
+    for (const key in _msDropdowns) {
+        if (_msDropdowns[key] && typeof _msDropdowns[key].clear === "function") {
+            _msDropdowns[key].clear();
+        }
+    }
     // Uncheck every movement category
     document.querySelectorAll(".movement-cluster input[type='checkbox']")
         .forEach(b => { b.checked = false; });
@@ -1808,24 +2297,38 @@ function applyClientFilters() {
         return false;
     }
     const q = state.qualityFilter || {};
-    // v0.10.0-fix: the source dropdown stores numeric source_db_id
-    // as its value (e.g. "1" for MUFON), but _rebuildVisible does
-    // POINTS.sources.indexOf(f.sourceName) which needs the NAME
-    // string ("MUFON"). Read the selected option's TEXT instead
-    // of its value. When "All sources" is selected (value=""),
-    // sourceName correctly becomes null (no filter).
-    const srcEl = document.getElementById("filter-source");
-    const srcVal = srcEl?.value;
-    const srcName = srcVal ? (srcEl.selectedOptions?.[0]?.text || null) : null;
+
+    // v0.15 — unified multi-select reader. Each filter reads its
+    // selection array from the factory instance; empty array means
+    // "no filter". During the transition the legacy scalar sourceName
+    // / shapeName / colorName / emotionName fields are also emitted
+    // (single-element collapse) so any code path that hasn't been
+    // migrated to the array form keeps working.
+    const _msSel = (key) => {
+        const inst = _msDropdowns[key];
+        if (!inst) return null;
+        const sel = inst.getSelection();
+        return sel.length > 0 ? sel : null;
+    };
+    const shapeNames   = _msSel("shape");
+    const sourceNames  = _msSel("source");
+    const colorNames   = _msSel("color");
+    const emotionNames = _msSel("emotion");
+    const movementCats = _msSel("movement") || [];
 
     const filter = {
-        sourceName: srcName,
-        shapeName:  document.getElementById("filter-shape")?.value  || null,
-        colorName:  document.getElementById("filter-color")?.value  || null,
-        emotionName: document.getElementById("filter-emotion")?.value || null,
-        // v0.8.7 — multi-select movement category cluster. Array of
-        // category names (OR-semantics bit mask in _rebuildVisible).
-        movementCats: _readMovementCats(),
+        // Legacy scalar fields (single-selection collapse). Kept for
+        // any consumer outside _rebuildVisible that still reads them.
+        sourceName:  (sourceNames  && sourceNames.length  === 1) ? sourceNames[0]  : null,
+        shapeName:   (shapeNames   && shapeNames.length   === 1) ? shapeNames[0]   : null,
+        colorName:   (colorNames   && colorNames.length   === 1) ? colorNames[0]   : null,
+        emotionName: (emotionNames && emotionNames.length === 1) ? emotionNames[0] : null,
+        // v0.15 — canonical array forms consumed by _rebuildVisible.
+        sourceNames,
+        shapeNames,
+        colorNames,
+        emotionNames,
+        movementCats,
         yearFrom:   _parseYearFilter(document.getElementById("filter-date-from")?.value),
         yearTo:     _parseYearFilter(document.getElementById("filter-date-to")?.value),
         // v0.11.4 — region (geofence) from the REGION draw tool.
@@ -1849,6 +2352,9 @@ function applyClientFilters() {
         hasMedia:       q.hasMedia,
         // v0.8.5 — v0.8.3b movement classification (boolean: any bit)
         hasMovement:    q.hasMovement,
+        // v0.15.1 — require categorized shape/color (non-zero byte index)
+        hasColor:       q.hasColor,
+        hasShape:       q.hasShape,
     };
     window.UFODeck.applyClientFilters(filter);
     window.UFODeck.refreshActiveLayer();
@@ -1907,6 +2413,8 @@ function _countActiveFilters(f) {
     if (f.hasDescription !== undefined && f.hasDescription !== null) n++;
     if (f.hasMedia !== undefined && f.hasMedia !== null) n++;
     if (f.hasMovement !== undefined && f.hasMovement !== null) n++;
+    if (f.hasColor !== undefined && f.hasColor !== null) n++;
+    if (f.hasShape !== undefined && f.hasShape !== null) n++;
     return n;
 }
 
@@ -7176,15 +7684,24 @@ function initFilterBarPolish() {
 
     function updateMobileCount() {
         if (!mobileCount) return;
-        // v0.8.7: FILTER_FIELDS was trimmed to the 6 surviving
-        // filters, so we can just count values without any
-        // per-field exclusion logic. Movement cluster counts as
-        // one if any category is checked.
-        let n = FILTER_FIELDS.reduce((count, f) => {
-            const el = document.getElementById(f.id);
-            return count + (el && el.value ? 1 : 0);
-        }, 0);
-        if (_readMovementCats().length) n++;
+        // v0.15 — read from the multi-select registry now that the
+        // legacy <select>s are hidden and empty. Each dropdown with a
+        // non-empty selection counts as one active filter, matching
+        // how the trigger badge works.
+        let n = 0;
+        for (const key in _msDropdowns) {
+            const inst = _msDropdowns[key];
+            if (!inst) continue;
+            if (key === "date") {
+                // Date uses the hidden inputs — treat as 1 filter if
+                // either bound is set.
+                const f = document.getElementById("filter-date-from")?.value?.trim() || "";
+                const t = document.getElementById("filter-date-to")?.value?.trim()   || "";
+                if (f || t) n++;
+            } else if (inst.getSelection().length > 0) {
+                n++;
+            }
+        }
         if (n > 0) {
             mobileCount.textContent = String(n);
             mobileCount.hidden = false;

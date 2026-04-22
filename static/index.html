@@ -202,62 +202,77 @@
         </nav>
     </header>
 
-    <!-- Filters Bar -->
+    <!-- Filters Bar
+         v0.15 — Unified multi-select dropdown bar. All seven filter
+         controls share the same `buildMultiSelect()` chrome so they
+         read as one visual family. Order: Date Range → Shape →
+         Source → Color → Emotion → Quality → Movement → Reset.
+         Each `<div class="ms-wrap">` is taken over at runtime by the
+         factory; hidden legacy <select>/inputs stay in the DOM during
+         the transition to keep any stray DOM-readers happy. -->
     <div id="filters-bar">
         <button id="btn-mobile-filters" class="btn btn-secondary btn-small" type="button" aria-expanded="false" aria-controls="filters-bar">
             <span>Filters</span>
             <span class="filter-count-badge" id="mobile-filter-count" hidden>0</span>
             <span class="mobile-filters-chevron" aria-hidden="true">▾</span>
         </button>
-        <fieldset class="filter-group filter-group-date">
-            <legend>Date Range</legend>
-            <label class="sr-only" for="filter-date-from">From date</label>
-            <input type="text" id="filter-date-from" placeholder="YYYY or YYYY-MM-DD" size="14" />
-            <span class="filter-sep" aria-hidden="true">&ndash;</span>
-            <label class="sr-only" for="filter-date-to">To date</label>
-            <input type="text" id="filter-date-to" placeholder="YYYY or YYYY-MM-DD" size="14" />
-        </fieldset>
-        <!-- v0.8.7: filter bar now only shows filters backed by a
-             dedicated byte slot in the 32-byte bulk row. Shape, Source,
-             Color, Emotion are populated from POINTS metadata after
-             bootDeckGL() completes so they use the canonical
-             standardized lists. Country / State / Hynek / Vallee /
-             Collection were deleted because they had no client-side
-             filter wiring and the data wasn't in the buffer anyway. -->
+        <!-- 1. Date Range — custom-body dropdown containing the two
+             year inputs. Same trigger chrome as the others. -->
         <div class="filter-group">
-            <label for="filter-shape">Shape</label>
-            <select id="filter-shape"><option value="">All shapes</option></select>
+            <div id="ms-date" class="ms-wrap" data-filter="date"></div>
+            <input type="hidden" id="filter-date-from" />
+            <input type="hidden" id="filter-date-to" />
         </div>
+        <!-- 2. Shape — multi-select, POINTS.shapes. -->
         <div class="filter-group">
-            <label for="filter-source">Source</label>
-            <select id="filter-source"><option value="">All sources</option></select>
+            <div id="ms-shape" class="ms-wrap" data-filter="shape"></div>
+            <select id="filter-shape" hidden aria-hidden="true"><option value="">All shapes</option></select>
         </div>
+        <!-- 3. Source — multi-select, source_database rows from
+             /api/filters (the only dropdown whose options ship
+             with numeric IDs; the factory stores the source name
+             as the value). -->
         <div class="filter-group">
-            <label for="filter-color">Color</label>
-            <select id="filter-color"><option value="">All colors</option></select>
+            <div id="ms-source" class="ms-wrap" data-filter="source"></div>
+            <select id="filter-source" hidden aria-hidden="true"><option value="">All sources</option></select>
         </div>
+        <!-- 4. Color — multi-select, POINTS.colors. -->
         <div class="filter-group">
-            <label for="filter-emotion">Emotion</label>
-            <select id="filter-emotion"><option value="">All emotions</option></select>
+            <div id="ms-color" class="ms-wrap" data-filter="color"></div>
+            <select id="filter-color" hidden aria-hidden="true"><option value="">All colors</option></select>
+        </div>
+        <!-- 5. Emotion — multi-select, POINTS.emotions (legacy 8-class
+             keyword classifier; v0.11 transformer fields are surfaced
+             elsewhere in the Insights page). -->
+        <div class="filter-group">
+            <div id="ms-emotion" class="ms-wrap" data-filter="emotion"></div>
+            <select id="filter-emotion" hidden aria-hidden="true"><option value="">All emotions</option></select>
+        </div>
+        <!-- 6. Quality — multi-select of 5 data-quality boolean toggles
+             (highQuality, hideHoaxes, hasDescription, hasMedia,
+             hasMovement). Each selected key flips the corresponding
+             state.qualityFilter flag on. -->
+        <div class="filter-group">
+            <div id="ms-quality" class="ms-wrap" data-filter="quality"></div>
+        </div>
+        <!-- 7. Movement — multi-select of POINTS.movements (10 canonical
+             categories). Replaces the pre-v0.15 always-visible
+             chip row to put Movement on equal visual footing with
+             the other filters. -->
+        <div class="filter-group">
+            <div id="ms-movement" class="ms-wrap" data-filter="movement"></div>
         </div>
         <!-- v0.10.0: Apply button removed. All filters are now
-             live-reactive with a 250ms debounce on selects and
-             500ms on date inputs. The "Reset" link replaces both
-             Apply + Clear. Science reviewer confirmed the ~5ms
-             applyClientFilters cost makes batching unnecessary. -->
+             live-reactive; the "Reset" link replaces both Apply + Clear. -->
         <a id="btn-reset-filters" class="filter-reset-link" href="#"
            title="Reset all filters to default">Reset</a>
     </div>
 
-    <!-- v0.8.7 — Movement category cluster. 10 multi-select checkboxes
-         populated from POINTS.movements after bootDeckGL completes.
-         OR semantics: a sighting matches if ANY checked category's bit
-         is set in its movement_flags uint16. -->
-    <div class="filter-movement-row">
-        <span class="movement-label">Movement</span>
-        <div class="movement-cluster" id="filter-movement-cluster">
-            <!-- Populated dynamically from POINTS.movements -->
-        </div>
+    <!-- v0.15 — hidden movement-cluster host kept so _mountMovementCluster
+         can still render its legacy checkboxes (referenced by
+         _readMovementCats during the transition). Not visible. -->
+    <div class="filter-movement-row" hidden aria-hidden="true">
+        <div class="movement-cluster" id="filter-movement-cluster"></div>
     </div>
 
     <!-- Main Content Panels -->

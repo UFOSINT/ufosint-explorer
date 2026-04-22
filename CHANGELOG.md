@@ -15,6 +15,51 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-04-21 — Unified multi-select filter dropdowns
+
+### Changed
+- **All seven filter controls rewritten as multi-select dropdowns.**
+  The pre-v0.15 patchwork — two text inputs for Date, four native
+  `<select>` dropdowns, a 10-chip Movement row, and five sidebar
+  Quality checkboxes — consolidates into one row with the user's
+  chosen order: `Date Range | Shape | Source | Color | Emotion |
+  Quality | Movement | Reset`. Shared chrome (`.ms-trigger` /
+  `.ms-panel`) makes every control visually identical.
+- **Shape / Source / Color / Emotion / Movement** become multi-select:
+  users can pick any combination (e.g. Circle + Triangle + Light),
+  not just one value at a time. Empty selection = no filter.
+  Dropdown panels include a search input (when > 8 options) and
+  a Clear / Select-all footer.
+- **Quality dropdown** holds seven boolean toggles: High quality
+  only, Hide narrative red flags, Had description in source, Has
+  media, Has movement described, **Has color (categorized)**, and
+  **Has shape (categorized)**. The last two are new in v0.15 —
+  they require the standardized_shape / primary_color column to be
+  populated for a row to pass.
+- **Date Range dropdown** uses the same trigger chrome with a custom
+  body containing the two From / To year inputs.
+
+### Added
+- `buildMultiSelect()` factory in `static/app.js` (~250 lines). Owns
+  the trigger + panel DOM, click-outside / escape / search, and fires
+  `onChange(selection[])` on every toggle. `customBody` escape hatch
+  lets the Date dropdown render its range inputs inside the same
+  chrome.
+- `Uint8Array` allow-sets in `deck.js` `_rebuildVisible` for
+  Shape / Source / Color / Emotion. Hot-loop cost stays one byte
+  read per filter per row — same as the pre-v0.15 scalar compare.
+
+### Fixed
+- Dropdown panels were falling beneath the map's POINTS / HEATMAP /
+  HEX BINS overlay controls on first open. Bumped `.ms-panel`
+  z-index 50 → 9999 to clear Leaflet's control pane stacking.
+- Pre-v0.15 movement chip row and sidebar quality toggles stayed
+  visible alongside the new dropdowns because `.rail-section` and
+  `.filter-movement-row` set `display: flex` which overrides the
+  browser's default `display: none` for the HTML `hidden` attribute.
+  Added explicit `[hidden] { display: none !important }` overrides
+  so the attribute actually hides the pre-v0.15 hosts.
+
 ## [0.14.1] — 2026-04-19 — NRC donut animates live (bulk-buffer integration)
 
 ### Changed (v0.14 — NRC donut now lives in the bulk buffer)
@@ -35,6 +80,8 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
   count + total emotion-word count (upstream `nrc_positive` /
   `nrc_negative` columns are NULL across every row in the shipped
   dataset, so the old "X positive · Y negative" display was always 0).
+
+## [0.14.0] — 2026-04-19 — Reddit r/UFOs + data-quality overhaul
 
 ### Added (v0.14 — science team data-quality overhaul)
 - **9 new `audit_*` columns on `sighting`** — metadata about the
@@ -81,8 +128,13 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 - `scripts/migrate_sqlite_to_pg.py` — column list extended with the
   9 audit fields so future rebuilds carry them through.
 
+## [0.13.0] — 2026-04-18 — Reddit r/UFOs integration + rate limiting
 
-### Added (v0.13 rate limiting + LLM bulk-access guidance)
+Shipped to production across 2026-04-16…2026-04-18 but never tagged
+standalone; scope was bundled into the v0.14.0 release tarball and
+tagged there. Dated from the last v0.13 commit on `main`.
+
+### Added (rate limiting + LLM bulk-access guidance)
 - **Rate limiting** via `flask-limiter` (3.8.0). `/api/tool/<name>` and
   the `/mcp` JSON-RPC endpoint: 60 req/min per client. `/api/map` and
   `/api/heatmap`: 30 req/min per client. `/health`, `/api/stats`,
@@ -106,9 +158,7 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
   **468,349 mapped**, six sources (r/UFOs added at 3,811).
 - `requirements.txt` adds `flask-limiter==3.8.0`.
 
-## [Unreleased previous entries below — will move to v0.13 on tag cut]
-
-### Added (v0.13 Reddit UI — staging)
+### Added (Reddit UI — staging)
 - **Reddit r/UFOs source surfacing on the sighting popup.** A new
   "View original on r/UFOs" link in the Source section, a full-width
   Narrative section rendering the LLM-generated summary, and an
