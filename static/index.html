@@ -8,37 +8,67 @@
          effectively just 12px on notched iPhones, pushing the overview
          mini-map under the home indicator / Safari bottom chrome. -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>UFOSINT Explorer — 614,505 UFO sightings, searchable</title>
-    <meta name="description" content="Browse 614,505 deduplicated UFO and UAP sighting records from five major databases on an interactive map, timeline, and full-text search." />
+    <title>UFOSINT Explorer — 618,316 UFO sightings, searchable</title>
+    <meta name="description" content="Browse 618,316 deduplicated UFO and UAP sighting records from six major databases on an interactive map, timeline, and full-text search." />
 
-    <!-- v0.11.2: Schema.org structured data for AI discoverability -->
+    <!-- v0.15.7 — canonical URL. The azurewebsites.net origin serves
+         identical content; without this, search engines may split
+         ranking signal across the two hosts. -->
+    <link rel="canonical" href="https://ufosint.com/" />
+
+    <!-- v0.15.7 — OpenGraph + Twitter Card. Link previews on Reddit /
+         X / Discord / Slack were previously bare URLs; for a site
+         that spreads by shares this is the highest-leverage metadata
+         on the page. The card image is a static 1200x630 dark-map
+         screenshot, served from /static so it inherits the CDN path. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://ufosint.com/" />
+    <meta property="og:title" content="UFOSINT Explorer — 618,316 UFO sightings, searchable" />
+    <meta property="og:description" content="Interactive map, timeline, and analysis of 618,316 deduplicated UFO/UAP sightings from six major databases. Free, open, no signup." />
+    <meta property="og:image" content="https://ufosint.com/static/og-card.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:site_name" content="UFOSINT Explorer" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="UFOSINT Explorer — 618,316 UFO sightings, searchable" />
+    <meta name="twitter:description" content="Interactive map, timeline, and analysis of 618,316 deduplicated UFO/UAP sightings from six major databases. Free, open, no signup." />
+    <meta name="twitter:image" content="https://ufosint.com/static/og-card.png" />
+
+    <!-- v0.15.7 — SVG favicon (saucer glyph in the site accent color).
+         SVG-first keeps it crisp at any size; no .ico fallback needed
+         for the modern-browser audience this site serves. -->
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+
+    <!-- v0.11.2: Schema.org structured data for AI discoverability.
+         v0.15.7: counts refreshed to v0.14 numbers; URLs repointed
+         from the azurewebsites.net origin to the canonical domain. -->
     <script type="application/ld+json">
     {
         "@context": "https://schema.org",
         "@type": "Dataset",
         "name": "Unified UFO Sightings Database",
-        "description": "614,505 deduplicated UFO and UAP sighting records from five major databases (NUFORC, MUFON, UFOCAT, UPDB, UFO-search), cross-referenced and enriched with emotion analysis from 4 transformer models.",
-        "url": "https://ufosint-explorer.azurewebsites.net",
+        "description": "618,316 deduplicated UFO and UAP sighting records from six major databases (NUFORC, MUFON, UFOCAT, UPDB, UFO-search, r/UFOs), cross-referenced and enriched with emotion analysis from 4 transformer models.",
+        "url": "https://ufosint.com",
         "keywords": ["UFO", "UAP", "sightings", "NUFORC", "MUFON", "UFOCAT", "unidentified aerial phenomena"],
         "temporalCoverage": "1900/2026",
         "spatialCoverage": { "@type": "Place", "name": "Worldwide" },
         "variableMeasured": [
-            { "@type": "PropertyValue", "name": "total_sightings", "value": 614505 },
-            { "@type": "PropertyValue", "name": "geocoded_sightings", "value": 396158 },
+            { "@type": "PropertyValue", "name": "total_sightings", "value": 618316 },
+            { "@type": "PropertyValue", "name": "geocoded_sightings", "value": 418077 },
             { "@type": "PropertyValue", "name": "emotion_analyzed", "value": 502985 }
         ],
         "distribution": [
             {
                 "@type": "DataDownload",
                 "name": "MCP Server (Model Context Protocol)",
-                "contentUrl": "https://ufosint-explorer.azurewebsites.net/mcp",
+                "contentUrl": "https://ufosint.com/mcp",
                 "encodingFormat": "application/json",
                 "description": "6 read-only tools for searching, filtering, and analyzing sightings via JSON-RPC 2.0"
             },
             {
                 "@type": "DataDownload",
                 "name": "REST API (OpenAI function-calling format)",
-                "contentUrl": "https://ufosint-explorer.azurewebsites.net/api/tools-catalog",
+                "contentUrl": "https://ufosint.com/api/tools-catalog",
                 "encodingFormat": "application/json"
             }
         ],
@@ -300,7 +330,7 @@
                         </button>
                         <div class="rail-body">
                             <div id="rail-visible-count" class="rail-big-count">—</div>
-                            <div class="rail-sub">of <span id="rail-total-count">614,505</span> <span id="rail-visible-pct" class="rail-sub-pct"></span></div>
+                            <div class="rail-sub">of <span id="rail-total-count">618,316</span> <span id="rail-visible-pct" class="rail-sub-pct"></span></div>
                         </div>
                     </section>
                     <!-- v0.11.9 — keep this hidden list in the DOM so
@@ -781,14 +811,14 @@
 
                 <div class="connect-card">
                     <h3>MCP endpoint</h3>
-                    <pre class="connect-code"><code>https://ufosint-explorer.azurewebsites.net/mcp</code></pre>
+                    <pre class="connect-code"><code>https://ufosint.com/mcp</code></pre>
                     <p>6 tools available: <code>search_sightings</code>, <code>get_sighting</code>, <code>get_stats</code>, <code>get_timeline</code>, <code>find_duplicates_for</code>, <code>count_by</code>.</p>
                 </div>
 
                 <div class="connect-card">
                     <h3>Claude Code (CLI / Desktop App)</h3>
                     <p>One command to connect from any project directory:</p>
-                    <pre class="connect-code"><code>claude mcp add --transport http ufosint https://ufosint-explorer.azurewebsites.net/mcp</code></pre>
+                    <pre class="connect-code"><code>claude mcp add --transport http ufosint https://ufosint.com/mcp</code></pre>
                     <p>Restart your Claude Code session. The 6 UFOSINT tools will be available immediately.
                        Remove later with <code>claude mcp remove ufosint</code>.</p>
                 </div>
@@ -800,7 +830,7 @@
                     <pre class="connect-code"><code>{
   "mcpServers": {
     "ufosint": {
-      "url": "https://ufosint-explorer.azurewebsites.net/mcp",
+      "url": "https://ufosint.com/mcp",
       "transport": "http"
     }
   }
@@ -817,11 +847,11 @@
                 <div class="connect-card">
                     <h3>Direct API (curl / Python / any HTTP client)</h3>
                     <p>The endpoint is JSON-RPC 2.0 over HTTPS. List the tools:</p>
-                    <pre class="connect-code"><code>curl -s https://ufosint-explorer.azurewebsites.net/mcp \
+                    <pre class="connect-code"><code>curl -s https://ufosint.com/mcp \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'</code></pre>
                     <p>Call a tool:</p>
-                    <pre class="connect-code"><code>curl -s https://ufosint-explorer.azurewebsites.net/mcp \
+                    <pre class="connect-code"><code>curl -s https://ufosint.com/mcp \
   -H 'Content-Type: application/json' \
   -d '{
     "jsonrpc":"2.0",
@@ -838,9 +868,9 @@
                     <h3>OpenAI / OpenRouter function-calling format</h3>
                     <p>If you're integrating with OpenAI or OpenRouter and want the tool definitions
                        in their native format (instead of going through MCP), fetch:</p>
-                    <pre class="connect-code"><code>GET https://ufosint-explorer.azurewebsites.net/api/tools-catalog</code></pre>
+                    <pre class="connect-code"><code>GET https://ufosint.com/api/tools-catalog</code></pre>
                     <p>And invoke individual tools at:</p>
-                    <pre class="connect-code"><code>POST https://ufosint-explorer.azurewebsites.net/api/tool/&lt;tool_name&gt;
+                    <pre class="connect-code"><code>POST https://ufosint.com/api/tool/&lt;tool_name&gt;
 Content-Type: application/json
 
 { "q": "triangle", "state": "CA", "limit": 5 }</code></pre>
@@ -849,12 +879,12 @@ Content-Type: application/json
                 <div class="connect-card">
                     <h3>Download the database (SQLite)</h3>
                     <p>Want to run your own analysis, train models, or hack on the data offline?
-                       The full 508&nbsp;MB SQLite snapshot is attached to every tagged release on GitHub &mdash;
-                       614,505 deduplicated sightings, 502,985 with emotion analysis, and all derived columns.</p>
+                       The full 627&nbsp;MB SQLite snapshot is attached to every tagged release on GitHub &mdash;
+                       618,316 deduplicated sightings, 502,985 with emotion analysis, and all derived columns.</p>
                     <pre class="connect-code"><code>curl -LO https://github.com/UFOSINT/ufosint-explorer/releases/latest/download/ufo_public.db
 
 sqlite3 ufo_public.db "SELECT COUNT(*) FROM sighting;"
-# 614505</code></pre>
+# 618316</code></pre>
                     <p>See the <a href="#/methodology" class="methodology-link">Methodology tab</a> for the full schema,
                        derived-column definitions, and per-source licensing.
                        Browse the <a href="https://github.com/UFOSINT/ufosint-explorer/releases" target="_blank" rel="noopener">releases page</a>

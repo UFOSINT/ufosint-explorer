@@ -15,6 +15,36 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 ## [Unreleased]
 
+### Added (v0.15.7 — SEO, sharing, and security polish)
+- **OpenGraph + Twitter Card metadata.** Sharing ufosint.com on
+  Reddit / X / Discord / Slack now renders a rich preview with a
+  1200x630 branded card image (`static/og-card.png`) instead of a
+  bare URL.
+- **SVG favicon** (`static/favicon.svg`) — saucer glyph in accent cyan.
+- **`/sitemap.xml` route.** robots.txt has advertised this URL since
+  v0.11.2 but it 404'd; now serves a minimal urlset.
+- **Baseline security headers** on every response: HSTS (1y),
+  X-Content-Type-Options nosniff, Referrer-Policy, CSP frame-ancestors
+  'none'. No active hole closed; scanners stop complaining and the
+  site can't be wrapped in a hostile iframe.
+- Regression tests: `tests/test_v0157.py` pins OG tags, canonical,
+  favicon, sitemap 200, security headers, and the absence of stale
+  counts / azurewebsites URLs.
+
+### Changed
+- **Stale counts refreshed everywhere** — page title, meta
+  description, Schema.org JSON-LD, sidebar fallback, SQLite download
+  card, and `/llms-full.txt` all said 614,505 (pre-v0.14); now
+  618,316 total / 418,077 mapped.
+- **Canonical domain consolidated.** `<link rel="canonical">` added;
+  all public metadata URLs (JSON-LD, llms.txt, mcp.json, Connect
+  cards) repointed from `ufosint-explorer.azurewebsites.net` to
+  `ufosint.com`.
+- **Feature tour refreshed for v0.15** (cherry-picked from the
+  April branch that never merged): step 2 now walks the unified
+  filter bar instead of the removed sidebar quality toggles; new
+  step for the Live Analytics rail.
+
 ## [0.15.0] — 2026-04-21 — Unified multi-select filter dropdowns
 
 ### Changed

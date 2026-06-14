@@ -405,6 +405,17 @@ def add_cache_headers(response):
         response.headers["Cache-Control"] = "public, max-age=300"
     elif path == "/":
         response.headers["Cache-Control"] = "public, max-age=60"
+
+    # v0.15.7 — baseline security headers on every response. The site
+    # has no auth and no user data, so none of these close an active
+    # hole; they exist because (a) they're free, (b) scanners flag
+    # their absence, and (c) frame-ancestors prevents someone wrapping
+    # ufosint.com in a hostile iframe overlay. HSTS max-age is 1 year;
+    # Azure terminates TLS so the app only ever sees HTTPS traffic.
+    response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'")
     return response
 
 
@@ -932,9 +943,34 @@ Allow: /
 # /.well-known/mcp.json — MCP server discovery
 # /mcp                 — MCP endpoint (JSON-RPC 2.0)
 
-Sitemap: https://ufosint-explorer.azurewebsites.net/sitemap.xml
+Sitemap: https://ufosint.com/sitemap.xml
 """
     return Response(text, mimetype="text/plain")
+
+
+@app.route("/sitemap.xml")
+def sitemap_xml():
+    """Minimal sitemap. The app is a hash-routed SPA so there's one
+    real document plus the AI-discovery text files. robots.txt has
+    advertised this URL since v0.11.2 — it 404'd until v0.15.7,
+    which is mildly embarrassing to crawlers, so keep it alive."""
+    urls = [
+        ("https://ufosint.com/", "weekly", "1.0"),
+        ("https://ufosint.com/llms.txt", "monthly", "0.5"),
+        ("https://ufosint.com/llms-full.txt", "monthly", "0.4"),
+    ]
+    entries = "\n".join(
+        f"  <url><loc>{loc}</loc><changefreq>{freq}</changefreq>"
+        f"<priority>{pri}</priority></url>"
+        for loc, freq, pri in urls
+    )
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        f"{entries}\n"
+        "</urlset>\n"
+    )
+    return Response(xml, mimetype="application/xml")
 
 
 @app.route("/llms.txt")
@@ -969,9 +1005,9 @@ There is also a one-click download button in the site's Methodology section at h
 
 ## MCP Tools (Model Context Protocol)
 
-- [MCP Endpoint](https://ufosint-explorer.azurewebsites.net/mcp): JSON-RPC 2.0 over HTTPS, 6 read-only tools for searching, filtering, and analyzing UFO sightings
-- [MCP Discovery](https://ufosint-explorer.azurewebsites.net/.well-known/mcp.json): Server discovery manifest
-- [Full Tool Documentation](https://ufosint-explorer.azurewebsites.net/llms-full.txt): Complete tool schemas, parameters, and usage examples
+- [MCP Endpoint](https://ufosint.com/mcp): JSON-RPC 2.0 over HTTPS, 6 read-only tools for searching, filtering, and analyzing UFO sightings
+- [MCP Discovery](https://ufosint.com/.well-known/mcp.json): Server discovery manifest
+- [Full Tool Documentation](https://ufosint.com/llms-full.txt): Complete tool schemas, parameters, and usage examples
 
 ## Available Tools
 
@@ -984,10 +1020,10 @@ There is also a one-click download button in the site's Methodology section at h
 
 ## REST API
 
-- [Tool Catalog (OpenAI format)](https://ufosint-explorer.azurewebsites.net/api/tools-catalog): Tool definitions compatible with OpenAI/OpenRouter function calling
-- [Database Stats](https://ufosint-explorer.azurewebsites.net/api/stats): JSON statistics endpoint
-- [Filters](https://ufosint-explorer.azurewebsites.net/api/filters): Available filter values (shapes, sources, countries, etc.)
-- [UAP Gerb overlay](https://ufosint-explorer.azurewebsites.net/api/overlay): Curated crash retrievals (14), nuclear encounters (35), and facilities (75) as a single JSON payload. Not part of the main sighting corpus — these are research-grade overlay datasets.
+- [Tool Catalog (OpenAI format)](https://ufosint.com/api/tools-catalog): Tool definitions compatible with OpenAI/OpenRouter function calling
+- [Database Stats](https://ufosint.com/api/stats): JSON statistics endpoint
+- [Filters](https://ufosint.com/api/filters): Available filter values (shapes, sources, countries, etc.)
+- [UAP Gerb overlay](https://ufosint.com/api/overlay): Curated crash retrievals (14), nuclear encounters (35), and facilities (75) as a single JSON payload. Not part of the main sighting corpus — these are research-grade overlay datasets.
 
 ## When to use tools vs. the SQLite
 
@@ -1039,19 +1075,19 @@ def llms_full_txt():
         "# UFOSINT Explorer — Full Tool Documentation",
         "",
         "> This file contains complete documentation for all 6 MCP tools",
-        "> available at https://ufosint-explorer.azurewebsites.net/mcp.",
+        "> available at https://ufosint.com/mcp.",
         "> Use this to understand how to call each tool, what parameters",
         "> they accept, and what they return.",
         "",
         "## Connection",
         "",
-        "MCP endpoint: `https://ufosint-explorer.azurewebsites.net/mcp`",
+        "MCP endpoint: `https://ufosint.com/mcp`",
         "Protocol: JSON-RPC 2.0 over HTTPS",
         "Authentication: None required (free, read-only)",
         "",
         "### Claude Code",
         "```",
-        "claude mcp add --transport http ufosint https://ufosint-explorer.azurewebsites.net/mcp",
+        "claude mcp add --transport http ufosint https://ufosint.com/mcp",
         "```",
         "",
         "### Claude Desktop",
@@ -1060,7 +1096,7 @@ def llms_full_txt():
         '{',
         '  "mcpServers": {',
         '    "ufosint": {',
-        '      "url": "https://ufosint-explorer.azurewebsites.net/mcp",',
+        '      "url": "https://ufosint.com/mcp",',
         '      "transport": "http"',
         '    }',
         '  }',
@@ -1112,7 +1148,7 @@ def llms_full_txt():
         "",
         "# Inspect",
         "sqlite3 ufo_public.db \".tables\"",
-        "sqlite3 ufo_public.db \"SELECT COUNT(*) FROM sighting;\"  # 614505",
+        "sqlite3 ufo_public.db \"SELECT COUNT(*) FROM sighting;\"  # 618316",
         "```",
         "",
         "Privacy note: the public DB has raw narrative text stripped (description / summary / notes",
@@ -1121,8 +1157,8 @@ def llms_full_txt():
         "",
         "## Data Overview",
         "",
-        "- **Total sightings:** 614,505",
-        "- **Mapped (geocoded):** 396,158",
+        "- **Total sightings:** 618,316",
+        "- **Mapped (geocoded):** 418,077",
         "- **With emotion analysis:** 502,985",
         "- **Date range:** 1900 to 2026 (primary), with scattered records back to antiquity",
         "- **Sources:** NUFORC, MUFON, UFOCAT, UPDB, UFO-search",
@@ -1149,15 +1185,15 @@ def well_known_mcp():
             "name": "ufosint-mcp",
             "version": "0.11.2",
             "description": (
-                "Search and analyze 614,505 UFO sightings from 5 major "
+                "Search and analyze 618,316 UFO sightings from 6 major "
                 "databases (NUFORC, MUFON, UFOCAT, UPDB, UFO-search). "
                 "Read-only, no authentication required."
             ),
-            "homepage": "https://ufosint-explorer.azurewebsites.net",
+            "homepage": "https://ufosint.com",
         },
         "endpoints": [
             {
-                "url": "https://ufosint-explorer.azurewebsites.net/mcp",
+                "url": "https://ufosint.com/mcp",
                 "transport": "http",
                 "capabilities": ["tools"],
             }
