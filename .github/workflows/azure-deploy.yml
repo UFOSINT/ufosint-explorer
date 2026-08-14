@@ -21,9 +21,9 @@ on:
   workflow_dispatch:
 
 env:
-  AZURE_WEBAPP_NAME: ufosint-explorer
+  AZURE_WEBAPP_NAME: ufosint-explorer-app
   PYTHON_VERSION: '3.12'
-  LIVE_URL: https://ufosint-explorer.azurewebsites.net
+  LIVE_URL: https://ufosint-explorer-app.azurewebsites.net
 
 permissions:
   contents: read

@@ -39,13 +39,19 @@ isn't confused by website-specific state.
 - **Pre-substituted HTML.** `static/index.html` is read once at import
   time, `{{ASSET_VERSION}}` is replaced, and the result is cached as
   `_INDEX_HTML`. Don't add per-request Jinja rendering.
-- **Shared PG between staging and prod.** The staging App Service
-  (`ufosint-explorer-staging`) points at the same Postgres as prod.
-  This means: **schema changes must be applied BEFORE app code that
-  reads them is deployed to either environment**, or the app will 500.
-- **Two-part deploy pipeline.** `feature/**` push → staging
-  (no migrations). `main` push → prod (owns migrations). See
-  `.github/workflows/azure-deploy*.yml`.
+- **No staging environment (removed in the Aug 2026 hosting migration).**
+  Prod moved to a separate Azure account (owner: Thom Hastings) and the
+  B1 staging App Service was retired to save cost. There is now a single
+  deploy target. Test locally before merging; there is no shared staging
+  URL to smoke-test against anymore.
+- **Single-target deploy pipeline.** `main` push (or a `v*` tag) → prod
+  via `.github/workflows/azure-deploy.yml`, which deploys to the
+  `ufosint-explorer-app` App Service and owns DB migrations. `feature/**`
+  branches no longer auto-deploy anywhere. See also `docs/DEPLOYMENT.md`.
+- **Schema-change ordering still applies.** Since the deploy workflow
+  runs migrations against the prod Postgres before/at deploy, a schema
+  change must be compatible with the code being deployed in the same
+  push, or the app will 500.
 
 ## Conventions the user cares about
 
