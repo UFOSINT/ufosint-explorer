@@ -405,7 +405,7 @@ TOOLS = [
             "properties": {
                 "q":         {"type": "string", "description": "Free-text substring (case-insensitive) matched against description and summary"},
                 "shape":     {"type": "string", "description": "Object shape, e.g. triangle, disk, cigar, sphere"},
-                "source":    {"type": "string", "description": "Source database name: NUFORC, MUFON, UFOCAT, UPDB, UFO-search"},
+                "source":    {"type": "string", "description": "Source database name: NUFORC, UFOCAT, UPDB, UFO-search"},
                 "state":     {"type": "string", "description": "US state name or 2-letter code (matched ILIKE)"},
                 "country":   {"type": "string", "description": "Country name"},
                 "date_from": {"type": "string", "description": "Start date (YYYY or YYYY-MM-DD)"},
