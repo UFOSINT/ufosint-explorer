@@ -35,6 +35,16 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
   UFOCAT 197,108 / NUFORC 159,320 / UPDB 65,016 / UFO-search 54,751.
 
 ### Fixed
+- **A schema migration was resurrecting the purged Reddit source.**
+  `add_v013_reddit_columns.sql` seeded `source_collection('Reddit')` and
+  `source_database('r/UFOs')` behind an `IF NOT EXISTS` guard. That guard is
+  idempotent only while the rows exist — once v0.16 deleted them it inverted
+  into a recreate, and the deploy carrying the purge put both rows straight
+  back, with r/UFOs reappearing in `/api/filters` and `/api/stats` at count 0.
+  The seed is removed; the column definitions stay, since app.py still selects
+  them. `tests/test_v016_purge.py` now asserts that *no* migration in the
+  deploy workflow's list inserts into the `source_*` tables, because every one
+  of them runs on every deploy.
 - **Rail source colours were keyed by bulk-buffer index, not by name.** The
   buffer assigns `source_idx` alphabetically over `source_database`, so
   dropping two sources reshuffled every index — NUFORC would have rendered in
