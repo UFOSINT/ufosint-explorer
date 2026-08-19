@@ -15,6 +15,20 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 ## [Unreleased]
 
+### Changed (v0.16.1)
+- **Credits: deployment & server hosting moved to @ufohackers.** The role
+  heading is now "Research Direction, Domain & Hosting"; the line was
+  previously under @DuelingGroks.
+- **Deduplication pair count restored** — 116,202 pairs across 476,195
+  sightings, recomputed now that the SQLite source matches production.
+  The methodology page had carried a placeholder note since the v0.16 purge
+  voided the old 126,729 figure (its largest tier was MUFON ↔ NUFORC).
+- **CLAUDE.md corrected.** Both repos have a single owner; the old
+  separate-agent split and the Windows-era `C:/dev/dg/UFOSINT/` paths are
+  gone. Adds two hard-won rules: migrations must not seed rows, and the
+  ufo-dedup SQLite files can silently outrank prod on a reload.
+
+
 ### Removed (v0.16 — MUFON case-file and r/UFOs purge)
 - **The `mufon.csv` import is gone.** All 138,310 sightings carrying
   `source_database.name = 'MUFON'` (collection PUBLIUS) were deleted from

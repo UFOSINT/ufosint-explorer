@@ -1147,11 +1147,11 @@ DATABASE_URL="postgresql://..." python mcp_server.py</code></pre>
                 <table>
                     <thead><tr><th>Tier</th><th>Method</th><th>Pairs Flagged</th></tr></thead>
                     <tbody>
-                                                <tr><td>1</td><td>Cross-source pairs: date + city + state exact match</td><td>&mdash;</td></tr>
-                        <tr><td>2</td><td>Date-only matches with description fuzzy similarity &ge;60%</td><td>&mdash;</td></tr>
+                                                <tr><td>1</td><td>Cross-source pairs: date + city + state exact match</td><td>~106K</td></tr>
+                        <tr><td>2</td><td>Date-only matches with description fuzzy similarity &ge;60%</td><td>~10K</td></tr>
                     </tbody>
                 </table>
-                <p><strong>Note:</strong> the previous pair counts were computed against a dataset that included the MUFON case-file import, whose removal voided the largest matching tier. Counts are pending a re-run of the deduplication pass over the current 476,195 records.</p>
+                <p><strong>Total:</strong> 116,202 duplicate candidate pairs across 476,195 sightings. The MUFON &harr; NUFORC tier disappeared with the case-file import; the figure above is recomputed over the current corpus.</p>
 
                 <!-- ============ Content Policy ============ -->
                 <h3>Content Policy &amp; Privacy</h3>
@@ -1344,17 +1344,17 @@ DATABASE_URL="postgresql://..." python mcp_server.py</code></pre>
             <p class="credits-subtitle">A research platform analyzing 476,195 UFO/UAP sighting records from four databases.</p>
 
             <div class="credits-role">
-                <h3>Research Direction &amp; Domain</h3>
+                <h3>Research Direction, Domain &amp; Hosting</h3>
                 <a href="https://x.com/ufohackers" target="_blank" rel="noopener" class="credits-handle">@ufohackers</a>
                 <span class="credits-sep">&middot;</span>
                 <a href="https://ufosint.com" target="_blank" rel="noopener" class="credits-link">ufosint.com</a>
-                <p class="credits-desc">Source data curation &middot; deduplication methodology assistance &middot; emotional analysis &middot; ufosint.com domain owner</p>
+                <p class="credits-desc">Source data curation &middot; deduplication methodology assistance &middot; emotional analysis &middot; ufosint.com domain owner &middot; deployment &amp; server hosting</p>
             </div>
 
             <div class="credits-role">
                 <h3>Design, Engineering &amp; Infrastructure</h3>
                 <a href="https://x.com/DuelingGroks" target="_blank" rel="noopener" class="credits-handle">@DuelingGroks</a>
-                <p class="credits-desc">Frontend &amp; site design &middot; GPU-accelerated observatory &middot; MCP server &amp; AI chat &middot; ML pipeline &amp; AI engineering &middot; data processing &middot; deployment &amp; server hosting</p>
+                <p class="credits-desc">Frontend &amp; site design &middot; GPU-accelerated observatory &middot; MCP server &amp; AI chat &middot; ML pipeline &amp; AI engineering &middot; data processing</p>
             </div>
 
             <div class="credits-role">

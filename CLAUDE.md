@@ -6,17 +6,17 @@ first. It's deliberately short — the real docs are what it points at.
 ## Who works here
 
 - **This repo (`ufosint-explorer/`)** — Flask web app + vanilla-JS frontend.
-  Live at https://ufosint.com. **Website-dev agent** (you) owns everything here.
-- **Sibling repo (`../ufo-dedup/`)** — ETL + deduplication pipeline.
-  Owned by a **separate agent**. You can *read* these files for
-  upstream context (schema, data provenance); do not *edit* them
-  unless the user explicitly says so.
-- **`../UFO-UX/`** — shared design sandbox. Either agent may touch it.
+  Live at https://ufosint.com.
+- **Sibling repo (`../ufo-dedup/`)** — ETL + deduplication pipeline. Builds
+  the SQLite files this app's Postgres is loaded from. See its own
+  `CLAUDE.md`.
+- **`../UFO-UX/`** — shared design sandbox.
 
-Both agents run from the parent workspace `C:/dev/dg/UFOSINT/`, so
-shared memory lives at `~/.claude/projects/C--dev-dg-UFOSINT/memory/`.
-Keep memory entries scoped and clearly titled so the dedup agent
-isn't confused by website-specific state.
+**One owner, both repos** (as of 2026-08-19). Earlier revisions of this file
+described a split where a separate agent owned each side and cross-repo edits
+needed explicit permission — that no longer applies. Edit either.
+
+Workspace root is `/Users/thomhastings/Documents/UFO_Files/UFOSINT.com/`.
 
 ## Where the actual documentation lives
 
@@ -52,6 +52,18 @@ isn't confused by website-specific state.
   runs migrations against the prod Postgres before/at deploy, a schema
   change must be compatible with the code being deployed in the same
   push, or the app will 500.
+- **Migrations must not seed rows.** Every migration in the workflow's list
+  runs on *every* deploy, so a row a migration writes is a row a deploy can
+  resurrect. `add_v013_reddit_columns.sql` seeded a `source_database` row
+  behind an `IF NOT EXISTS` guard — idempotent only while the row exists, so
+  the deploy carrying the v0.16 purge re-created what it had just deleted.
+  Schema migrations create structure, not content;
+  `tests/test_v016_purge.py` enforces this across the whole migration set.
+- **The SQLite source can outrank prod.** `../ufo-dedup/` builds the files
+  `scripts/migrate_sqlite_to_pg.py` and `scripts/reload_from_public_db.py`
+  load from. If those files are older than prod, a reload silently reverts
+  prod. Both were realigned to 476,195 rows on 2026-08-19; check before any
+  reload.
 
 ## Conventions the user cares about
 
@@ -65,7 +77,8 @@ isn't confused by website-specific state.
 
 ## Before you act on a recalled memory
 
-Memory under `~/.claude/projects/C--dev-dg-UFOSINT/memory/` may be
-stale — branch names, commit SHAs, uncommitted file lists all change
-quickly. Always verify with `git status` / `git log` before repeating
-a claim the memory makes about current state.
+Memory may be stale — branch names, commit SHAs, row counts and
+uncommitted file lists all change quickly. Always verify with
+`git status` / `git log`, or a live query, before repeating a claim the
+memory makes about current state. Row counts in particular moved twice in
+August 2026.
