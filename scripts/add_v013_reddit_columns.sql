@@ -123,40 +123,24 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_sighting_num_witnesses
     WHERE num_witnesses IS NOT NULL;
 
 -- ---------------------------------------------------------------------------
--- source_collection / source_database seed rows (idempotent).
+-- source_collection / source_database seed rows — REMOVED in v0.16.
 -- ---------------------------------------------------------------------------
--- Both tables have bigint ids without DEFAULT/SERIAL (original values came
--- from SQLite exports). We pick the next available id explicitly so INSERT
--- can't violate the NOT NULL constraint.
+-- This migration used to seed source_collection('Reddit') and
+-- source_database('r/UFOs') under an "IF NOT EXISTS" guard, which reads as
+-- idempotent but is really "recreate whenever absent". Once the r/UFOs
+-- sightings and their source rows were purged in v0.16, the guard inverted
+-- from a no-op into a resurrection: the 2026-08-19 deploy re-inserted both
+-- rows, and r/UFOs reappeared in /api/filters and /api/stats with a count
+-- of 0 minutes after the purge committed.
 --
--- Canonical ids after 2026-04-18 seed:
---   source_collection  id=4  name='Reddit'
---   source_database    id=6  name='r/UFOs'
+-- The column definitions above are deliberately kept — they are part of the
+-- sighting schema and app.py still selects them (uniformly NULL now). Only
+-- the seed is gone. If r/UFOs is ever re-ingested, insert the source rows
+-- from the ingest pipeline, which knows it actually has data to attach,
+-- rather than from a schema migration that runs on every deploy.
 --
--- Pipelines should resolve the id by name, not by hardcoded integer:
---   SELECT id FROM source_database WHERE name = 'r/UFOs'
-DO $$
-DECLARE
-    reddit_coll_id bigint;
-BEGIN
-    -- Reddit collection
-    SELECT id INTO reddit_coll_id FROM source_collection WHERE name = 'Reddit';
-    IF reddit_coll_id IS NULL THEN
-        INSERT INTO source_collection (id, name)
-        VALUES ((SELECT COALESCE(MAX(id), 0) + 1 FROM source_collection), 'Reddit')
-        RETURNING id INTO reddit_coll_id;
-    END IF;
-
-    -- r/UFOs source
-    IF NOT EXISTS (SELECT 1 FROM source_database WHERE name = 'r/UFOs') THEN
-        INSERT INTO source_database (id, name, collection_id)
-        VALUES (
-            (SELECT COALESCE(MAX(id), 0) + 1 FROM source_database),
-            'r/UFOs',
-            reddit_coll_id
-        );
-    END IF;
-END$$;
+-- Rule of thumb: schema migrations should create structure, not content.
+-- A row a deploy can recreate is a row a deploy can resurrect.
 
 -- =========================================================================
 -- Verification
