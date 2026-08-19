@@ -137,22 +137,25 @@ def test_open_detail_renders_llm_analysis_section():
 # Frontend — marker palette
 # ---------------------------------------------------------------------------
 
-def test_source_colors_include_reddit():
+def test_source_colors_exclude_retired_sources():
+    """v0.16 — inverts the original v0.13 assertion.
+
+    The r/UFOs records and the mufon.csv import were purged from PG and
+    their source_database rows dropped, so a palette entry for either can
+    only ever be dead code. sourceColor() greys out anything unlisted.
+    """
     js = _read(APP_JS)
     start = js.find("const SOURCE_COLORS = {")
     end = js.find("};", start) + 2
     block = js[start:end]
 
-    # Either "r/UFOs" (v0.13 canonical) or "Reddit-UFOs" (compat alias)
-    # must be present
-    assert "r/UFOs" in block or "Reddit-UFOs" in block, (
-        "SOURCE_COLORS must include an entry for the Reddit source"
-    )
-    # And the color should be reddish-orange — loose check, any hex
-    # starting with #ff or #cc/ee in the red range
-    assert "#ff4500" in block or "#ff" in block.lower(), (
-        "Reddit source expected to use Reddit-orange (#ff4500)"
-    )
+    for retired in ("r/UFOs", "Reddit-UFOs", "MUFON"):
+        assert retired not in block, (
+            f"SOURCE_COLORS still carries a palette entry for the retired "
+            f"source {retired!r}"
+        )
+    for live in ("UFOCAT", "NUFORC", "UPDB", "UFO-search"):
+        assert live in block, f"SOURCE_COLORS lost the live source {live!r}"
 
 
 # ---------------------------------------------------------------------------

@@ -15,6 +15,51 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 ## [Unreleased]
 
+### Removed (v0.16 — MUFON case-file and r/UFOs purge)
+- **The `mufon.csv` import is gone.** All 138,310 sightings carrying
+  `source_database.name = 'MUFON'` (collection PUBLIUS) were deleted from
+  Postgres, along with the `MUFON` source_database row itself.
+  **MUFON-originated records that arrived through other catalogues are
+  untouched** — 2,861 UFOCAT rows and 1,800 UFO-search rows still cite MUFON
+  in `source_ref`. Every predicate keyed on `source_db_id`, never
+  `origin_id`/`source_ref`, so cross-referenced MUFON provenance survives.
+- **All 3,811 r/UFOs sightings removed**, plus the `r/UFOs` source_database
+  row and the now-empty `Reddit` source_collection. The v0.13 Reddit columns
+  (`reddit_post_id`, `reddit_url`, `llm_*`) remain in the schema but are
+  now uniformly NULL.
+- 50,763 `location` rows orphaned by the delete were removed. Purged rows and
+  their children were copied to `archive_*` tables first — see
+  `scripts/purge_mufon_csv_and_reddit.sql`, which is idempotent-guarded and
+  refuses to commit if the survivor count leaves the 400k–550k band.
+- **Corpus is now 476,195 sightings** (was 618,316) from **four** sources:
+  UFOCAT 197,108 / NUFORC 159,320 / UPDB 65,016 / UFO-search 54,751.
+
+### Fixed
+- **Rail source colours were keyed by bulk-buffer index, not by name.** The
+  buffer assigns `source_idx` alphabetically over `source_database`, so
+  dropping two sources reshuffled every index — NUFORC would have rendered in
+  UFOCAT's blue, UFO-search in MUFON's red. `_RAIL_SOURCE_COLORS` is now
+  keyed by source name, making the palette immune to membership changes. This
+  is the same failure class the v0.13 ETag fingerprint was added to catch.
+- **Landing counter was two versions stale** — `static/app.js` still
+  animated to 614,505 (pre-v0.14) in three places.
+
+### Changed
+- Totals refreshed across every surface: page title, meta description,
+  OpenGraph/Twitter cards, Schema.org JSON-LD, sidebar rail fallback,
+  methodology page, credits, `/llms.txt`, `/llms-full.txt`, the MCP server
+  instructions (`mcp_server.py`, `mcp_http.py`), the tool catalog, the
+  in-app assistant system prompt, and `README.md`.
+  476,195 total / 328,714 mapped (69.0%) / 365,600 emotion-analyzed /
+  166,699 with movement categories.
+- Deduplication methodology section no longer quotes per-tier pair counts:
+  the largest tier was MUFON ↔ NUFORC, so 126,729 is void until the dedup
+  pass is re-run over the current corpus.
+- **The published `ufo_public.db` snapshot is now stale** and still contains
+  618,316 rows. Both the download card and README say so explicitly rather
+  than quoting live figures over an old artifact. Regenerate from
+  `ufo-dedup` and attach to the next tagged release.
+
 ### Added (v0.15.7 — SEO, sharing, and security polish)
 - **OpenGraph + Twitter Card metadata.** Sharing ufosint.com on
   Reddit / X / Discord / Slack now renders a rich preview with a

@@ -1,6 +1,6 @@
 # UFOSINT Explorer
 
-Interactive web interface for browsing the Unified UFO Sightings Database — **614,505 sighting records** from five major UFO/UAP databases, deduplicated and cross-referenced.
+Interactive web interface for browsing the Unified UFO Sightings Database — **476,195 sighting records** from four major UFO/UAP databases, deduplicated and cross-referenced.
 
 **Live:** [ufosint.com](https://ufosint.com)
 
@@ -9,7 +9,7 @@ Interactive web interface for browsing the Unified UFO Sightings Database — **
 ## Features
 
 ### Observatory
-- **GPU-accelerated map** — 396,158 geocoded sightings rendered via deck.gl on a Leaflet base. Points, heatmap, and hex-bin views. Click any sighting for a full detail modal.
+- **GPU-accelerated map** — 328,714 geocoded sightings rendered via deck.gl on a Leaflet base. Points, heatmap, and hex-bin views. Click any sighting for a full detail modal.
 - **Data Quality rail** — Five toggles (high quality, narrative red flags, has description, has media, has movement) filter the map in real time. Bias warning when the high-quality subset is active.
 - **Live filters** — Shape, color, source, emotion, date range, and 10 movement-category checkboxes. No Apply button — selections take effect at 250ms debounce.
 - **UAP Gerb overlays** (v0.12) — Three toggleable curated layers on top of the sighting map:
@@ -56,13 +56,12 @@ Interactive web interface for browsing the Unified UFO Sightings Database — **
 
 | Collection | Source | Records | Description |
 |---|---|---|---|
-| PUBLIUS | MUFON | 138,310 | Mutual UFO Network case reports |
 | PUBLIUS | NUFORC | 159,320 | National UFO Reporting Center |
 | UFOCAT | UFOCAT | 197,108 | CUFOS academic catalog (2023) |
 | CAPELLA | UPDB | 65,016 | Jacques Vallee's Unified Phenomena Database |
 | GELDREICH | UFO-search | 54,751 | Majestic Timeline (19+ historical compilations) |
 
-Total raw records across all sources: ~2.56 million. After removing known overlaps at import time: **614,505**.
+Total raw records across all sources: ~2.42 million. After removing known overlaps at import time: **476,195**.
 
 All source datasets were paid for / licensed by UFOSINT. This repository contains only code; the raw sources and the built database live outside the repo — see the [`ufo-dedup`](https://github.com/UFOSINT/ufo-dedup) pipeline repo for details.
 
@@ -70,7 +69,13 @@ All source datasets were paid for / licensed by UFOSINT. This repository contain
 
 The public SQLite snapshot is attached to every versioned release:
 
-**[📦 Latest release download (ufo_public.db, 508 MB)](https://github.com/UFOSINT/ufosint-explorer/releases/latest/download/ufo_public.db)**
+**[📦 Latest release download (ufo_public.db)](https://github.com/UFOSINT/ufosint-explorer/releases/latest/download/ufo_public.db)**
+
+> ⚠️ **The currently published snapshot is out of date.** It was built before the
+> MUFON case-file import and the r/UFOs records were removed, so it still contains
+> 618,316 rows. Regenerate it from [`ufo-dedup`](https://github.com/UFOSINT/ufo-dedup)
+> and attach the rebuilt file to the next tagged release. The figures below describe
+> the live database and the forthcoming snapshot.
 
 Or via the GitHub CLI:
 
@@ -84,11 +89,11 @@ Or direct curl:
 curl -LO https://github.com/UFOSINT/ufosint-explorer/releases/latest/download/ufo_public.db
 ```
 
-What's inside:
+What the live database contains:
 
-- **614,505 deduplicated sightings** from NUFORC, MUFON, UFOCAT, UPDB, UFO-search
-- **502,985 emotion-analyzed** rows (4 transformer models — see next section)
-- **396,158 geocoded** with lat/lng coordinates
+- **476,195 deduplicated sightings** from NUFORC, UFOCAT, UPDB, UFO-search
+- **365,600 emotion-analyzed** rows (4 transformer models — see next section)
+- **328,714 geocoded** with lat/lng coordinates
 - Derived columns: quality score, richness score, hoax likelihood, movement categorization, standardized shape
 - SQLite format — works with any SQLite client, the `sqlite3` CLI, or Python's built-in `sqlite3`
 
@@ -104,20 +109,20 @@ sqlite3 ufo_public.db "SELECT shape, COUNT(*) FROM sighting GROUP BY shape ORDER
 
 ## Emotion & Sentiment Analysis (v0.11)
 
-Three transformer models + VADER run against 502,985 sightings with narrative text:
+Three transformer models + VADER run against 365,600 sightings with narrative text:
 
 | Model | Type | Output | Coverage |
 |---|---|---|---|
-| **RoBERTa** (cardiffnlp) | 3-class sentiment | positive / negative / neutral | 502,985 rows |
-| **RoBERTa** (j-hartmann) | 7-class emotion | anger, disgust, fear, joy, neutral, sadness, surprise | 502,985 rows |
-| **GoEmotions** (SamLowe) | 28-class emotion | admiration, amusement, anger, ... (28 labels) | 502,985 rows |
-| **VADER** | Rule-based sentiment | compound score (-1 to +1) | 502,985 rows |
+| **RoBERTa** (cardiffnlp) | 3-class sentiment | positive / negative / neutral | 365,600 rows |
+| **RoBERTa** (j-hartmann) | 7-class emotion | anger, disgust, fear, joy, neutral, sadness, surprise | 365,600 rows |
+| **GoEmotions** (SamLowe) | 28-class emotion | admiration, amusement, anger, ... (28 labels) | 365,600 rows |
+| **VADER** | Rule-based sentiment | compound score (-1 to +1) | 365,600 rows |
 
 All models run offline via the science team's analysis pipeline. Results are stored as 12 new columns in the sighting table and packed into the 40-byte binary bulk buffer for client-side rendering.
 
 ## Binary Bulk Buffer
 
-The frontend loads all 396,158 mapped sightings in a single 15MB binary fetch (`/api/points-bulk`). Each sighting is packed into **40 bytes** (v011-1 schema):
+The frontend loads all 328,714 mapped sightings in a single binary fetch (`/api/points-bulk`). Each sighting is packed into **40 bytes** (v011-1 schema):
 
 ```
 <IffIBBBBBBBBBBHHHBBBBBBBB   (26 fields, 40 bytes per row)

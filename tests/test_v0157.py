@@ -43,12 +43,22 @@ def test_og_card_asset_exists():
 
 
 def test_no_stale_counts_in_index():
-    """v0.14 bumped the corpus to 618,316. The old totals kept
-    leaking into title/meta/JSON-LD; pin them out."""
+    """v0.16 dropped the corpus to 476,195 (mufon.csv + r/UFOs purge).
+
+    618,316 is still allowed to appear once, in the download card that
+    warns the published SQLite snapshot predates the purge — but it must
+    never reach the head, where the title/meta/JSON-LD totals live.
+    """
     html = _read(INDEX_HTML)
     assert "614,505" not in html
     assert "614505" not in html
-    assert "618,316" in html
+    assert "476,195" in html
+
+    head = html[: html.find("</head>")]
+    for stale in ("618,316", "618316", "614,505"):
+        assert stale not in head, (
+            f"stale total {stale!r} leaked back into the document head"
+        )
 
 
 def test_no_azurewebsites_urls_in_public_metadata():

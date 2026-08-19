@@ -40,21 +40,15 @@ const FILTER_FIELDS = [
     { id: "filter-emotion",   key: "emotion",   label: "Emotion" },
 ];
 
-// Source colors for chart and badges.
-// v0.13 — added `r/UFOs` (Reddit) using Reddit's signature orange so
-// the source is instantly recognizable on the map. Keep this list in
-// sync with the source_database table names returned by /api/filters.
-// NUFORC's orange is close but muted; Reddit's is hotter.
+// Source colors for chart and badges. Keep this list in sync with the
+// source_database table names returned by /api/filters.
+// v0.16 — the MUFON and r/UFOs entries were dropped along with their
+// source rows; sourceColor() falls back to grey for anything unlisted.
 const SOURCE_COLORS = {
     "UFOCAT":    { bg: "#4e79a7", border: "#3a5d82" },
     "NUFORC":    { bg: "#f28e2b", border: "#c97520" },
-    "MUFON":     { bg: "#e15759", border: "#b84445" },
     "UPDB":      { bg: "#76b7b2", border: "#5d9490" },
     "UFO-search": { bg: "#59a14f", border: "#478240" },
-    "r/UFOs":    { bg: "#ff4500", border: "#cc3700" },
-    // The dedup-team export currently names it "Reddit-UFOs"; keep a
-    // compatibility alias until the source name is unified upstream.
-    "Reddit-UFOs": { bg: "#ff4500", border: "#cc3700" },
 };
 
 function sourceColor(name) {
@@ -277,7 +271,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     try {
         if (!localStorage.getItem(TOUR_STORAGE_KEY)) {
             const stats = await statsPromise.catch(() => null);
-            const total = stats ? stats.total_sightings : 614505;
+            const total = stats ? stats.total_sightings : 476195;
             startTour(false, total);
         } else {
             skipCinematicIntro();
@@ -313,7 +307,7 @@ const TERMINAL_MESSAGE_BANKS = {
     ],
     search: [
         "TOKENIZING QUERY",
-        "SCANNING 614,505 SIGHTING RECORDS",
+        "SCANNING 476,195 SIGHTING RECORDS",
         "CROSS-REFERENCING DESCRIPTIONS",
         "APPLYING SHAPE + DATE FILTERS",
         "RANKING BY RELEVANCE",
@@ -348,7 +342,7 @@ const TERMINAL_MESSAGE_BANKS = {
         "BOOT SEQUENCE INITIATED",
         "CONTACTING CORTEX NODE",
         "DECRYPTING FILTER CACHE",
-        "LOADING 614,505 SIGHTINGS",
+        "LOADING 476,195 SIGHTINGS",
         "READY",
     ],
 };
@@ -7471,8 +7465,8 @@ const PROVIDER_DEFAULTS = {
 };
 
 const SYSTEM_PROMPT = `You are an assistant for the UFOSINT unified UFO sightings database.
-You help users explore 614,505 deduplicated sighting records from 5 sources
-(NUFORC, MUFON, UFOCAT, UPDB, UFO-search) covering dates from antiquity to 2026.
+You help users explore 476,195 deduplicated sighting records from 4 sources
+(NUFORC, UFOCAT, UPDB, UFO-search) covering dates from antiquity to 2026.
 
 You have access to tools that query the database read-only:
 - search_sightings: free-text + filter search
@@ -7489,7 +7483,7 @@ click through and see the full record. Keep answers concise and factual;
 this is a research tool, not a creative writing assistant.
 
 Date params accept either a year (1973) or an ISO date (1973-10-15).
-Source names are exactly: NUFORC, MUFON, UFOCAT, UPDB, UFO-search.`;
+Source names are exactly: NUFORC, UFOCAT, UPDB, UFO-search.`;
 
 
 function loadAISettings() {
@@ -8463,7 +8457,7 @@ function startTour(skipIntro, total) {
     }
 
     if (!skipIntro) {
-        runCinematicIntro(total || 614505).then(() => {
+        runCinematicIntro(total || 476195).then(() => {
             _beginTourSteps();
         });
     } else {
@@ -9413,11 +9407,10 @@ function _decodeRegionHash(val) {
 // Updates from applyClientFilters() -> refreshRailAnalytics().
 
 const _RAIL_SOURCE_COLORS = {
-    1: "#4e79a7",  // UFOCAT blue
-    2: "#f28e2b",  // NUFORC orange
-    3: "#e15759",  // MUFON red
-    4: "#76b7b2",  // UPDB teal
-    5: "#59a14f",  // UFO-search green
+    "UFOCAT":     "#4e79a7",  // blue
+    "NUFORC":     "#f28e2b",  // orange
+    "UPDB":       "#76b7b2",  // teal
+    "UFO-search": "#59a14f",  // green
 };
 const _RAIL_SOURCE_KEYS = {
     "UFOCAT": "ufocat",
@@ -9494,7 +9487,7 @@ function refreshRailAnalytics() {
                 label: sources[i],
                 count: sourceCounts[i],
                 key: _RAIL_SOURCE_KEYS[sources[i]] || `src-${i}`,
-                color: _RAIL_SOURCE_COLORS[i] || "#888",
+                color: _RAIL_SOURCE_COLORS[sources[i]] || "#888",
             });
         }
     }
