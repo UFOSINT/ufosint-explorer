@@ -15,6 +15,26 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 ## [Unreleased]
 
+### Fixed (v0.16.2 — basemap "API KEY REQUIRED" watermark)
+- **CARTO now requires an API key on their raster basemaps**, and keyless
+  requests were being served tiles with `API KEY REQUIRED` rendered into the
+  image. It affected every zoom level and both themes. The failure was silent
+  by construction — HTTP 200, a well-formed PNG, nothing to catch — and it
+  appeared with no deploy on our side.
+- The key is read from the **`CARTO_KEY` app setting** and substituted into
+  `index.html` at import time, alongside `{{ASSET_VERSION}}`. It is
+  deliberately **not committed**: this repo is public. Rotating the key is an
+  app-setting change and needs no deploy, since changing it restarts the app
+  and re-runs the substitution.
+- **A missing key now falls back to Esri's keyless canvas** rather than
+  rendering a watermarked map. The fallback is plainer — flatter greys, and
+  labels sit in a separate reference layer we don't add — but a plain map
+  beats a defaced one. Attribution follows whichever source is actually in
+  use.
+- `tests/test_v0162_basemap.py` guards the wiring, and scans the whole tree
+  for a committed CARTO key so one can't reach the public repo.
+
+
 ### Changed (v0.16.1)
 - **Credits: deployment & server hosting moved to @ufohackers.** The role
   heading is now "Research Direction, Domain & Hosting"; the line was

@@ -109,6 +109,14 @@
     <script defer src="https://unpkg.com/deck.gl@9.0.38/dist.min.js"></script>
     <script defer src="https://unpkg.com/deck.gl-leaflet@1.3.1/dist/deck.gl-leaflet.umd.min.js"></script>
 
+    <!-- v0.16.2 — CARTO basemap key, substituted by app.py from the
+         CARTO_KEY app setting. Deliberately NOT in the repo: this project is
+         public and a committed key gets scraped. An empty string is a valid
+         state and makes app.js fall back to a keyless basemap rather than
+         showing CARTO's "API KEY REQUIRED" watermark. Must come before
+         app.js, which reads it while building TILE_URLS. -->
+    <script>window.CARTO_KEY = "{{CARTO_KEY}}";</script>
+
     <!-- v0.8.0 bulk-points loader + deck.gl wiring. Must come after
          the Leaflet scripts so window.L exists, and after the deck.gl
          defer scripts so waitForDeck() succeeds quickly. -->

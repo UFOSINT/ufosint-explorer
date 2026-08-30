@@ -142,18 +142,27 @@ def test_style_css_keeps_existing_theme_classes():
 # app.js — TILE_URLS + state.tileLayer + setTheme wiring
 # ---------------------------------------------------------------------------
 def test_app_js_has_tile_urls_constant():
+    """Both themes must resolve to a basemap source.
+
+    v0.16.2: TILE_URLS is no longer a literal object. CARTO now requires an
+    API key, so it selects between the keyed CARTO templates and a keyless
+    fallback. The theme coverage this test exists to protect is now asserted
+    against the two source tables it picks from.
+    """
     js = _read(APP_JS)
     assert "TILE_URLS" in js
-    # Must have BOTH signal + declass entries
-    start = js.find("const TILE_URLS")
-    assert start != -1
-    end = js.find("};", start)
-    block = js[start:end]
-    assert "signal:" in block
-    assert "declass:" in block
-    assert "cartocdn" in block, (
-        "TILE_URLS must point at Carto basemap URLs (Dark Matter + Voyager)"
-    )
+    assert "const TILE_URLS" in js
+
+    for const, expect_carto in (("_CARTO_URLS", True), ("_FALLBACK_URLS", False)):
+        start = js.find(f"const {const}")
+        assert start != -1, f"{const} is missing"
+        block = js[start: js.find("};", start)]
+        assert "signal:" in block, f"{const} is missing the signal theme"
+        assert "declass:" in block, f"{const} is missing the declass theme"
+        if expect_carto:
+            assert "cartocdn" in block, (
+                "_CARTO_URLS must point at Carto basemaps (Dark Matter + Voyager)"
+            )
 
 
 def test_init_map_uses_tile_urls():

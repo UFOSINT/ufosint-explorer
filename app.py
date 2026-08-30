@@ -65,12 +65,31 @@ def _compute_asset_version() -> str:
 ASSET_VERSION = _compute_asset_version()
 print(f"ASSET_VERSION = {ASSET_VERSION}")
 
+# v0.16.2 — CARTO basemap key. CARTO began requiring an API key on their
+# raster basemaps in Aug 2026; keyless requests still return HTTP 200 with a
+# valid PNG, but with "API KEY REQUIRED" rendered into the tile image itself.
+# There is no error to catch — the map just looks defaced.
+#
+# The key is NOT committed: this repo is public, and a key in the tree gets
+# scraped. It lives in the App Service app settings (same place as
+# DATABASE_URL) and is substituted into index.html at import time. Changing
+# the setting restarts the app, which re-runs this substitution, so the key
+# can be rotated with no deploy.
+#
+# Empty is a supported state: static/app.js falls back to a keyless provider
+# rather than rendering a watermarked map. See TILE_URLS there.
+CARTO_KEY = os.environ.get("CARTO_KEY", "").strip()
+print(f"CARTO_KEY = {'set' if CARTO_KEY else 'NOT SET — basemap will use the keyless fallback'}")
+
 # Read index.html once at startup and pre-substitute the {{ASSET_VERSION}}
-# placeholder. Avoids a file read + string replace on every request.
+# and {{CARTO_KEY}} placeholders. Avoids a file read + string replace on
+# every request.
 _INDEX_HTML_PATH = Path(__file__).parent / "static" / "index.html"
 try:
-    _INDEX_HTML = _INDEX_HTML_PATH.read_text(encoding="utf-8").replace(
-        "{{ASSET_VERSION}}", ASSET_VERSION
+    _INDEX_HTML = (
+        _INDEX_HTML_PATH.read_text(encoding="utf-8")
+        .replace("{{ASSET_VERSION}}", ASSET_VERSION)
+        .replace("{{CARTO_KEY}}", CARTO_KEY)
     )
 except Exception as e:
     print(f"Could not preload index.html: {e}")
