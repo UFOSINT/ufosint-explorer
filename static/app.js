@@ -1661,24 +1661,59 @@ function lastDayOfMonth(year, month) {
 // v0.8.4 — Per-theme base map tile sources. Carto ships dark and
 // light variants of the same cartographic style, so switching between
 // the two gives a visually coherent light/dark map without changing
-// the data geometry. Both are free for public use, CORS-enabled,
-// retina-aware (the {r} → @2x suffix kicks in on hi-DPI), and don't
-// need an API key. Carto attribution covers both.
+// the data geometry. Both are CORS-enabled and retina-aware (the
+// {r} → @2x suffix kicks in on hi-DPI).
 //
 //   signal  — "Dark Matter": dark slate background, white roads.
 //             Matches the cyan-on-void palette.
 //   declass — "Voyager": warm cream paper, soft desaturated accents.
 //             Matches the DECLASS ink-on-paper palette.
 //
+// v0.16.2 — CARTO now requires an API key on these raster basemaps.
+// The failure mode is nasty: a keyless request still returns HTTP 200
+// with a well-formed PNG, but "API KEY REQUIRED" is rendered into the
+// tile image itself, at every zoom, on both styles. Nothing throws and
+// no status code is wrong, so there is no error path to hook — the map
+// simply looks defaced. It appeared without any deploy on our side.
+//
+// The key comes from window.CARTO_KEY, injected into index.html by
+// app.py from the CARTO_KEY app setting. It is deliberately absent from
+// this repo, which is public.
+//
+// If the key is missing we fall back to Esri's keyless canvas rather
+// than serving a watermarked map. The fallback is visibly plainer —
+// flatter greys, and labels live in a separate reference layer we do
+// not add — but a plain map beats a defaced one. Esri also uses
+// {z}/{y}/{x} ordering and serves JPEG, hence the different template
+// shape and the lack of an {r} suffix.
+//
 // setTheme() below calls state.tileLayer.setUrl() with the right
 // template when the user toggles — no layer remove/re-add needed.
-const TILE_URLS = {
+const CARTO_KEY = (typeof window !== "undefined" && window.CARTO_KEY) || "";
+
+const _CARTO_URLS = {
     signal:  "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
     declass: "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
 };
-const TILE_ATTRIBUTION =
-    '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> ' +
-    '&copy; <a href="https://carto.com/attributions">CARTO</a>';
+const _FALLBACK_URLS = {
+    signal:  "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+    declass: "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+};
+
+const TILE_URLS = CARTO_KEY
+    ? {
+        signal:  _CARTO_URLS.signal  + "?key=" + encodeURIComponent(CARTO_KEY),
+        declass: _CARTO_URLS.declass + "?key=" + encodeURIComponent(CARTO_KEY),
+    }
+    : _FALLBACK_URLS;
+
+// Attribution has to follow whichever source is actually in use — CARTO's
+// free tier is granted in exchange for keeping their credit visible, and
+// crediting them for tiles we did not serve from them would be wrong too.
+const TILE_ATTRIBUTION = CARTO_KEY
+    ? '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> ' +
+      '&copy; <a href="https://carto.com/attributions">CARTO</a>'
+    : 'Tiles &copy; <a href="https://www.esri.com">Esri</a>';
 
 
 function _currentTheme() {
