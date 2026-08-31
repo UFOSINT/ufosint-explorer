@@ -2431,10 +2431,17 @@ def _points_bulk_build_cached(etag: str) -> tuple[bytes, bytes, dict]:
         # Location is still joined for the coord presence filter
         # because the migration preserves location.latitude/longitude
         # as the canonical source.
+        # latitude/longitude come from `location` in the fallback join, but
+        # mv_points_bulk carries them under its own alias. Getting this wrong
+        # is not a soft failure: the query dies with "missing FROM-clause
+        # entry for table l" and the map goes dark, which is exactly what
+        # v0.16.6's first attempt shipped.
+        _loc = "s" if _points_bulk_has_mv(conn) else "l"
+
         select_parts = [
             "s.id",
-            "l.latitude",
-            "l.longitude",
+            f"{_loc}.latitude",
+            f"{_loc}.longitude",
             "s.source_db_id",
             "s.shape AS raw_shape",
             "s.date_event",
