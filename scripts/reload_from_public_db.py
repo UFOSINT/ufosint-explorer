@@ -87,7 +87,10 @@ EXPECTED = {
     "qs60": 92_523,
     "has_movement": 229_757,
     "movement_cats_non_empty": 229_757,
-    "coords": 96_873,
+    # sighting.lat/lng, the derived columns — NOT the location table.
+    # First attempt at this value used location.latitude and the tripwire
+    # correctly refused the reload.
+    "coords": 385_218,
     "std_shape": 236_219,
     "date_correction": 714,
     "emotion_28": 461_690,
