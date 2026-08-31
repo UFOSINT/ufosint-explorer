@@ -15,6 +15,29 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 ## [Unreleased]
 
+### Added (v0.16.5 — map load progress)
+- **A progress bar while the map loads.** `/api/points-bulk` is ~5.8 MB
+  gzipped and 15.8 MB decoded, and the map is blank until it lands — a second
+  or two on a desk, closer to ten on a phone, with nothing to explain it.
+- **It runs on every visit.** The cinematic intro is gated behind the tour's
+  localStorage key, so only a visitor's *first ever* load showed anything, and
+  even that was a fixed 3-second animation unconnected to the real fetch.
+- Progress is measured, not simulated: `loadBulkPoints()` now streams the body
+  and divides by the `x-uncompressed-size` header. `content-length` is the
+  compressed figure, so dividing by it would race the bar to 100% about a
+  third of the way through.
+- Download is weighted to 80%. Deserialising ~20 typed arrays across 385k rows
+  and compiling the deck.gl layer take real time; a bar that sat at 100%
+  through them would be worse than none.
+- Degrades rather than breaking: indeterminate sweep when the header or
+  streams are unavailable, `arrayBuffer()` fallback, monotonic fill,
+  `role="progressbar"` with live `aria-valuenow`, and a reduced-motion variant.
+- Reveal is delayed 250 ms so a warm cache never flashes a bar.
+
+### Fixed
+- Intro status line said `CONNECTING TO 5 SOURCES`; the corpus has four.
+
+
 ### Fixed (v0.16.2 — basemap "API KEY REQUIRED" watermark)
 - **CARTO now requires an API key on their raster basemaps**, and keyless
   requests were being served tiles with `API KEY REQUIRED` rendered into the

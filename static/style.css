@@ -6383,3 +6383,78 @@ body[data-hide-brush] .observatory-time-brush {
     }
     .ms-options { max-height: 40vh; }
 }
+
+
+/* =========================================================================
+   v0.16.5 — Map load progress
+   Sits over the map while /api/points-bulk streams in. Determinate where the
+   server reports x-uncompressed-size, indeterminate otherwise. Uses the same
+   terminal vocabulary as .loading-terminal so it reads as part of the set.
+   ========================================================================= */
+.map-progress {
+    position: absolute;
+    left: 50%;
+    bottom: 2.25rem;
+    transform: translateX(-50%);
+    z-index: 620;               /* above the deck.gl canvas, below modals */
+    pointer-events: none;
+    max-width: min(26rem, calc(100vw - 2rem));
+    width: 22rem;
+}
+.map-progress[hidden] { display: none !important; }
+
+.map-progress-inner {
+    background: var(--bg-card, rgba(12, 16, 24, 0.92));
+    border: 1px solid var(--border, rgba(255, 255, 255, 0.14));
+    border-radius: 6px;
+    padding: 0.7rem 0.85rem 0.75rem;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+}
+
+.map-progress-label {
+    display: flex;
+    align-items: baseline;
+    gap: 0.45rem;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 0.7rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--text-dim, #9fb0b8);
+    margin-bottom: 0.5rem;
+}
+.map-progress-label .term-prompt { color: var(--accent, #4fd1de); }
+
+.map-progress-track {
+    position: relative;
+    height: 3px;
+    border-radius: 2px;
+    background: var(--border, rgba(255, 255, 255, 0.14));
+    overflow: hidden;
+}
+.map-progress-fill {
+    height: 100%;
+    width: 0;
+    border-radius: 2px;
+    background: var(--accent, #4fd1de);
+    transition: width 180ms linear;
+}
+
+/* Indeterminate: no total to divide by, so sweep instead of lying about a
+   percentage. */
+.map-progress.is-indeterminate .map-progress-fill {
+    width: 35%;
+    animation: map-progress-sweep 1.5s ease-in-out infinite;
+}
+@keyframes map-progress-sweep {
+    0%   { transform: translateX(-100%); }
+    100% { transform: translateX(320%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .map-progress-fill { transition: none; }
+    .map-progress.is-indeterminate .map-progress-fill {
+        animation: none;
+        width: 100%;
+        opacity: 0.5;
+    }
+}

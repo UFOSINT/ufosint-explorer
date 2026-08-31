@@ -156,11 +156,72 @@
         visibleIdx: null,
     };
 
-    async function loadBulkPoints() {
+    // Read the response body incrementally so download progress is
+    // observable. Falls back to arrayBuffer() where streams are unavailable.
+    //
+    // The denominator is x-uncompressed-size, not content-length: the browser
+    // decompresses gzip transparently, so the reader yields decoded bytes
+    // while content-length reports the ~5.8 MB compressed figure. Dividing by
+    // the wrong one races the bar to 100% at roughly a third of the way in.
+    //
+    // The buffer is preallocated and filled at a running offset rather than
+    // collecting chunks and concatenating, which would briefly hold two full
+    // copies (~32 MB) at once.
+    async function _readWithProgress(resp, report) {
+        const total = Number(resp.headers.get("x-uncompressed-size")) || 0;
+
+        if (!resp.body || typeof resp.body.getReader !== "function" || !total) {
+            report(null, "downloading");
+            const buf = await resp.arrayBuffer();
+            report(PROGRESS_DOWNLOAD_SHARE, "downloading");
+            return buf;
+        }
+
+        const out = new Uint8Array(total);
+        const reader = resp.body.getReader();
+        let at = 0;
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (at + value.length > total) {
+                // Server disagrees with its own header — stop trusting the
+                // preallocated buffer and fall back rather than truncating.
+                const rest = await new Response(
+                    new Blob([out.subarray(0, at), value]),
+                ).arrayBuffer();
+                report(PROGRESS_DOWNLOAD_SHARE, "downloading");
+                return rest;
+            }
+            out.set(value, at);
+            at += value.length;
+            report((at / total) * PROGRESS_DOWNLOAD_SHARE, "downloading");
+        }
+        return out.buffer;
+    }
+
+    // v0.16.5 — progress reporting for the bulk load.
+    //
+    // The map is blank for as long as this takes: ~5.8 MB gzipped, 15.8 MB
+    // decoded, which is a second or two on a desk and closer to ten on a
+    // phone. Callers pass onProgress(fraction, phase) to drive a bar.
+    //
+    // fraction is 0..1, or null when the total isn't known and the caller
+    // should fall back to an indeterminate animation.
+    //
+    // Download is weighted to 80% because it isn't the only cost: the
+    // deserialiser then builds ~20 typed arrays across 385k rows and deck.gl
+    // compiles the layer. A bar that sits at 100% through those is worse than
+    // no bar at all.
+    const PROGRESS_DOWNLOAD_SHARE = 0.80;
+
+    async function loadBulkPoints(onProgress) {
+        const report = typeof onProgress === "function" ? onProgress : () => {};
+
         // Fire both requests in parallel. The meta sidecar is small
         // (a few KB of JSON); the binary buffer is ~4 MB gzipped in
         // v0.8.2 (up from 2.85 MB in v0.8.0 with the new fields).
         const t0 = performance.now();
+        report(0, "connecting");
         const [metaResp, binResp] = await Promise.all([
             fetch("/api/points-bulk?meta=1", { credentials: "same-origin" }),
             fetch("/api/points-bulk", { credentials: "same-origin" }),
@@ -171,7 +232,7 @@
             );
         }
         const meta = await metaResp.json();
-        const buf = await binResp.arrayBuffer();
+        const buf = await _readWithProgress(binResp, report);
         const t1 = performance.now();
         console.info(
             `[v0.8.2] Fetched ${meta.count.toLocaleString()} points ` +
@@ -203,6 +264,7 @@
         const isV014 = bytesPerRow >= 48;
         const rowBytes = bytesPerRow;
 
+        report(PROGRESS_DOWNLOAD_SHARE, "decoding");
         const N = meta.count;
         const dv = new DataView(buf);
         POINTS.id            = new Uint32Array(N);
@@ -299,6 +361,7 @@
         // Start with every point visible.
         POINTS.visibleIdx = new Uint32Array(N);
         for (let i = 0; i < N; i++) POINTS.visibleIdx[i] = i;
+        report(0.95, "building");
         POINTS.ready = true;
         return POINTS;
     }
