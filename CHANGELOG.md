@@ -15,6 +15,30 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 
 ## [Unreleased]
 
+### Fixed (v0.16.6 — /api/points-bulk was returning 500)
+- **The map stopped loading entirely.** `/api/points-bulk` 500'd for every
+  visitor, which the page surfaced as "some data may be missing" and a silent
+  fall back to the legacy Leaflet cluster layer — `bootDeckGL()` throws when
+  that fetch fails, so clusters instead of points was the same bug, not a
+  separate one. The sidebar rail was empty for the same reason: it aggregates
+  over the buffer that never arrived.
+- **Cause: loading the descriptions.** 468,251 descriptions averaging 645
+  chars stay under PostgreSQL's ~2 KB TOAST threshold, so they were stored
+  inline and took the `sighting` heap from ~150 MB to 836 MB. The map needs
+  ~30 narrow columns, but every scan then dragged that text through memory:
+  the ETag count went to 17.3 s and the buffer build to 48.8 s, against the
+  app's 25 s `statement_timeout`.
+- **Fix: `mv_points_bulk`**, a materialized view holding exactly the packed
+  columns for exactly the mapped rows — 385,211 rows, 57 MB, scanned in
+  **73 ms instead of 48.8 s**. Plus a covering index on
+  `sighting(location_id, id)` that took the ETag from 17.3 s to 392 ms.
+- The view is created and refreshed by `scripts/add_v0166_points_bulk_mv.sql`
+  on every deploy, so a deploy always publishes current data. **It must also
+  be refreshed after any out-of-band bulk load.**
+- Absent the view the app falls back to the original join — slow, but serving
+  a map rather than a 500.
+
+
 ### Added (v0.16.5 — map load progress)
 - **A progress bar while the map loads.** `/api/points-bulk` is ~5.8 MB
   gzipped and 15.8 MB decoded, and the map is blank until it lands — a second

@@ -1986,23 +1986,79 @@ def _epoch_days_1900(iso_str) -> int:
         return 0
 
 
-def _points_bulk_column_set(conn) -> frozenset:
-    """Return the set of sighting columns that exist in the target
-    schema, intersected with _POINTS_BULK_DERIVED_COLS.
+# v0.16.6 — the map buffer reads from a narrow materialized view.
+#
+# Loading 468,251 descriptions into `sighting` took its heap from ~150 MB to
+# 836 MB. The map needs ~30 narrow columns, but every scan had to drag the
+# inline description text along with them: the build query went from inside
+# the 25 s statement_timeout to 48.8 s, so /api/points-bulk returned 500 to
+# every visitor. On the page that surfaced as "some data may be missing"
+# plus a silent fall back to the legacy Leaflet cluster layer, because
+# bootDeckGL() throws when the fetch fails.
+#
+# mv_points_bulk holds exactly those columns for exactly the mapped rows:
+# 385,211 rows, 57 MB, scanned in 73 ms instead of 48.8 s.
+#
+# The fallback matters: a database without the MV must still serve the map,
+# slowly, rather than 500.
+_POINTS_BULK_MV = "mv_points_bulk"
 
-    Runs one information_schema query (~1 ms). Called from
-    _points_bulk_build() on every build — but builds are @lru_cache'd
-    on the etag, so the cost is negligible.
+_POINTS_BULK_FALLBACK_FROM = (
+    "\n            FROM sighting s"
+    "\n            JOIN location l ON l.id = s.location_id"
+    "\n            WHERE l.latitude IS NOT NULL"
+    "\n              AND l.longitude IS NOT NULL"
+    "\n              AND l.latitude BETWEEN -90 AND 90"
+    "\n              AND l.longitude BETWEEN -180 AND 180\n"
+)
+
+
+def _points_bulk_has_mv(conn) -> bool:
+    """True when mv_points_bulk exists."""
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT 1 FROM pg_class WHERE relname = %s AND relkind = 'm'",
+            (_POINTS_BULK_MV,),
+        )
+        return cur.fetchone() is not None
+    except psycopg.Error:
+        conn.rollback()
+        return False
+
+
+def _points_bulk_from_clause(conn) -> str:
+    """FROM clause for the map buffer: the MV when present, else the join."""
+    if _points_bulk_has_mv(conn):
+        return f"\n            FROM {_POINTS_BULK_MV} s\n"
+    return _POINTS_BULK_FALLBACK_FROM
+
+
+def _points_bulk_column_set(conn) -> frozenset:
+    """Return the columns present on the map buffer's source relation,
+    intersected with _POINTS_BULK_DERIVED_COLS.
+
+    The source is mv_points_bulk when it exists, else the sighting table.
+    One pg_catalog query (~1 ms). Called from _points_bulk_build() on every
+    build — but builds are @lru_cache'd on the etag, so the cost is
+    negligible.
     """
+    # pg_catalog, not information_schema: the latter does not list
+    # materialized views, so probing it would report every column missing
+    # once the buffer reads from mv_points_bulk.
+    rel = _POINTS_BULK_MV if _points_bulk_has_mv(conn) else "sighting"
     cur = conn.cursor()
     cur.execute(
         """
-        SELECT column_name
-        FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'sighting'
-          AND column_name = ANY(%s)
+        SELECT a.attname
+        FROM pg_attribute a
+        JOIN pg_class c ON c.oid = a.attrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public' AND c.relname = %s
+          AND a.attnum > 0 AND NOT a.attisdropped
+          AND a.attname = ANY(%s)
         """,
-        (list(_POINTS_BULK_DERIVED_COLS),),
+        (rel, list(_POINTS_BULK_DERIVED_COLS)),
     )
     return frozenset(row[0] for row in cur.fetchall())
 
@@ -2060,15 +2116,8 @@ def _points_bulk_etag() -> str:
     try:
         cur = conn.cursor()
         cur.execute(
-            """
-            SELECT COUNT(*), COALESCE(MAX(s.id), 0)
-            FROM sighting s
-            JOIN location l ON l.id = s.location_id
-            WHERE l.latitude IS NOT NULL
-              AND l.longitude IS NOT NULL
-              AND l.latitude BETWEEN -90 AND 90
-              AND l.longitude BETWEEN -180 AND 180
-            """
+            "SELECT COUNT(*), COALESCE(MAX(s.id), 0)"
+            + _points_bulk_from_clause(conn)
         )
         cnt, max_id = cur.fetchone()
         cols = _points_bulk_column_set(conn)
@@ -2425,12 +2474,7 @@ def _points_bulk_build_cached(etag: str) -> tuple[bytes, bytes, dict]:
         cur.execute(
             f"""
             SELECT {select_sql}
-            FROM sighting s
-            JOIN location l ON l.id = s.location_id
-            WHERE l.latitude IS NOT NULL
-              AND l.longitude IS NOT NULL
-              AND l.latitude BETWEEN -90 AND 90
-              AND l.longitude BETWEEN -180 AND 180
+            {_points_bulk_from_clause(conn)}
             ORDER BY s.id
             """
         )
