@@ -1306,6 +1306,27 @@ DATABASE_URL="postgresql://..." python mcp_server.py</code></pre>
 </main>
 
     <!-- v0.11.2: Cinematic intro overlay — first-visit system boot animation -->
+    <!-- v0.16.5 — map load progress. Shown on EVERY visit, not just the
+         first: the cinematic intro is gated behind the tour's localStorage
+         key, so returning visitors previously stared at an empty map with no
+         indication anything was happening. Hidden by default; app.js reveals
+         it only if the load is still running after a short delay, so a warm
+         cache doesn't flash a bar. -->
+    <div id="map-progress" class="map-progress" hidden>
+        <div class="map-progress-inner">
+            <div class="map-progress-label">
+                <span class="term-prompt" aria-hidden="true">&gt;</span>
+                <span id="map-progress-msg">LOADING SIGHTINGS</span>
+            </div>
+            <div class="map-progress-track"
+                 role="progressbar"
+                 aria-labelledby="map-progress-msg"
+                 aria-valuemin="0" aria-valuemax="100">
+                <div class="map-progress-fill" id="map-progress-fill"></div>
+            </div>
+        </div>
+    </div>
+
     <div id="intro-overlay" class="intro-overlay" aria-hidden="true">
         <div class="intro-content">
             <div class="intro-logo">UFOSINT Explorer</div>
@@ -1315,7 +1336,7 @@ DATABASE_URL="postgresql://..." python mcp_server.py</code></pre>
                 <span class="intro-counter-value" id="intro-counter-value">0</span>
                 <span class="term-cursor" aria-hidden="true"></span>
             </div>
-            <div class="intro-status" id="intro-status">CONNECTING TO 5 SOURCES</div>
+            <div class="intro-status" id="intro-status">CONNECTING TO 4 SOURCES</div>
         </div>
     </div>
 

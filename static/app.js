@@ -1889,6 +1889,78 @@ function initMap() {
     }
 }
 
+
+// v0.16.5 — map load progress controller.
+//
+// Runs on every visit. The cinematic intro only appears on a visitor's first
+// ever load (it is gated behind the tour's localStorage key), so returning
+// visitors previously watched an empty map with nothing to explain the wait.
+//
+// Reveal is delayed: /api/points-bulk is cacheable for an hour, so a warm load
+// resolves almost immediately and a bar that appeared instantly would just
+// flash. If the load finishes before the delay elapses, nothing is ever shown.
+const _MAP_PROGRESS_DELAY_MS = 250;
+
+const _MAP_PROGRESS_LABELS = {
+    connecting:  "CONNECTING",
+    downloading: "RECEIVING SIGHTINGS",
+    decoding:    "DECODING",
+    building:    "BUILDING GPU LAYER",
+};
+
+function _createMapProgress() {
+    const root = document.getElementById("map-progress");
+    const fill = document.getElementById("map-progress-fill");
+    const msg = document.getElementById("map-progress-msg");
+    if (!root || !fill) {
+        return { update() {}, done() {} };
+    }
+
+    let shown = false;
+    let finished = false;
+    let lastFraction = 0;
+
+    const timer = setTimeout(() => {
+        if (!finished) {
+            root.hidden = false;
+            shown = true;
+        }
+    }, _MAP_PROGRESS_DELAY_MS);
+
+    const track = root.querySelector(".map-progress-track");
+
+    return {
+        update(fraction, phase) {
+            if (finished) return;
+            if (msg && _MAP_PROGRESS_LABELS[phase]) {
+                msg.textContent = _MAP_PROGRESS_LABELS[phase];
+            }
+            if (fraction === null || fraction === undefined) {
+                // No total available — sweep rather than invent a number.
+                root.classList.add("is-indeterminate");
+                if (track) track.removeAttribute("aria-valuenow");
+                return;
+            }
+            root.classList.remove("is-indeterminate");
+            // Never let the bar go backwards; phases can overlap slightly.
+            lastFraction = Math.max(lastFraction, Math.min(1, fraction));
+            const pct = Math.round(lastFraction * 100);
+            fill.style.width = pct + "%";
+            if (track) track.setAttribute("aria-valuenow", String(pct));
+        },
+        done() {
+            finished = true;
+            clearTimeout(timer);
+            if (!shown) { root.hidden = true; return; }
+            fill.style.width = "100%";
+            if (track) track.setAttribute("aria-valuenow", "100");
+            // Brief settle so the bar visibly completes rather than vanishing
+            // mid-travel, then hide.
+            setTimeout(() => { root.hidden = true; }, 200);
+        },
+    };
+}
+
 // v0.8.0 — Bulk-load the packed geocoded dataset and mount the deck.gl
 // LeafletLayer on top of state.map. On success, the legacy marker /
 // heat / hex layers are hidden and state.useDeckGL flips to true so
@@ -1902,7 +1974,12 @@ async function bootDeckGL() {
     await UFODeck.waitForDeck(40);
 
     // Fetch + deserialise in parallel with the legacy initial load.
-    await UFODeck.loadBulkPoints();
+    const progress = _createMapProgress();
+    try {
+        await UFODeck.loadBulkPoints(progress.update);
+    } finally {
+        progress.done();
+    }
 
     // v0.8.4 — seed deck.gl with the active theme BEFORE mounting the
     // layer, so the initial ScatterplotLayer instantiates with the
@@ -8428,7 +8505,7 @@ function runCinematicIntro(total) {
         const duration = 3000;  // 3 seconds counter
         const start = performance.now();
         const statusMessages = [
-            "CONNECTING TO 5 SOURCES",
+            "CONNECTING TO 4 SOURCES",
             "CROSS-REFERENCING RECORDS",
             "GEOCODING COORDINATES",
             "BUILDING GPU LAYER",
