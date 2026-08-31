@@ -76,7 +76,7 @@ def handle_initialize(req_id, params):
         },
         "instructions": (
             "You are connected to the unified UFO sightings database "
-            "(476,195 records from NUFORC, UFOCAT, UPDB, UFO-search). "
+            "(573,210 records from NUFORC, UFOCAT, UPDB, UFO-search). "
             "Use get_stats first to get the lay of the land, then "
             "search_sightings for free-text and filter searches, "
             "get_sighting for full record details, get_timeline for "
@@ -242,7 +242,7 @@ LANDING_HTML = """<!doctype html>
 <h1>UFOSINT MCP Server</h1>
 <p>This is a <a href="https://modelcontextprotocol.io">Model Context Protocol</a>
 server exposing read-only tools against the unified UFO sightings database
-(476,195 records, 4 sources, deduplicated).</p>
+(573,210 records, 4 sources, deduplicated).</p>
 
 <h3>Connect from Claude Desktop</h3>
 <p>Add this to your <code>claude_desktop_config.json</code>:</p>

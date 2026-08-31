@@ -160,7 +160,7 @@ def test_v011_emotion_color_constants():
 #
 # v0.14 — The dedup team rewrote the methodology HTML from scratch in
 # docs/METHODOLOGY_SITE_v014.html with a new section layout and updated
-# numbers (476,195 sightings, 328,714 mapped). The v0.8.8-era tests
+# numbers (573,210 sightings, 385,211 mapped). The v0.8.8-era tests
 # below used to assert specific heading strings from the old layout;
 # they're relaxed to match the new structure while keeping the spirit
 # (must document mapping, movement, quality, and reproduction).
@@ -179,11 +179,11 @@ def test_methodology_has_geocoding_section():
 
 
 def test_methodology_has_v014_counts():
-    """The v0.16 numbers must appear in the methodology: 476,195
-    total sightings and 328,714 mapped."""
+    """The v0.16.4 numbers must appear in the methodology: 573,210
+    total sightings and 385,211 mapped."""
     html = _read(INDEX_HTML)
-    assert "476,195" in html, "methodology must mention the 476,195 total"
-    assert "328,714" in html, "methodology must mention the 328,714 mapped count"
+    assert "573,210" in html, "methodology must mention the 573,210 total"
+    assert "385,211" in html, "methodology must mention the 385,211 mapped count"
 
 
 def test_methodology_has_movement_section():

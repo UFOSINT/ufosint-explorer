@@ -66,21 +66,37 @@ import psycopg
 
 
 # =============================================================================
-# Expected v0.11 headline numbers (from the science team's handoff)
+# Expected headline numbers for the source SQLite.
+#
+# A tripwire, not documentation: this reload TRUNCATEs production, so it must
+# refuse to run against a source that isn't the build you think it is. Update
+# these deliberately, in the same commit as the build that changes them.
+#
+# v0.16.4 (2026-08-30) — rebuilt corpus. 573,210 sightings across four sources
+# after the mufon.csv import was retired and MUFON coverage recovered from UPDB
+# instead (94,762 rows carrying origin_id = MUFON). NUFORC refreshed from
+# nuforcpy.csv (+2,253 cases). Ten importer regressions fixed in ufo-dedup
+# PR #3, so descriptions, coordinates and record ids are populated across every
+# source again.
+#
+# The previous values were the v0.11 set (614,505 total) — two corpus
+# generations stale, and they would have aborted this reload.
 # =============================================================================
 EXPECTED = {
-    "total": 614_505,
-    "qs60": 118_320,
-    "has_movement": 249_217,
-    "movement_cats_non_empty": 249_217,
-    "coords": 396_165,
-    "std_shape": 236_463,
+    "total": 573_210,
+    "qs60": 92_523,
+    "has_movement": 229_757,
+    "movement_cats_non_empty": 229_757,
+    # sighting.lat/lng, the derived columns — NOT the location table.
+    # First attempt at this value used location.latitude and the tripwire
+    # correctly refused the reload.
+    "coords": 385_218,
+    "std_shape": 236_219,
     "date_correction": 714,
-    # v0.11 — emotion classification columns
-    "emotion_28": 502_985,
-    "emotion_7": 502_985,
-    "vader": 502_985,
-    "roberta": 502_985,
+    "emotion_28": 461_690,
+    "emotion_7": 461_690,
+    "vader": 461_690,
+    "roberta": 461_690,
 }
 
 # Tables the migrator TRUNCATEs and re-populates. Must match the
@@ -350,13 +366,32 @@ def confirm_destructive(pre_info: dict, dry_run: bool) -> None:
         say("  --dry-run active — stopping here, no writes performed.", _CYAN)
         sys.exit(0)
 
+    # v0.16.4 — RELOAD_CONFIRM=YES answers this prompt without a terminal.
+    #
+    # This exists so the reload can be driven by an operator or agent working
+    # non-interactively. It is a real removal of a safety gate: the prompt is
+    # the last thing standing between a typo and a TRUNCATE of production, so
+    # setting the variable is an explicit act, not a convenience default.
+    #
+    # Everything the prompt protects still runs first -- the source-shape
+    # check against EXPECTED, the derived-column check, and the summary of
+    # what will be destroyed. Those abort the reload on their own. This only
+    # replaces the keystroke.
+    #
+    # Nothing in the repo sets it. It has to be supplied on the command line,
+    # per invocation, by someone who has read the summary above it.
     say("  Type YES in uppercase to proceed, anything else aborts.", _YELLOW)
-    try:
-        resp = input("  > ")
-    except (EOFError, KeyboardInterrupt):
-        print()
-        say("Aborted.", _RED)
-        sys.exit(1)
+    if os.environ.get("RELOAD_CONFIRM") == "YES":
+        say("  RELOAD_CONFIRM=YES in the environment — proceeding without a prompt.",
+            _YELLOW)
+        resp = "YES"
+    else:
+        try:
+            resp = input("  > ")
+        except (EOFError, KeyboardInterrupt):
+            print()
+            say("Aborted.", _RED)
+            sys.exit(1)
 
     if resp.strip() != "YES":
         say(f"Got '{resp.strip()}', expected 'YES'. Aborted.", _RED)

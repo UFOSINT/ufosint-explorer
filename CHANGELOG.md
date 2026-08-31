@@ -37,6 +37,30 @@ Tags push automatically to Azure via `.github/workflows/azure-deploy.yml`.
 ### Fixed
 - Intro status line said `CONNECTING TO 5 SOURCES`; the corpus has four.
 
+### Changed (v0.16.4 — rebuilt corpus, MUFON recovered via UPDB)
+- **Corpus is 573,210 sightings**, up from 476,195. Two causes: MUFON coverage
+  recovered through UPDB (94,762 cases, labelled `origin_id = MUFON`) after
+  ufo-dedup stopped skipping them, and NUFORC refreshed from `nuforcpy.csv`
+  (+2,253 cases, a strict superset).
+- **385,211 mapped sightings**, up from 328,714 — a bigger map on a bigger
+  corpus, because ten importer regressions were fixed upstream (ufo-dedup #3).
+  UFOCAT had been discarding every one of its own coordinates.
+- Totals refreshed everywhere: title, meta description, OpenGraph/Twitter
+  cards, JSON-LD, sidebar rail, methodology page, credits, `/llms.txt`,
+  `/llms-full.txt`, MCP surfaces, tool catalog and `README.md`.
+  573,210 total / 385,211 mapped / 461,690 emotion-analysed /
+  229,757 with movement categories / 119,991 duplicate pairs.
+- **Source table corrected.** UPDB's raw size was published as 1,885,757 with
+  1.82M skipped; it is 296,956 with 137,178 skipped. That figure was wrong by
+  roughly six times. Total raw records across all sources is 833,692, not
+  "~2.42 million".
+- The UPDB row now explains what is actually skipped and why: NUFORC-origin
+  rows only, because we import NUFORC directly. Everything else is kept and
+  labelled with the body that originally reported it.
+- `scripts/reload_from_public_db.py` — `EXPECTED` updated to the v0.16.4 build.
+  It was still pinned to the v0.11 numbers (614,505), two corpus generations
+  stale, and would have aborted the reload it exists to perform.
+
 
 ### Fixed (v0.16.2 — basemap "API KEY REQUIRED" watermark)
 - **CARTO now requires an API key on their raster basemaps**, and keyless

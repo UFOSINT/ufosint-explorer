@@ -8,8 +8,8 @@
          effectively just 12px on notched iPhones, pushing the overview
          mini-map under the home indicator / Safari bottom chrome. -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>UFOSINT Explorer — 476,195 UFO sightings, searchable</title>
-    <meta name="description" content="Browse 476,195 deduplicated UFO and UAP sighting records from four major databases on an interactive map, timeline, and full-text search." />
+    <title>UFOSINT Explorer — 573,210 UFO sightings, searchable</title>
+    <meta name="description" content="Browse 573,210 deduplicated UFO and UAP sighting records from four major databases on an interactive map, timeline, and full-text search." />
 
     <!-- v0.15.7 — canonical URL. The azurewebsites.net origin serves
          identical content; without this, search engines may split
@@ -23,15 +23,15 @@
          screenshot, served from /static so it inherits the CDN path. -->
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://ufosint.com/" />
-    <meta property="og:title" content="UFOSINT Explorer — 476,195 UFO sightings, searchable" />
-    <meta property="og:description" content="Interactive map, timeline, and analysis of 476,195 deduplicated UFO/UAP sightings from four major databases. Free, open, no signup." />
+    <meta property="og:title" content="UFOSINT Explorer — 573,210 UFO sightings, searchable" />
+    <meta property="og:description" content="Interactive map, timeline, and analysis of 573,210 deduplicated UFO/UAP sightings from four major databases. Free, open, no signup." />
     <meta property="og:image" content="https://ufosint.com/static/og-card.png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
     <meta property="og:site_name" content="UFOSINT Explorer" />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="UFOSINT Explorer — 476,195 UFO sightings, searchable" />
-    <meta name="twitter:description" content="Interactive map, timeline, and analysis of 476,195 deduplicated UFO/UAP sightings from four major databases. Free, open, no signup." />
+    <meta name="twitter:title" content="UFOSINT Explorer — 573,210 UFO sightings, searchable" />
+    <meta name="twitter:description" content="Interactive map, timeline, and analysis of 573,210 deduplicated UFO/UAP sightings from four major databases. Free, open, no signup." />
     <meta name="twitter:image" content="https://ufosint.com/static/og-card.png" />
 
     <!-- v0.15.7 — SVG favicon (saucer glyph in the site accent color).
@@ -47,13 +47,13 @@
         "@context": "https://schema.org",
         "@type": "Dataset",
         "name": "Unified UFO Sightings Database",
-        "description": "476,195 deduplicated UFO and UAP sighting records from four major databases (NUFORC, UFOCAT, UPDB, UFO-search), cross-referenced and enriched with emotion analysis from 4 transformer models.",
+        "description": "573,210 deduplicated UFO and UAP sighting records from four major databases (NUFORC, UFOCAT, UPDB, UFO-search), cross-referenced and enriched with emotion analysis from 4 transformer models.",
         "url": "https://ufosint.com",
         "keywords": ["UFO", "UAP", "sightings", "NUFORC", "UFOCAT", "unidentified aerial phenomena"],
         "temporalCoverage": "1900/2026",
         "spatialCoverage": { "@type": "Place", "name": "Worldwide" },
         "variableMeasured": [
-            { "@type": "PropertyValue", "name": "total_sightings", "value": 476195 },
+            { "@type": "PropertyValue", "name": "total_sightings", "value": 573210 },
             { "@type": "PropertyValue", "name": "geocoded_sightings", "value": 418077 },
             { "@type": "PropertyValue", "name": "emotion_analyzed", "value": 502985 }
         ],
@@ -338,7 +338,7 @@
                         </button>
                         <div class="rail-body">
                             <div id="rail-visible-count" class="rail-big-count">—</div>
-                            <div class="rail-sub">of <span id="rail-total-count">476,195</span> <span id="rail-visible-pct" class="rail-sub-pct"></span></div>
+                            <div class="rail-sub">of <span id="rail-total-count">573,210</span> <span id="rail-visible-pct" class="rail-sub-pct"></span></div>
                         </div>
                     </section>
                     <!-- v0.11.9 — keep this hidden list in the DOM so
@@ -891,11 +891,11 @@ Content-Type: application/json
                        with emotion analysis and all derived columns.</p>
                     <p class="connect-note"><strong>Heads-up:</strong> the latest published snapshot still predates the
                        removal of the MUFON case-file import and the r/UFOs records, so it contains 618,316 rows rather
-                       than the 476,195 served here. A regenerated snapshot ships with the next tagged release.</p>
+                       than the 573,210 served here. A regenerated snapshot ships with the next tagged release.</p>
                     <pre class="connect-code"><code>curl -LO https://github.com/UFOSINT/ufosint-explorer/releases/latest/download/ufo_public.db
 
 sqlite3 ufo_public.db "SELECT COUNT(*) FROM sighting;"
-# 618316  (pre-removal snapshot; the live database serves 476,195)</code></pre>
+# 618316  (pre-removal snapshot; the live database serves 573,210)</code></pre>
                     <p>See the <a href="#/methodology" class="methodology-link">Methodology tab</a> for the full schema,
                        derived-column definitions, and per-source licensing.
                        Browse the <a href="https://github.com/UFOSINT/ufosint-explorer/releases" target="_blank" rel="noopener">releases page</a>
@@ -939,7 +939,7 @@ DATABASE_URL="postgresql://..." python mcp_server.py</code></pre>
             <div class="methodology">
 
                 <h2>Unified UFO Sightings Database &mdash; Methodology</h2>
-                <p class="meth-intro"><strong>This is not raw data.</strong> UFOSINT Explorer presents a <strong>processed scientific analysis</strong> of four major UFO/UAP databases &mdash; 476,195 sighting records deduplicated, cross-referenced, geocode-verified, quality-scored, LLM-enriched, movement-classified, and emotion-analyzed using four transformer models. Every step of the pipeline is documented below and can be independently replicated from the source data using the open-source <a href="https://github.com/UFOSINT/ufo-dedup" target="_blank" rel="noopener">ufo-dedup</a> pipeline. The web application source code is at <a href="https://github.com/UFOSINT/ufosint-explorer" target="_blank" rel="noopener">ufosint-explorer</a>.</p>
+                <p class="meth-intro"><strong>This is not raw data.</strong> UFOSINT Explorer presents a <strong>processed scientific analysis</strong> of four major UFO/UAP databases &mdash; 573,210 sighting records deduplicated, cross-referenced, geocode-verified, quality-scored, LLM-enriched, movement-classified, and emotion-analyzed using four transformer models. Every step of the pipeline is documented below and can be independently replicated from the source data using the open-source <a href="https://github.com/UFOSINT/ufo-dedup" target="_blank" rel="noopener">ufo-dedup</a> pipeline. The web application source code is at <a href="https://github.com/UFOSINT/ufosint-explorer" target="_blank" rel="noopener">ufosint-explorer</a>.</p>
 
                 <div class="meth-download-banner">
                     <strong>Download the full database</strong>
@@ -965,7 +965,7 @@ DATABASE_URL="postgresql://..." python mcp_server.py</code></pre>
 
                 <!-- ============ Pipeline Overview ============ -->
                 <h3>Pipeline Architecture</h3>
-                <p>The 17-step pipeline transforms ~2.42 million raw records from 4 sources into a unified, analysis-ready database:</p>
+                <p>The 15-step pipeline transforms 833,692 raw records from 4 sources into a unified, analysis-ready database:</p>
 
                 <div class="meth-pipeline-diagram">
                     <pre style="font-family: monospace; font-size: 0.85em; line-height: 1.4; background: var(--bg-card, #1a1a2e); padding: 1.2em; border-radius: 8px; overflow-x: auto;">
@@ -974,7 +974,7 @@ DATABASE_URL="postgresql://..." python mcp_server.py</code></pre>
                 v
             rebuild_db.py  (17 steps, ~30 min)
                 |
-                +-- Steps 1-7:    Import 4 sources (476,195 sightings)
+                +-- Steps 1-7:    Import 4 sources (573,210 sightings)
                 +-- Step 8:       SQL data quality fixes (~30 corrections)
                 +-- Step 9:       Geocode pass 1 (GeoNames offline gazetteer)
                 +-- Step 10:      Audit: fix bad geocodes + replay LLM location fixes
@@ -985,7 +985,7 @@ DATABASE_URL="postgresql://..." python mcp_server.py</code></pre>
                 +-- Step 17:      Export
                 |
                 v
-            ufo_public.db  (476,195 sightings, 100 columns)
+            ufo_public.db  (573,210 sightings, 100 columns)
                     </pre>
                 </div>
 
@@ -1003,13 +1003,13 @@ DATABASE_URL="postgresql://..." python mcp_server.py</code></pre>
                         </tr>
                         <tr>
                             <td><span class="source-badge" style="background:#f28e2b">NUFORC</span></td>
-                            <td>159,320</td><td>159,320</td><td>0</td>
+                            <td>161,573</td><td>161,573</td><td>0</td>
                             <td>National UFO Reporting Center. Self-reported sightings with detailed free-text descriptions. Enriched post-import with 102K Hynek and 83K Vallee classifications from UFOCAT.</td>
                         </tr>
                         <tr>
                             <td><span class="source-badge" style="background:#76b7b2">UPDB</span></td>
-                            <td>1,885,757</td><td>65,016</td><td>1,820,741</td>
-                            <td>Unified Phenomena Database (phenomenAInon). 1.82M rows skipped at import time (NUFORC, and formerly MUFON, already imported from richer originals). Remaining 65K from UFODNA (38K), Blue Book (14K), NICAP (5.8K), etc.</td>
+                            <td>296,956</td><td>159,778</td><td>137,178</td>
+                            <td>Unified Phenomena Database (phenomenAInon). 137,178 NUFORC-origin rows skipped &mdash; we import NUFORC directly from its own richer dataset. Everything else is retained and labelled with the body that originally reported it: MUFON (94,762), UFODNA (38,269), Blue Book (14,035), NICAP (5,841) and others.</td>
                         </tr>
                         <tr>
                             <td><span class="source-badge" style="background:#59a14f">UFO-search</span></td>
@@ -1018,7 +1018,7 @@ DATABASE_URL="postgresql://..." python mcp_server.py</code></pre>
                         </tr>
                     </tbody>
                 </table>
-                <p><strong>Total raw records across all sources: ~2.42 million.</strong> After removing known overlaps at import time: <strong>476,195</strong>.</p>
+                <p><strong>Total raw records across all sources: 833,692.</strong> After removing known overlaps at import time: <strong>573,210</strong>.</p>
 
                 <!-- ============ LLM Data Quality ============ -->
                 <h3>LLM-Powered Data Quality Pipeline</h3>
@@ -1060,7 +1060,7 @@ DATABASE_URL="postgresql://..." python mcp_server.py</code></pre>
                     <li><strong>City + country:</strong> ignores state, picks largest city by population</li>
                     <li><strong>City only:</strong> global lookup, <strong>prefers matches in the expected country</strong> when a US/CA state code is present (v0.14 fix &mdash; prevents wrong-continent matches)</li>
                 </ol>
-                <p><strong>Coverage:</strong> 328,714 of 476,195 sightings (69.0%) have map coordinates. Two geocoding passes run: before and after the LLM location audit.</p>
+                <p><strong>Coverage:</strong> 385,211 of 573,210 sightings (69.0%) have map coordinates. Two geocoding passes run: before and after the LLM location audit.</p>
 
                 <!-- ============ Quality Score ============ -->
                 <h3>Quality Score (0&ndash;100)</h3>
@@ -1147,7 +1147,7 @@ DATABASE_URL="postgresql://..." python mcp_server.py</code></pre>
                     <li><strong>Movement:</strong> hovering, linear, erratic, accelerating, rotating, ascending, descending, vanished, followed, landed</li>
                     <li><strong>Behavior:</strong> hovering, silent, bright, pulsing, rotating, zigzag, vanished, accelerated, split, merged, formation, chased, followed, landed</li>
                 </ul>
-                <p><strong>Coverage:</strong> 166,699 sightings (35.0%) have at least one movement category.</p>
+                <p><strong>Coverage:</strong> 229,757 sightings (35.0%) have at least one movement category.</p>
 
                 <!-- ============ Deduplication ============ -->
                 <h3>Cross-Source Deduplication</h3>
@@ -1159,7 +1159,7 @@ DATABASE_URL="postgresql://..." python mcp_server.py</code></pre>
                         <tr><td>2</td><td>Date-only matches with description fuzzy similarity &ge;60%</td><td>~10K</td></tr>
                     </tbody>
                 </table>
-                <p><strong>Total:</strong> 116,202 duplicate candidate pairs across 476,195 sightings. The MUFON &harr; NUFORC tier disappeared with the case-file import; the figure above is recomputed over the current corpus.</p>
+                <p><strong>Total:</strong> 119,991 duplicate candidate pairs across 573,210 sightings. The MUFON &harr; NUFORC tier disappeared with the case-file import; the figure above is recomputed over the current corpus.</p>
 
                 <!-- ============ Content Policy ============ -->
                 <h3>Content Policy &amp; Privacy</h3>
@@ -1370,7 +1370,7 @@ DATABASE_URL="postgresql://..." python mcp_server.py</code></pre>
         <div class="credits-modal">
             <button class="credits-close" id="credits-close" aria-label="Close credits">&times;</button>
             <h2 class="credits-title">UFOSINT Explorer</h2>
-            <p class="credits-subtitle">A research platform analyzing 476,195 UFO/UAP sighting records from four databases.</p>
+            <p class="credits-subtitle">A research platform analyzing 573,210 UFO/UAP sighting records from four databases.</p>
 
             <div class="credits-role">
                 <h3>Research Direction, Domain &amp; Hosting</h3>
