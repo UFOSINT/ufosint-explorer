@@ -363,13 +363,32 @@ def confirm_destructive(pre_info: dict, dry_run: bool) -> None:
         say("  --dry-run active — stopping here, no writes performed.", _CYAN)
         sys.exit(0)
 
+    # v0.16.4 — RELOAD_CONFIRM=YES answers this prompt without a terminal.
+    #
+    # This exists so the reload can be driven by an operator or agent working
+    # non-interactively. It is a real removal of a safety gate: the prompt is
+    # the last thing standing between a typo and a TRUNCATE of production, so
+    # setting the variable is an explicit act, not a convenience default.
+    #
+    # Everything the prompt protects still runs first -- the source-shape
+    # check against EXPECTED, the derived-column check, and the summary of
+    # what will be destroyed. Those abort the reload on their own. This only
+    # replaces the keystroke.
+    #
+    # Nothing in the repo sets it. It has to be supplied on the command line,
+    # per invocation, by someone who has read the summary above it.
     say("  Type YES in uppercase to proceed, anything else aborts.", _YELLOW)
-    try:
-        resp = input("  > ")
-    except (EOFError, KeyboardInterrupt):
-        print()
-        say("Aborted.", _RED)
-        sys.exit(1)
+    if os.environ.get("RELOAD_CONFIRM") == "YES":
+        say("  RELOAD_CONFIRM=YES in the environment — proceeding without a prompt.",
+            _YELLOW)
+        resp = "YES"
+    else:
+        try:
+            resp = input("  > ")
+        except (EOFError, KeyboardInterrupt):
+            print()
+            say("Aborted.", _RED)
+            sys.exit(1)
 
     if resp.strip() != "YES":
         say(f"Got '{resp.strip()}', expected 'YES'. Aborted.", _RED)
