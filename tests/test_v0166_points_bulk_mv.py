@@ -51,12 +51,14 @@ def test_column_probe_uses_pg_catalog_not_information_schema():
     assert "FROM information_schema" not in body
 
 
-def test_migration_exists_and_is_idempotent():
+def test_migration_rebuilds_the_view_on_every_deploy():
+    """DROP + CREATE rather than CREATE IF NOT EXISTS: the column set has to
+    be able to change. CREATE populates, so no separate REFRESH is needed —
+    but the data must be current after every deploy either way."""
     sql = _read(MIGRATION)
-    assert "CREATE MATERIALIZED VIEW IF NOT EXISTS mv_points_bulk" in sql
-    assert "REFRESH MATERIALIZED VIEW mv_points_bulk" in sql, (
-        "a deploy must publish current data, not just create the view"
-    )
+    assert "DROP MATERIALIZED VIEW IF EXISTS mv_points_bulk" in sql
+    assert "CREATE MATERIALIZED VIEW mv_points_bulk AS" in sql
+    assert sql.find("DROP MATERIALIZED VIEW") < sql.find("CREATE MATERIALIZED VIEW")
 
 
 def test_migration_runs_on_every_deploy():
@@ -66,22 +68,32 @@ def test_migration_runs_on_every_deploy():
     assert wf.count("add_v0166_points_bulk_mv.sql") >= 2
 
 
-def test_mv_columns_cover_what_the_buffer_packs():
-    """Every column the packer reads must exist in the view, or the buffer
-    silently loses that field for every row."""
-    sql = _read(MIGRATION)
+def test_mv_carries_every_column_the_packer_selects():
+    """The first v0.16.6 attempt shipped an MV missing latitude, longitude,
+    shape and date_event. The query died with "missing FROM-clause entry for
+    table l" and the map went dark. This walks the packer's select list and
+    checks each name against the migration."""
     src = _read(APP_PY)
-    start = src.find("_POINTS_BULK_DERIVED_COLS")
-    block = src[start:start + 1500]
-    cols = set(re.findall(r'"([a-z0-9_]+)"', block))
-    # only assert on the ones that are real sighting columns in the packer
-    missing = [c for c in cols
-               if c in {"lat", "lng", "standardized_shape", "quality_score",
-                        "hoax_likelihood", "richness_score", "primary_color",
-                        "dominant_emotion", "has_description", "has_media",
-                        "has_movement_mentioned", "movement_categories",
-                        "emotion_28_dominant", "emotion_28_group",
-                        "emotion_7_dominant", "vader_compound",
-                        "roberta_sentiment"}
-               and c not in sql]
-    assert not missing, f"mv_points_bulk is missing packed columns: {missing}"
+    sql = _read(MIGRATION)
+
+    start = src.find("select_parts = [")
+    block = src[start: src.find("]", start)]
+
+    names = set(re.findall(r'"s\.([a-z0-9_]+)', block))
+    names |= set(re.findall(r'\{_loc\}\.([a-z0-9_]+)', block))
+    names |= set(re.findall(r'_col_expr\("([a-z0-9_]+)"', block))
+    assert "latitude" in names and "longitude" in names, "select list parse failed"
+
+    mv = sql[sql.find("CREATE MATERIALIZED VIEW"): sql.find("FROM sighting s")]
+    missing = sorted(n for n in names if n not in mv)
+    assert not missing, f"mv_points_bulk is missing columns the packer selects: {missing}"
+
+
+def test_location_columns_are_aliased_to_the_active_source():
+    """l.latitude only exists on the fallback join; the MV carries it under s."""
+    src = _read(APP_PY)
+    assert '_loc = "s" if _points_bulk_has_mv(conn) else "l"' in src
+    start = src.find("select_parts = [")
+    block = src[start: src.find("]", start)]
+    assert '"l.latitude"' not in block, "hardcoded l.latitude breaks the MV path"
+    assert '"l.longitude"' not in block
