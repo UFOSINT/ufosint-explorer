@@ -997,7 +997,7 @@ def llms_txt():
     """Lightweight LLM site index — what the site is and where to find things."""
     text = """# UFOSINT Explorer
 
-> Interactive research platform for the Unified UFO Sightings Database — 476,195 sighting records from four UFO/UAP sources (NUFORC, UFOCAT, UPDB, UFO-search), deduplicated and cross-referenced. Free, read-only, no authentication required.
+> Interactive research platform for the Unified UFO Sightings Database — 573,210 sighting records from four UFO/UAP sources (NUFORC, UFOCAT, UPDB, UFO-search), deduplicated and cross-referenced. Free, read-only, no authentication required.
 
 The site provides a GPU-accelerated map of 468,349 geocoded sightings, timeline charts, emotion/sentiment analysis from 4 transformer models, LLM strangeness/anomaly ratings on Reddit sightings, and a full methodology section. All data is queryable via MCP tools or a REST API.
 
@@ -1008,7 +1008,7 @@ If you plan to read more than ~50 records, please do NOT loop over the MCP tools
 ```
 curl -LO https://github.com/UFOSINT/ufosint-explorer/releases/latest/download/ufo_public.db
 sqlite3 ufo_public.db "SELECT COUNT(*) FROM sighting;"
-# should return ~476,195
+# should return ~573,210
 ```
 
 Why download instead of scraping:
@@ -1055,10 +1055,10 @@ There is also a one-click download button in the site's Methodology section at h
 
 ## Data Sources
 
-Four databases totaling ~476,195 deduplicated records:
-- NUFORC (159,320) — National UFO Reporting Center
+Four databases totaling ~573,210 deduplicated records:
+- NUFORC (161,573) — National UFO Reporting Center
 - UFOCAT (197,108) — CUFOS academic catalog
-- UPDB (65,016) — Jacques Vallee's Unified Phenomena Database
+- UPDB (159,778) — Jacques Vallee's Unified Phenomena Database, including 94,762 MUFON-origin cases
 - UFO-search (54,751) — Majestic Timeline historical compilations
 
 Plus three curated overlay tables (UAP Gerb research project, v0.12):
@@ -1074,7 +1074,7 @@ The full 553 MB SQLite snapshot is attached to every tagged release:
 - [All releases](https://github.com/UFOSINT/ufosint-explorer/releases) — browse version history
 - [One-click download button](https://ufosint.com/#methodology-downloads) — for humans; same file
 
-Quick start with the SQLite CLI: `sqlite3 ufo_public.db "SELECT COUNT(*) FROM sighting;"` should return ~476,195. Full schema in [docs/ARCHITECTURE.md](https://github.com/UFOSINT/ufosint-explorer/blob/main/docs/ARCHITECTURE.md).
+Quick start with the SQLite CLI: `sqlite3 ufo_public.db "SELECT COUNT(*) FROM sighting;"` should return ~573,210. Full schema in [docs/ARCHITECTURE.md](https://github.com/UFOSINT/ufosint-explorer/blob/main/docs/ARCHITECTURE.md).
 
 ## Optional
 
@@ -1165,7 +1165,7 @@ def llms_full_txt():
         "",
         "# Inspect",
         "sqlite3 ufo_public.db \".tables\"",
-        "sqlite3 ufo_public.db \"SELECT COUNT(*) FROM sighting;\"  # 476195",
+        "sqlite3 ufo_public.db \"SELECT COUNT(*) FROM sighting;\"  # 573210",
         "```",
         "",
         "Privacy note: the public DB has raw narrative text stripped (description / summary / notes",
@@ -1174,15 +1174,15 @@ def llms_full_txt():
         "",
         "## Data Overview",
         "",
-        "- **Total sightings:** 476,195",
-        "- **Mapped (geocoded):** 328,714",
-        "- **With emotion analysis:** 365,600",
+        "- **Total sightings:** 573,210",
+        "- **Mapped (geocoded):** 385,211",
+        "- **With emotion analysis:** 461,690",
         "- **Date range:** 1900 to 2026 (primary), with scattered records back to antiquity",
         "- **Sources:** NUFORC, UFOCAT, UPDB, UFO-search",
         "",
         "## Emotion & Sentiment Models (v0.11)",
         "",
-        "Four models run on 365,600 sightings with narrative text:",
+        "Four models run on 461,690 sightings with narrative text:",
         "- RoBERTa 3-class sentiment (positive/negative/neutral)",
         "- RoBERTa 7-class emotion (anger/disgust/fear/joy/neutral/sadness/surprise)",
         "- GoEmotions 28-class (admiration through surprise, 28 labels)",
@@ -1202,7 +1202,7 @@ def well_known_mcp():
             "name": "ufosint-mcp",
             "version": "0.11.2",
             "description": (
-                "Search and analyze 476,195 UFO sightings from 4 major "
+                "Search and analyze 573,210 UFO sightings from 4 major "
                 "databases (NUFORC, UFOCAT, UPDB, UFO-search). "
                 "Read-only, no authentication required."
             ),

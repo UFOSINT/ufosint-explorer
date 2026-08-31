@@ -271,7 +271,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     try {
         if (!localStorage.getItem(TOUR_STORAGE_KEY)) {
             const stats = await statsPromise.catch(() => null);
-            const total = stats ? stats.total_sightings : 476195;
+            const total = stats ? stats.total_sightings : 573210;
             startTour(false, total);
         } else {
             skipCinematicIntro();
@@ -307,7 +307,7 @@ const TERMINAL_MESSAGE_BANKS = {
     ],
     search: [
         "TOKENIZING QUERY",
-        "SCANNING 476,195 SIGHTING RECORDS",
+        "SCANNING 573,210 SIGHTING RECORDS",
         "CROSS-REFERENCING DESCRIPTIONS",
         "APPLYING SHAPE + DATE FILTERS",
         "RANKING BY RELEVANCE",
@@ -342,7 +342,7 @@ const TERMINAL_MESSAGE_BANKS = {
         "BOOT SEQUENCE INITIATED",
         "CONTACTING CORTEX NODE",
         "DECRYPTING FILTER CACHE",
-        "LOADING 476,195 SIGHTINGS",
+        "LOADING 573,210 SIGHTINGS",
         "READY",
     ],
 };
@@ -7500,7 +7500,7 @@ const PROVIDER_DEFAULTS = {
 };
 
 const SYSTEM_PROMPT = `You are an assistant for the UFOSINT unified UFO sightings database.
-You help users explore 476,195 deduplicated sighting records from 4 sources
+You help users explore 573,210 deduplicated sighting records from 4 sources
 (NUFORC, UFOCAT, UPDB, UFO-search) covering dates from antiquity to 2026.
 
 You have access to tools that query the database read-only:
@@ -8492,7 +8492,7 @@ function startTour(skipIntro, total) {
     }
 
     if (!skipIntro) {
-        runCinematicIntro(total || 476195).then(() => {
+        runCinematicIntro(total || 573210).then(() => {
             _beginTourSteps();
         });
     } else {

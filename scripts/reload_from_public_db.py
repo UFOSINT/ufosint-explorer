@@ -66,21 +66,34 @@ import psycopg
 
 
 # =============================================================================
-# Expected v0.11 headline numbers (from the science team's handoff)
+# Expected headline numbers for the source SQLite.
+#
+# A tripwire, not documentation: this reload TRUNCATEs production, so it must
+# refuse to run against a source that isn't the build you think it is. Update
+# these deliberately, in the same commit as the build that changes them.
+#
+# v0.16.4 (2026-08-30) — rebuilt corpus. 573,210 sightings across four sources
+# after the mufon.csv import was retired and MUFON coverage recovered from UPDB
+# instead (94,762 rows carrying origin_id = MUFON). NUFORC refreshed from
+# nuforcpy.csv (+2,253 cases). Ten importer regressions fixed in ufo-dedup
+# PR #3, so descriptions, coordinates and record ids are populated across every
+# source again.
+#
+# The previous values were the v0.11 set (614,505 total) — two corpus
+# generations stale, and they would have aborted this reload.
 # =============================================================================
 EXPECTED = {
-    "total": 614_505,
-    "qs60": 118_320,
-    "has_movement": 249_217,
-    "movement_cats_non_empty": 249_217,
-    "coords": 396_165,
-    "std_shape": 236_463,
+    "total": 573_210,
+    "qs60": 92_523,
+    "has_movement": 229_757,
+    "movement_cats_non_empty": 229_757,
+    "coords": 96_873,
+    "std_shape": 236_219,
     "date_correction": 714,
-    # v0.11 — emotion classification columns
-    "emotion_28": 502_985,
-    "emotion_7": 502_985,
-    "vader": 502_985,
-    "roberta": 502_985,
+    "emotion_28": 461_690,
+    "emotion_7": 461_690,
+    "vader": 461_690,
+    "roberta": 461_690,
 }
 
 # Tables the migrator TRUNCATEs and re-populates. Must match the

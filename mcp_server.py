@@ -63,7 +63,7 @@ mcp = FastMCP(
     "ufosint",
     instructions=(
         "You are connected to the unified UFO sightings database "
-        "(476,195 records from NUFORC, UFOCAT, UPDB, UFO-search, "
+        "(573,210 records from NUFORC, UFOCAT, UPDB, UFO-search, "
         "deduplicated and cross-referenced). Use get_stats first to get the "
         "lay of the land, then search_sightings, get_sighting, get_timeline, "
         "find_duplicates_for, and count_by to dig in. All access is read-only."
