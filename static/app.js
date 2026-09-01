@@ -1748,18 +1748,25 @@ function initMap() {
         // Below zoom 1 the basemap is unreadable and the dots collapse
         // into a single smear; there's nothing to see further out.
         minZoom: 1,
-        // Keep the viewport on the one real world. Leaflet repeats the
-        // basemap horizontally by default, but deck.gl draws each point
-        // once at its true longitude — so without this the wrapped copies
-        // render as empty continents.
-        maxBounds: [[-85, -180], [85, 180]],
-        maxBoundsViscosity: 0.8,
+        // v0.16.8 — no maxBounds. Leaflet repeats the basemap
+        // horizontally and we want that back: it lets you pan across the
+        // antimeridian without hitting a wall, which is how this map
+        // behaved before v0.16.7.
     });
 
     // Stop at 60°S/75°N: Antarctica and the high Arctic hold no sightings
     // and only cost vertical space, which on a wide viewport is what
     // forces the zoom down a step.
     state.map.fitBounds([[-60, -170], [75, 179]], { animate: false });
+
+    // v0.16.8 — then one step in, which is exactly what a click on the
+    // "+" control does (Leaflet's zoomIn() steps by `zoomDelta`, 1 by
+    // default). The bare fit leaves the world floating in dead space on a
+    // wide viewport; one step in fills the frame and lands the dot
+    // density where it reads. This deliberately crops the far edges —
+    // the world no longer fits, which is why horizontal tiling above
+    // matters: panning out of frame wraps rather than dead-ends.
+    state.map.zoomIn(1, { animate: false });
 
     // v0.8.4 — stash the tile layer on state so setTheme() can
     // call state.tileLayer.setUrl() to swap the tile source without
@@ -1768,9 +1775,11 @@ function initMap() {
         attribution: TILE_ATTRIBUTION,
         maxZoom: 19,
         detectRetina: true,
-        // Pairs with maxBounds above — suppresses the repeated world
-        // copies that would otherwise show basemap with no dots on it.
-        noWrap: true,
+        // v0.16.8 — noWrap stays off (Leaflet's default) so the basemap
+        // tiles horizontally. Note the known cosmetic consequence: deck.gl
+        // draws each point once at its true longitude, so the repeated
+        // copies carry basemap but no dots. That is how the map behaved
+        // before v0.16.7 and is the tradeoff for seamless panning.
     }).addTo(state.map);
 
     // v0.8.0: Try to boot the deck.gl GPU path. If WebGL or deck.gl
