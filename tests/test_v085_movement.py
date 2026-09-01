@@ -142,9 +142,11 @@ def test_migrator_includes_movement_fields():
 # ---------------------------------------------------------------------------
 def test_points_bulk_schema_version_is_v083_1():
     # v0.14: bumped to v014-1 (48B rows, 8 NRC Lexicon cols added).
+    # v0.16.9: bumped to v0169-1 to invalidate buffers cached before
+    # the NRC backfill — a content change the ETag could not see.
     # Test name preserved for history.
     src = _read(APP_PY)
-    assert '_POINTS_BULK_SCHEMA_VERSION = "v014-1"' in src
+    assert '_POINTS_BULK_SCHEMA_VERSION = "v0169-1"' in src
 
 
 def test_points_bulk_bytes_per_row_is_32():

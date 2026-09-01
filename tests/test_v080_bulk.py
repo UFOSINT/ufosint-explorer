@@ -268,8 +268,9 @@ def test_points_bulk_meta_returns_schema_and_lookups(client, monkeypatch):
 
     # v0.8.5 shape (v0.8.3b data layer)
     assert meta["count"] == len(_SAMPLE_SIGHTINGS)
-    # v0.14: schema bumped from v011-1 (40B) to v014-1 (48B) for NRC
-    assert meta["schema_version"] == "v014-1"
+    # v0.14: schema bumped from v011-1 (40B) to v014-1 (48B) for NRC.
+    # v0.16.9: bumped to v0169-1 after the NRC in-place backfill.
+    assert meta["schema_version"] == "v0169-1"
     assert meta["schema"]["bytes_per_row"] == 48
     assert meta["schema"]["endian"] == "little"
     assert meta["schema"]["score_unknown"] == 255

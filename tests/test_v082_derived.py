@@ -172,9 +172,16 @@ def test_migrator_has_pg_column_probe():
 # ---------------------------------------------------------------------------
 def test_app_schema_version_bumped():
     """v0.14 bumped the schema to v014-1 (48-byte row with
-    8 NRC Lexicon word-count columns added)."""
+    8 NRC Lexicon word-count columns added).
+
+    v0.16.9 bumped it again to v0169-1 — not for a layout change (the
+    row is still 48 bytes) but to invalidate cached buffers after the
+    NRC columns were backfilled in place. Nothing the ETag is built
+    from moved, so without the bump every worker and browser would
+    have kept serving the zero-filled copy.
+    """
     src = _read(APP_PY)
-    assert '_POINTS_BULK_SCHEMA_VERSION = "v014-1"' in src
+    assert '_POINTS_BULK_SCHEMA_VERSION = "v0169-1"' in src
 
 
 def test_app_bytes_per_row_is_28():
