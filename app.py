@@ -1825,7 +1825,19 @@ def api_hexbin():
 # Row grows from 28 to 32 bytes, staying 4-byte aligned so V8's
 # optimized Uint32Array reads on `id` don't fall on unaligned
 # offsets. See docs/V085_MOVEMENT_PLAN.md for the full layout.
-_POINTS_BULK_SCHEMA_VERSION = "v014-1"
+# v0.16.9 — bumped to invalidate every cached buffer after the NRC
+# backfill. The NRC columns went from all-NULL to 292,315 populated rows
+# *in place*: same row count, same max id, same columns, same sources,
+# same shapes. Every signal the ETag is built from was unchanged, so both
+# the per-worker @lru_cache and every browser's hour-long cached copy
+# would have kept serving zeros indefinitely — the exact stale-buffer
+# trap the v0.8.6 note above describes.
+#
+# Bumping this constant is the designed lever for an in-place content
+# repair: it costs nothing per request, unlike adding another fingerprint
+# query to _points_bulk_etag(). Any future backfill that rewrites buffer
+# payload without changing row counts must bump it too.
+_POINTS_BULK_SCHEMA_VERSION = "v0169-1"
 _POINTS_BULK_BYTES_PER_ROW = 48
 # Little-endian row format, 48 bytes:
 #   I  uint32  id                (offset 0)
