@@ -5,10 +5,20 @@ The corpus stopped being US-only, but the map still opened at
 added in v0.16.5 was effectively undiscoverable, because every non-US
 sighting sat outside the first thing a visitor ever sees.
 
-The wrapping asserts below are not cosmetic. Leaflet repeats the basemap
-horizontally by default; deck.gl draws each point once at its true
-longitude. At the zoom levels a world view actually uses, that mismatch
-renders as empty duplicate continents flanking the real one.
+v0.16.8 amended this twice-over:
+
+  - The default is one zoom step in from the fitted bounds — what a click
+    on the "+" control gives you. The bare fit framed the world with dead
+    space around it.
+  - Horizontal tiling is allowed again. v0.16.7 had set `noWrap` and
+    `maxBounds` to hide a real mismatch (Leaflet repeats the basemap;
+    deck.gl draws each point once, so the copies carry no dots), but
+    stepping in past the fit crops the edges, and walling off the pan at
+    one world width is worse than the cosmetic duplication.
+
+So the wrap assertions below are deliberately inverted from v0.16.7's.
+Restoring `noWrap` would re-break panning, which is why this is pinned
+rather than left to comments.
 """
 from __future__ import annotations
 
@@ -65,8 +75,36 @@ def test_initial_view_fits_world_bounds():
     )
 
 
-def test_world_copies_are_suppressed():
-    """Wrapped basemap copies would render as empty continents."""
+def test_default_view_is_one_step_in_from_the_fit():
+    """v0.16.8 — the bare fit leaves the world floating in dead space.
+
+    One zoom step in is what a click on the "+" control does, so the
+    default lands where the dot density reads instead of at the widest
+    possible framing.
+    """
     block = _init_map_block()
-    assert "noWrap: true" in block, "tile layer must set noWrap"
-    assert "maxBounds" in block, "map must constrain panning to one world"
+    m = re.search(r"zoomIn\(\s*(\d+)", block)
+    assert m, "initMap must step in from the fitted bounds via zoomIn()"
+    assert int(m.group(1)) == 1, (
+        f"expected a single zoom step (one '+' click), got {m.group(1)}"
+    )
+    # Order matters: zoomIn before fitBounds would be discarded.
+    assert block.find("fitBounds") < block.find("zoomIn"), (
+        "zoomIn must run after fitBounds or the fit overwrites it"
+    )
+
+
+def test_horizontal_tiling_is_allowed():
+    """v0.16.8 reverted v0.16.7's wrap suppression.
+
+    Stepping in past the fit crops the far edges, so panning across the
+    antimeridian has to wrap rather than hit a wall. `noWrap` and
+    `maxBounds` would each reintroduce that wall.
+    """
+    block = _init_map_block()
+    assert "noWrap" not in block, (
+        "noWrap blocks the repeated basemap — horizontal tiling is wanted"
+    )
+    assert "maxBounds" not in block, (
+        "maxBounds walls off horizontal panning at one world width"
+    )
