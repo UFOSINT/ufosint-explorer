@@ -1731,11 +1731,35 @@ function _currentTheme() {
 
 
 function initMap() {
+    // v0.16.7 — default to the world, not the contiguous US. The corpus
+    // is US-heavy but no longer US-only, and country filtering has no
+    // discoverable entry point if the map opens already zoomed past every
+    // non-US sighting.
+    //
+    // A fixed zoom can't express "the whole world" across viewports: the
+    // world is 256 * 2^zoom px wide, so zoom 2 (1024 px) overflows a
+    // ~390 px phone and underfills a wide desktop. fitBounds lets Leaflet
+    // solve for the zoom instead. center/zoom here are only the pre-fit
+    // values — fitBounds overrides them on the next line.
     state.map = L.map("map", {
-        center: [39, -98],
-        zoom: 4,
+        center: [20, 0],
+        zoom: 2,
         preferCanvas: true,
+        // Below zoom 1 the basemap is unreadable and the dots collapse
+        // into a single smear; there's nothing to see further out.
+        minZoom: 1,
+        // Keep the viewport on the one real world. Leaflet repeats the
+        // basemap horizontally by default, but deck.gl draws each point
+        // once at its true longitude — so without this the wrapped copies
+        // render as empty continents.
+        maxBounds: [[-85, -180], [85, 180]],
+        maxBoundsViscosity: 0.8,
     });
+
+    // Stop at 60°S/75°N: Antarctica and the high Arctic hold no sightings
+    // and only cost vertical space, which on a wide viewport is what
+    // forces the zoom down a step.
+    state.map.fitBounds([[-60, -170], [75, 179]], { animate: false });
 
     // v0.8.4 — stash the tile layer on state so setTheme() can
     // call state.tileLayer.setUrl() to swap the tile source without
@@ -1744,6 +1768,9 @@ function initMap() {
         attribution: TILE_ATTRIBUTION,
         maxZoom: 19,
         detectRetina: true,
+        // Pairs with maxBounds above — suppresses the repeated world
+        // copies that would otherwise show basemap with no dots on it.
+        noWrap: true,
     }).addTo(state.map);
 
     // v0.8.0: Try to boot the deck.gl GPU path. If WebGL or deck.gl
