@@ -580,7 +580,27 @@ def step4_migrate(url: str) -> None:
         if "MISMATCH" in line and "date_correction" not in line
     ]
 
+    # A crashed migrator emits a traceback and no MISMATCH lines at all, so
+    # checking only for mismatches made an abort indistinguishable from a
+    # clean run. crash_retrieval's COPY has been failing this way for
+    # several releases and every reload reported it as the expected
+    # false-positive; it went unnoticed only because that table happens to
+    # be copied last. Had it not been, tables would have been silently
+    # dropped from the reload.
+    crashed = [
+        line for line in captured_lines
+        if "Traceback (most recent call last)" in line
+        or "psycopg.errors." in line
+    ]
+
     if rc != 0:
+        if crashed:
+            fail("migrator did not finish — it raised rather than mismatched:")
+            for line in crashed[:4]:
+                print(f"    {line.strip()}")
+            say("  Tables ordered after the failure did NOT copy. Do not "
+                "treat this as a false-positive.", _YELLOW)
+            sys.exit(4)
         if mismatches:
             fail("migrator reported unexpected mismatches:")
             for m in mismatches:

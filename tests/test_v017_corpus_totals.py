@@ -102,3 +102,55 @@ def test_points_bulk_schema_version_was_bumped():
         f"expected v017-1, found {m.group(1)} — a stale client buffer would "
         "colour and filter by the wrong source"
     )
+
+
+# ---------------------------------------------------------------------------
+# crash_retrieval — the failure the reload script kept calling a false-positive
+# ---------------------------------------------------------------------------
+
+MIGRATION = ROOT / "scripts" / "add_v017_crash_retrieval_text.sql"
+DEPLOY_YML = ROOT / ".github" / "workflows" / "azure-deploy.yml"
+MIGRATOR = ROOT / "scripts" / "migrate_sqlite_to_pg.py"
+RELOAD = ROOT / "scripts" / "reload_from_public_db.py"
+
+
+def test_crash_retrieval_migration_exists_and_is_idempotent():
+    assert MIGRATION.exists()
+    sql = MIGRATION.read_text(encoding="utf-8")
+    assert "craft_size_m" in sql and "TYPE text" in sql
+    assert "data_type <> 'text'" in sql, (
+        "the ALTER must be guarded so re-running on every deploy is a no-op"
+    )
+
+
+def test_crash_retrieval_migration_is_deployed():
+    yml = DEPLOY_YML.read_text(encoding="utf-8")
+    assert yml.count("add_v017_crash_retrieval_text.sql") >= 2, (
+        "migration must be in both the sparse-checkout list and the psql loop"
+    )
+
+
+def test_migrator_nulls_empty_strings_for_non_text_columns():
+    """SQLite writes "" where the schema says numeric; Postgres rejects it."""
+    src = MIGRATOR.read_text(encoding="utf-8")
+    assert "def pg_non_text_columns" in src
+    assert 'row[i] = None' in src
+
+
+def test_reload_does_not_treat_a_crash_as_the_known_false_positive():
+    """A migrator that raises emits no MISMATCH lines.
+
+    Checking only for mismatches made an abort indistinguishable from a
+    clean run, so crash_retrieval's COPY failure was reported as expected
+    on every reload for several releases. It was harmless only because
+    that table is copied last.
+    """
+    src = RELOAD.read_text(encoding="utf-8")
+    assert "Traceback (most recent call last)" in src, (
+        "the reload must detect a crashed migrator, not just mismatches"
+    )
+    crash_at = src.find("crashed = [")
+    false_pos_at = src.find("expected date_correction false-positive")
+    assert crash_at != -1 and crash_at < false_pos_at, (
+        "the crash check must run before the false-positive branch"
+    )

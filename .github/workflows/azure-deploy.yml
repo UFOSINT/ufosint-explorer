@@ -135,6 +135,7 @@ jobs:
             scripts/add_v013_reddit_columns.sql
             scripts/add_v014_audit_columns.sql
             scripts/add_v0166_points_bulk_mv.sql
+            scripts/add_v017_crash_retrieval_text.sql
           sparse-checkout-cone-mode: false
           path: migrations
 
@@ -247,7 +248,8 @@ jobs:
               migrations/scripts/add_v012_gerb_nrc_columns.sql \
               migrations/scripts/add_v013_reddit_columns.sql \
               migrations/scripts/add_v014_audit_columns.sql \
-              migrations/scripts/add_v0166_points_bulk_mv.sql; do
+              migrations/scripts/add_v0166_points_bulk_mv.sql \
+              migrations/scripts/add_v017_crash_retrieval_text.sql; do
             if [ -f "$f" ]; then
               echo "Running $f …"
               psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
