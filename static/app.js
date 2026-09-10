@@ -44,11 +44,17 @@ const FILTER_FIELDS = [
 // source_database table names returned by /api/filters.
 // v0.16 — the MUFON and r/UFOs entries were dropped along with their
 // source rows; sourceColor() falls back to grey for anything unlisted.
+// Every source the corpus actually contains needs an entry here. A miss
+// falls back to grey, which on a stacked chart is indistinguishable from
+// "not rendered" — Capella shipped that way in v0.17 and looked absent.
+// NUFORC keeps its colour: it holds no sightings since v0.17, but it is
+// still a source_origin label and the two vocabularies overlap by name.
 const SOURCE_COLORS = {
     "UFOCAT":    { bg: "#4e79a7", border: "#3a5d82" },
     "NUFORC":    { bg: "#f28e2b", border: "#c97520" },
     "UPDB":      { bg: "#76b7b2", border: "#5d9490" },
     "UFO-search": { bg: "#59a14f", border: "#478240" },
+    "Capella":   { bg: "#b07aa1", border: "#8d6180" },
 };
 
 function sourceColor(name) {
@@ -9574,6 +9580,7 @@ const _RAIL_SOURCE_COLORS = {
     "NUFORC":     "#f28e2b",  // orange
     "UPDB":       "#76b7b2",  // teal
     "UFO-search": "#59a14f",  // green
+    "Capella":    "#b07aa1",  // purple
 };
 const _RAIL_SOURCE_KEYS = {
     "UFOCAT": "ufocat",
@@ -9581,6 +9588,7 @@ const _RAIL_SOURCE_KEYS = {
     "MUFON": "mufon",
     "UPDB": "updb",
     "UFO-search": "ufo-search",
+    "Capella": "capella",
 };
 
 function refreshRailAnalytics() {
