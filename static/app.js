@@ -5593,7 +5593,22 @@ function renderTimelineMainChart(stacked) {
     const labels = stacked.years.slice(start, end + 1);
     const sourceCount = stacked.sources.length;
     const datasets = [];
+    // v0.17 — skip sources that hold nothing anywhere in the corpus.
+    // POINTS.sources keeps a slot for every source_database row so that
+    // source_idx stays stable, retired imports included, so without this
+    // the legend advertises MUFON, NUFORC and r/UFOs as bands that are
+    // zero-height at every year.
+    //
+    // Uses corpus-wide totals rather than the counts in this (view- and
+    // filter-trimmed) histogram on purpose: a legend that adds and drops
+    // entries as the user drags the brush is harder to read than one that
+    // stays put.
+    const sourceTotals = (window.UFODeck.getSourceTotals &&
+                          window.UFODeck.getSourceTotals()) || null;
     for (let s = 1; s < sourceCount; s++) {  // skip index 0 ("unknown")
+        if (sourceTotals && sourceTotals.length > s && sourceTotals[s] === 0) {
+            continue;
+        }
         const name = stacked.sources[s] || "Unknown";
         const c = sourceColor(name);
         const data = new Array(labels.length);
