@@ -477,7 +477,29 @@ def init_filters():
         """)
         FILTER_CACHE["shapes"] = [r[0] for r in cur.fetchall()]
 
-        cur.execute("SELECT id, name FROM source_database ORDER BY name")
+        # Only sources that actually have sightings. source_database keeps
+        # rows for retired imports — MUFON and r/UFOs since the v0.16 purge,
+        # NUFORC since v0.17 moved it to origin-only — and offering those as
+        # filters promises results that cannot exist. Selecting NUFORC and
+        # getting nothing back reads as a broken site, not an empty set.
+        #
+        # This deliberately does NOT match the identical-looking query in
+        # _points_bulk_build_cached(), which must keep every row so that
+        # source_idx stays stable: the packed buffer numbers sources by
+        # their position in that list, and dropping one renumbers the rest.
+        # The client resolves a filter choice via POINTS.sources.indexOf(name),
+        # so it looks names up in the buffer's full list and the two lists
+        # are free to differ. Making them "consistent" would shift every
+        # source_idx byte and repaint the map by the wrong source — the
+        # v0.13 "selecting r/UFOs paints everything pink" failure.
+        cur.execute("""
+            SELECT sd.id, sd.name
+            FROM source_database sd
+            WHERE EXISTS (
+                SELECT 1 FROM sighting s WHERE s.source_db_id = sd.id
+            )
+            ORDER BY sd.name
+        """)
         FILTER_CACHE["sources"] = [
             {"id": r[0], "name": r[1]} for r in cur.fetchall()
         ]
@@ -2332,6 +2354,11 @@ def _points_bulk_build_cached(etag: str) -> tuple[bytes, bytes, dict]:
         # gets labelled instead of disappearing. Orphaned rows are
         # also counted in cov["orphaned_source"] so the client can
         # detect the integrity issue via the meta sidecar.
+        # Every source_database row, including those with zero sightings.
+        # Do not filter this to non-empty sources to match /api/filters:
+        # source_idx is this list's position, so dropping a row renumbers
+        # every source after it and every cached client buffer starts
+        # colouring by the wrong one.
         cur.execute("SELECT id, name FROM source_database ORDER BY name")
         source_rows = cur.fetchall()
         source_names = ["(unknown)"] + [r[1] for r in source_rows]
