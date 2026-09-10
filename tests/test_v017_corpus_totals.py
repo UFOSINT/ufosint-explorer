@@ -154,3 +154,42 @@ def test_reload_does_not_treat_a_crash_as_the_known_false_positive():
     assert crash_at != -1 and crash_at < false_pos_at, (
         "the crash check must run before the false-positive branch"
     )
+
+
+# ---------------------------------------------------------------------------
+# Source filter list vs the packed buffer's source list
+# ---------------------------------------------------------------------------
+
+def test_filter_list_excludes_sources_with_no_sightings():
+    """source_database keeps rows for retired imports.
+
+    MUFON and r/UFOs since the v0.16 purge, NUFORC since v0.17 moved it to
+    origin-only. Offering them as filters promises results that cannot
+    exist, and selecting NUFORC and getting nothing back reads as a broken
+    site rather than an empty set.
+    """
+    src = APP_PY.read_text(encoding="utf-8")
+    start = src.find('FILTER_CACHE["sources"]')
+    assert start != -1
+    block = src[max(0, start - 1200):start]
+    assert "EXISTS" in block and "FROM sighting s" in block, (
+        "the sources filter must be restricted to sources that have rows"
+    )
+
+
+def test_packed_buffer_still_lists_every_source():
+    """source_idx is a position in this list, so it must not be filtered.
+
+    Making it "consistent" with /api/filters would renumber every source
+    after the dropped one, and cached client buffers would colour and
+    filter by the wrong source — the v0.13 "selecting r/UFOs paints
+    everything pink" failure. The client looks names up via
+    POINTS.sources.indexOf(), so the two lists are free to differ.
+    """
+    src = APP_PY.read_text(encoding="utf-8")
+    start = src.find("source_rows = cur.fetchall()")
+    assert start != -1
+    block = src[max(0, start - 900):start]
+    assert "EXISTS" not in block, (
+        "the buffer's source list must stay unfiltered or source_idx shifts"
+    )
