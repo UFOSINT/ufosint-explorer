@@ -236,3 +236,62 @@ def test_timeline_skips_sources_with_no_rows():
     assert "sourceTotals" in block and "continue" in block, (
         "the timeline must skip sources with a corpus-wide count of zero"
     )
+
+
+# ---------------------------------------------------------------------------
+# Every live source needs a colour
+# ---------------------------------------------------------------------------
+
+def _js_map_keys(js, const_name):
+    """Quoted keys of a `const NAME = { ... };` object literal."""
+    start = js.find(f"const {const_name} = {{")
+    assert start != -1, f"{const_name} not found"
+    end = js.find("};", start)
+    return set(re.findall(r'"([^"]+)"\s*:', js[start:end]))
+
+
+def test_every_live_source_has_a_chart_colour():
+    """A missing entry falls back to grey, which on a stacked chart is
+    indistinguishable from "not rendered".
+
+    Capella shipped that way in v0.17: it was drawing 11,064 rows on the
+    timeline as a grey band about 2% of the stack, and read as absent.
+    """
+    js = APP_JS.read_text(encoding="utf-8")
+    coloured = _js_map_keys(js, "SOURCE_COLORS")
+    missing = SOURCES - coloured
+    assert not missing, f"no chart colour for {missing} — they render grey"
+
+
+def test_every_live_source_has_a_rail_colour():
+    js = APP_JS.read_text(encoding="utf-8")
+    coloured = _js_map_keys(js, "_RAIL_SOURCE_COLORS")
+    missing = SOURCES - coloured
+    assert not missing, f"no rail colour for {missing} — they render #888"
+
+
+def test_source_colours_are_distinct():
+    """Two sources sharing a colour is unreadable on a stacked chart."""
+    js = APP_JS.read_text(encoding="utf-8")
+    start = js.find("const SOURCE_COLORS = {")
+    block = js[start:js.find("};", start)]
+    bgs = re.findall(r'bg:\s*"(#[0-9a-fA-F]{6})"', block)
+    assert len(bgs) == len(set(bgs)), f"duplicate source colours: {bgs}"
+
+
+def test_methodology_badge_matches_the_chart_colour():
+    """The badge is hand-written inline CSS, so it drifts silently.
+
+    Capella's badge inherited NUFORC's orange when that table row was
+    rewritten, while its chart colour was grey — three different answers
+    for one source.
+    """
+    js = APP_JS.read_text(encoding="utf-8")
+    html = INDEX.read_text(encoding="utf-8")
+    start = js.find("const SOURCE_COLORS = {")
+    block = js[start:js.find("};", start)]
+    m = re.search(r'"Capella":\s*\{\s*bg:\s*"(#[0-9a-fA-F]{6})"', block)
+    assert m, "Capella has no chart colour"
+    assert f'style="background:{m.group(1)}">Capella<' in html, (
+        "the methodology badge must use Capella's chart colour"
+    )
