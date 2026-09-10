@@ -1386,6 +1386,34 @@
     function getColors()   { return POINTS.colors   || [null]; }
     function getEmotions() { return POINTS.emotions || [null]; }
     function getSources()  { return POINTS.sources  || [null]; }
+
+    // v0.17 — corpus-wide row count per source index, computed once.
+    //
+    // POINTS.sources carries every source_database row so that source_idx
+    // stays a stable position, which means it also carries sources that
+    // hold no sightings at all: MUFON and r/UFOs since the v0.16 purge,
+    // NUFORC since v0.17 made it an origin rather than a source. Anything
+    // that renders one entry per source needs to know which are real.
+    //
+    // Deliberately counts the WHOLE dataset, not the visible set. Callers
+    // use this to decide whether a source exists, and a legend that
+    // reshuffles itself every time the user drags a brush is worse than
+    // one carrying a couple of dead entries.
+    let _sourceTotals = null;
+    function getSourceTotals() {
+        if (_sourceTotals) return _sourceTotals;
+        const names = POINTS.sources || [null];
+        const totals = new Uint32Array(names.length);
+        const si = POINTS.sourceIdx;
+        if (si) {
+            for (let i = 0; i < si.length; i++) {
+                const s = si[i];
+                if (s < totals.length) totals[s]++;
+            }
+            _sourceTotals = totals;
+        }
+        return totals;
+    }
     function getShapeSource() { return POINTS.shapeSource || "raw"; }
 
     // -----------------------------------------------------------------
@@ -1886,6 +1914,7 @@
         // v0.8.6 — aggregate helpers for Timeline page + Insights
         getYearHistogramBySource,
         getYearHistogramForVisible,
+        getSourceTotals,
         computeMedianByYear,
         computeMovementShareByYear,
         countVisible,

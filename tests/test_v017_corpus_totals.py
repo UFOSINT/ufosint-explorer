@@ -193,3 +193,46 @@ def test_packed_buffer_still_lists_every_source():
     assert "EXISTS" not in block, (
         "the buffer's source list must stay unfiltered or source_idx shifts"
     )
+
+
+# ---------------------------------------------------------------------------
+# Timeline legend
+# ---------------------------------------------------------------------------
+
+APP_JS = ROOT / "static" / "app.js"
+DECK_JS = ROOT / "static" / "deck.js"
+
+
+def test_deck_exposes_corpus_wide_source_totals():
+    """Anything rendering one entry per source needs to know which are real.
+
+    POINTS.sources keeps a slot for every source_database row so source_idx
+    stays a stable position — retired imports included.
+    """
+    js = DECK_JS.read_text(encoding="utf-8")
+    assert "function getSourceTotals()" in js
+    start = js.find("function getSourceTotals()")
+    body = js[start:start + 700]
+    assert "POINTS.sourceIdx" in body
+    assert "visibleIdx" not in body, (
+        "source totals must cover the whole corpus, not the visible set — a "
+        "legend that reshuffles while the user drags a brush is worse than "
+        "one carrying a dead entry"
+    )
+    # And it must actually be reachable from app.js.
+    assert "getSourceTotals," in js, "getSourceTotals must be exported"
+
+
+def test_timeline_skips_sources_with_no_rows():
+    """MUFON, NUFORC and r/UFOs would otherwise appear as zero-height bands.
+
+    The stacked timeline built one dataset per source index, so every
+    retired source became a legend entry that is zero at every year.
+    """
+    js = APP_JS.read_text(encoding="utf-8")
+    anchor = js.find('for (let s = 1; s < sourceCount; s++)')
+    assert anchor != -1, "the stacked-timeline dataset loop moved"
+    block = js[anchor:anchor + 400]
+    assert "sourceTotals" in block and "continue" in block, (
+        "the timeline must skip sources with a corpus-wide count of zero"
+    )
