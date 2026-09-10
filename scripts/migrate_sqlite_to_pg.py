@@ -172,6 +172,29 @@ def pg_columns(pg_conn, table):
         return [row[0] for row in cur.fetchall()]
 
 
+def pg_non_text_columns(pg_conn, table):
+    """Columns whose PG type cannot accept an empty string.
+
+    SQLite is permissive about types and happily stores "" in a column
+    the pipeline treats as a float; Postgres is not, and COPY dies with
+    `invalid input syntax for type real: ""`. crash_retrieval.craft_size_m
+    has done exactly that on every reload, aborting the migrator after
+    the real work was done — masked because it is the last table copied.
+    """
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = %s
+              AND data_type NOT IN ('text', 'character varying', 'character',
+                                    'json', 'jsonb')
+            """,
+            (table,),
+        )
+        return {r[0] for r in cur.fetchall()}
+
+
 def stream_table(sq_conn, table, columns):
     """Yield rows from SQLite, with missing columns filled with None and
     in the order specified by `columns`."""
@@ -224,11 +247,23 @@ def copy_table(sq_conn, pg_conn, table, columns):
     cols_sql = ", ".join(filtered)
     copy_sql = f"COPY {table} ({cols_sql}) FROM STDIN"
 
+    # An empty string is SQLite's way of saying "no value" in a column the
+    # schema calls numeric. Postgres rejects it outright, so translate it
+    # back to NULL for exactly those columns — text columns keep "" as a
+    # meaningful, distinct value.
+    non_text = pg_non_text_columns(pg_conn, table)
+    null_idx = [i for i, c in enumerate(filtered) if c in non_text]
+
     rows_done = 0
     with pg_conn.cursor() as pg_cur:
         with pg_cur.copy(copy_sql) as cp:
             for chunk in stream_table(sq_conn, table, filtered):
                 for row in chunk:
+                    if null_idx:
+                        row = list(row)
+                        for i in null_idx:
+                            if row[i] == "":
+                                row[i] = None
                     cp.write_row(row)
                 rows_done += len(chunk)
 

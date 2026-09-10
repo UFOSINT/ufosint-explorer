@@ -997,9 +997,9 @@ def llms_txt():
     """Lightweight LLM site index — what the site is and where to find things."""
     text = """# UFOSINT Explorer
 
-> Interactive research platform for the Unified UFO Sightings Database — 573,210 sighting records from four UFO/UAP sources (NUFORC, UFOCAT, UPDB, UFO-search), deduplicated and cross-referenced. Free, read-only, no authentication required.
+> Interactive research platform for the Unified UFO Sightings Database — 702,572 sighting records from four UFO/UAP sources (UFOCAT, UPDB, UFO-search, Capella), deduplicated and cross-referenced. Free, read-only, no authentication required.
 
-The site provides a GPU-accelerated map of 468,349 geocoded sightings, timeline charts, emotion/sentiment analysis from 4 transformer models, LLM strangeness/anomaly ratings on Reddit sightings, and a full methodology section. All data is queryable via MCP tools or a REST API.
+The site provides a GPU-accelerated map of 493,879 geocoded sightings, timeline charts, emotion/sentiment analysis from 4 transformer models, and a full methodology section. All data is queryable via MCP tools or a REST API.
 
 ## For AI Agents / Bulk Analysis — DOWNLOAD THE SQLITE, DO NOT SCRAPE
 
@@ -1008,7 +1008,7 @@ If you plan to read more than ~50 records, please do NOT loop over the MCP tools
 ```
 curl -LO https://github.com/UFOSINT/ufosint-explorer/releases/latest/download/ufo_public.db
 sqlite3 ufo_public.db "SELECT COUNT(*) FROM sighting;"
-# should return ~573,210
+# should return ~702,572
 ```
 
 Why download instead of scraping:
@@ -1055,11 +1055,15 @@ There is also a one-click download button in the site's Methodology section at h
 
 ## Data Sources
 
-Four databases totaling ~573,210 deduplicated records:
-- NUFORC (161,573) — National UFO Reporting Center
-- UFOCAT (197,108) — CUFOS academic catalog
-- UPDB (159,778) — Jacques Vallee's Unified Phenomena Database, including 94,762 MUFON-origin cases
+Four databases totaling ~702,572 deduplicated records:
+- UFOCAT (320,412) — CUFOS academic catalog
+- UPDB (296,956) — Jacques Vallee's Unified Phenomena Database
 - UFO-search (54,751) — Majestic Timeline historical compilations
+- Capella (30,453) — PhenomAInon case corpus (0toAI LLC), factual fields only
+
+NUFORC is no longer imported directly. Its cases reach us through both
+aggregators instead and are labelled with origin NUFORC — 260,482 records.
+MUFON (95,683) and Blue Book (15,544) arrive the same way.
 
 Plus three curated overlay tables (UAP Gerb research project, v0.12):
 - `crash_retrieval` (14) — documented crash/retrieval events with craft type, recovery status, biologics
@@ -1074,7 +1078,7 @@ The full 553 MB SQLite snapshot is attached to every tagged release:
 - [All releases](https://github.com/UFOSINT/ufosint-explorer/releases) — browse version history
 - [One-click download button](https://ufosint.com/#methodology-downloads) — for humans; same file
 
-Quick start with the SQLite CLI: `sqlite3 ufo_public.db "SELECT COUNT(*) FROM sighting;"` should return ~573,210. Full schema in [docs/ARCHITECTURE.md](https://github.com/UFOSINT/ufosint-explorer/blob/main/docs/ARCHITECTURE.md).
+Quick start with the SQLite CLI: `sqlite3 ufo_public.db "SELECT COUNT(*) FROM sighting;"` should return ~702,572. Full schema in [docs/ARCHITECTURE.md](https://github.com/UFOSINT/ufosint-explorer/blob/main/docs/ARCHITECTURE.md).
 
 ## Optional
 
@@ -1165,7 +1169,7 @@ def llms_full_txt():
         "",
         "# Inspect",
         "sqlite3 ufo_public.db \".tables\"",
-        "sqlite3 ufo_public.db \"SELECT COUNT(*) FROM sighting;\"  # 573210",
+        "sqlite3 ufo_public.db \"SELECT COUNT(*) FROM sighting;\"  # 702572",
         "```",
         "",
         "Privacy note: the public DB has raw narrative text stripped (description / summary / notes",
@@ -1174,15 +1178,15 @@ def llms_full_txt():
         "",
         "## Data Overview",
         "",
-        "- **Total sightings:** 573,210",
-        "- **Mapped (geocoded):** 385,211",
-        "- **With emotion analysis:** 461,690",
+        "- **Total sightings:** 702,572",
+        "- **Mapped (geocoded):** 493,879",
+        "- **With emotion analysis:** 506,788",
         "- **Date range:** 1900 to 2026 (primary), with scattered records back to antiquity",
-        "- **Sources:** NUFORC, UFOCAT, UPDB, UFO-search",
+        "- **Sources:** UFOCAT, UPDB, UFO-search, Capella",
         "",
         "## Emotion & Sentiment Models (v0.11)",
         "",
-        "Four models run on 461,690 sightings with narrative text:",
+        "Four models run on 506,788 sightings with narrative text:",
         "- RoBERTa 3-class sentiment (positive/negative/neutral)",
         "- RoBERTa 7-class emotion (anger/disgust/fear/joy/neutral/sadness/surprise)",
         "- GoEmotions 28-class (admiration through surprise, 28 labels)",
@@ -1202,8 +1206,8 @@ def well_known_mcp():
             "name": "ufosint-mcp",
             "version": "0.11.2",
             "description": (
-                "Search and analyze 573,210 UFO sightings from 4 major "
-                "databases (NUFORC, UFOCAT, UPDB, UFO-search). "
+                "Search and analyze 702,572 UFO sightings from 4 major "
+                "databases (UFOCAT, UPDB, UFO-search, Capella). "
                 "Read-only, no authentication required."
             ),
             "homepage": "https://ufosint.com",
@@ -1837,7 +1841,16 @@ def api_hexbin():
 # repair: it costs nothing per request, unlike adding another fingerprint
 # query to _points_bulk_etag(). Any future backfill that rewrites buffer
 # payload without changing row counts must bump it too.
-_POINTS_BULK_SCHEMA_VERSION = "v0169-1"
+# v0.17 — the corpus was rebuilt: NUFORC's direct import retired, both
+# aggregators now retain NUFORC-origin rows, and Capella added. Source
+# indices in the packed buffer are assigned by sorting source names
+# alphabetically, so dropping NUFORC and adding Capella shifts the
+# source_idx byte of essentially every row. A stale client buffer paired
+# with a fresh meta sidecar would then colour and filter by the wrong
+# source — the "selecting r/UFOs paints everything pink" failure. The
+# src/id fingerprint in the etag should catch this on its own; the bump
+# means we are not relying on that.
+_POINTS_BULK_SCHEMA_VERSION = "v017-1"
 _POINTS_BULK_BYTES_PER_ROW = 48
 # Little-endian row format, 48 bytes:
 #   I  uint32  id                (offset 0)

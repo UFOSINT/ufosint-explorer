@@ -179,11 +179,16 @@ def test_methodology_has_geocoding_section():
 
 
 def test_methodology_has_v014_counts():
-    """The v0.16.4 numbers must appear in the methodology: 573,210
-    total sightings and 385,211 mapped."""
+    """The v0.17 numbers must appear in the methodology: 702,572 total
+    sightings and 493,879 mapped.
+
+    Mapped coverage rose sharply because the aggregator rows that replaced
+    the direct NUFORC import carry lat/lng far more often than NUFORC's
+    free-text locations did.
+    """
     html = _read(INDEX_HTML)
-    assert "573,210" in html, "methodology must mention the 573,210 total"
-    assert "385,211" in html, "methodology must mention the 385,211 mapped count"
+    assert "702,572" in html, "methodology must mention the 702,572 total"
+    assert "493,879" in html, "methodology must mention the 493,879 mapped count"
 
 
 def test_methodology_has_movement_section():

@@ -82,21 +82,37 @@ import psycopg
 # The previous values were the v0.11 set (614,505 total) — two corpus
 # generations stale, and they would have aborted this reload.
 # =============================================================================
+# v0.17 build. NUFORC's direct import was retired and both aggregators now
+# retain the NUFORC-origin rows they used to skip, so the corpus grew from
+# 573,210 to 702,572 and its character changed with it:
+#
+#   coords     385,218 -> 493,879   aggregator rows carry lat/lng far more
+#                                   often than NUFORC's free-text locations
+#   qs60        92,523 ->  33,897   NUFORC supplied long first-person
+#                                   narratives; UPDB/UFOCAT summaries are
+#                                   terse, so richness — and the quality
+#                                   score built on it — fell hard
+#   std_shape  236,219 -> 211,940   fewer rows carry a shape field at all
+#
+# The qs60 collapse is expected, not a defect, but it is the number to
+# re-examine first if the site looks wrong after a reload.
 EXPECTED = {
-    "total": 573_210,
-    "qs60": 92_523,
-    "has_movement": 229_757,
-    "movement_cats_non_empty": 229_757,
+    "total": 702_572,
+    "qs60": 33_897,
+    "has_movement": 254_415,
+    "movement_cats_non_empty": 254_415,
     # sighting.lat/lng, the derived columns — NOT the location table.
     # First attempt at this value used location.latitude and the tripwire
     # correctly refused the reload.
-    "coords": 385_218,
-    "std_shape": 236_219,
+    "coords": 493_879,
+    "std_shape": 211_940,
+    # Counted on the *existing* Postgres before the reload, not in the
+    # incoming file — the public export has no date_correction table.
     "date_correction": 714,
-    "emotion_28": 461_690,
-    "emotion_7": 461_690,
-    "vader": 461_690,
-    "roberta": 461_690,
+    "emotion_28": 506_788,
+    "emotion_7": 506_788,
+    "vader": 506_788,
+    "roberta": 506_788,
 }
 
 # Tables the migrator TRUNCATEs and re-populates. Must match the
@@ -564,7 +580,27 @@ def step4_migrate(url: str) -> None:
         if "MISMATCH" in line and "date_correction" not in line
     ]
 
+    # A crashed migrator emits a traceback and no MISMATCH lines at all, so
+    # checking only for mismatches made an abort indistinguishable from a
+    # clean run. crash_retrieval's COPY has been failing this way for
+    # several releases and every reload reported it as the expected
+    # false-positive; it went unnoticed only because that table happens to
+    # be copied last. Had it not been, tables would have been silently
+    # dropped from the reload.
+    crashed = [
+        line for line in captured_lines
+        if "Traceback (most recent call last)" in line
+        or "psycopg.errors." in line
+    ]
+
     if rc != 0:
+        if crashed:
+            fail("migrator did not finish — it raised rather than mismatched:")
+            for line in crashed[:4]:
+                print(f"    {line.strip()}")
+            say("  Tables ordered after the failure did NOT copy. Do not "
+                "treat this as a false-positive.", _YELLOW)
+            sys.exit(4)
         if mismatches:
             fail("migrator reported unexpected mismatches:")
             for m in mismatches:

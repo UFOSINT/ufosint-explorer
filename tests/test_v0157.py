@@ -43,7 +43,8 @@ def test_og_card_asset_exists():
 
 
 def test_no_stale_counts_in_index():
-    """v0.16.4 raised the corpus to 573,210 (rebuild + MUFON via UPDB).
+    """v0.17 raised the corpus to 702,572 (NUFORC retired to origin-only,
+    both aggregators retaining, Capella added).
 
     618,316 is still allowed to appear once, in the download card that
     warns the published SQLite snapshot predates the purge — but it must
@@ -52,10 +53,12 @@ def test_no_stale_counts_in_index():
     html = _read(INDEX_HTML)
     assert "614,505" not in html
     assert "614505" not in html
-    assert "573,210" in html
+    assert "573,210" not in html, "the pre-v0.17 total must be gone"
+    assert "702,572" in html
 
     head = html[: html.find("</head>")]
-    for stale in ("476,195", "476195", "618,316", "618316", "614,505"):
+    for stale in ("476,195", "476195", "618,316", "618316", "614,505",
+                  "573,210", "573210"):
         assert stale not in head, (
             f"stale total {stale!r} leaked back into the document head"
         )
