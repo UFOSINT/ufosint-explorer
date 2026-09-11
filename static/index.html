@@ -889,13 +889,13 @@ Content-Type: application/json
                     <p>Want to run your own analysis, train models, or hack on the data offline?
                        A full SQLite snapshot is attached to every tagged release on GitHub &mdash;
                        with emotion analysis and all derived columns.</p>
-                    <p class="connect-note"><strong>Heads-up:</strong> the latest published snapshot still predates the
-                       removal of the MUFON case-file import and the r/UFOs records, so it contains 618,316 rows rather
-                       than the 702,572 served here. A regenerated snapshot ships with the next tagged release.</p>
+                    <p class="connect-note"><strong>v0.17.0</strong> — the published snapshot now matches the live
+                       database: 702,572 records, including the Capella (PhenomAInon) source and NUFORC as an origin.
+                       Raw narrative text is not included; <code>has_description</code> tells you which records have one.</p>
                     <pre class="connect-code"><code>curl -LO https://github.com/UFOSINT/ufosint-explorer/releases/latest/download/ufo_public.db
 
 sqlite3 ufo_public.db "SELECT COUNT(*) FROM sighting;"
-# 618316  (pre-removal snapshot; the live database serves 702,572)</code></pre>
+# 702572</code></pre>
                     <p>See the <a href="#/methodology" class="methodology-link">Methodology tab</a> for the full schema,
                        derived-column definitions, and per-source licensing.
                        Browse the <a href="https://github.com/UFOSINT/ufosint-explorer/releases" target="_blank" rel="noopener">releases page</a>
