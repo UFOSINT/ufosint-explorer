@@ -4,7 +4,12 @@ v0.8.5 data reload orchestrator — one-command runbook.
 
 Runs the full v0.8.3b data reload from data/output/ufo_public.db into
 Azure Postgres, handling TRUNCATE + drop-FK + migrate + re-add-FK +
-verify in a single Python process. Idempotent where possible,
+verify + restore-narrative-text in a single Python process.
+
+That last step is not optional. ufo_public.db strips narrative text by
+design, so a reload without it leaves every detail page advertising a
+description it cannot show. It used to be a manual step that lived
+nowhere, and the v0.17 reload duly wiped 468,251 descriptions. Idempotent where possible,
 destructive where necessary, with a YES-confirmation gate before any
 table gets TRUNCATEd.
 
@@ -139,6 +144,11 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent                      # ufosint-explorer/
 WORKSPACE_ROOT = REPO_ROOT.parent                  # UFOSINT/ (contains data/)
 PUBLIC_SQLITE = WORKSPACE_ROOT / "data" / "output" / "ufo_public.db"
+# The unpublished working DB. ufo_public.db strips narrative text by
+# design, but the live site shows a description on the detail page, so
+# Postgres has to carry text the published SQLite does not. Step 7
+# copies it across; see that function for why this is not optional.
+UNIFIED_SQLITE = WORKSPACE_ROOT / "data" / "output" / "ufo_unified.db"
 MIGRATOR_PY = SCRIPT_DIR / "migrate_sqlite_to_pg.py"
 
 
@@ -689,6 +699,128 @@ def step6_verify(url: str) -> bool:
     return True
 
 
+
+# =============================================================================
+# Step 7 — restore narrative text
+# =============================================================================
+DESC_CHUNK = 10_000
+
+
+def step7_restore_descriptions(url: str) -> bool:
+    """Copy sighting.description from the unpublished working DB.
+
+    ufo_public.db strips narrative text on purpose — it is the artifact we
+    publish and the text is licensed — but the site's detail page shows a
+    description, so production carries text the published file does not.
+
+    Every reload before this one therefore emptied the column across the
+    whole corpus, and the detail page went back to advertising narratives
+    it could not show: has_description 1, description null. The v0.17
+    reload wiped 468,251 of them and reintroduced a bug that had already
+    been reported and fixed once, because restoring them was a manual
+    step that lived nowhere.
+
+    Returns True if the text is in place, False if it is not. A caller
+    that ignores the return value ships the broken state, which is
+    exactly how this was missed before.
+    """
+    banner("STEP 7 — Restore narrative text")
+    # perf_counter, not time() — elapsed() subtracts from perf_counter and
+    # mixing the two clocks prints a nonsense duration.
+    t0 = time.perf_counter()
+
+    if not UNIFIED_SQLITE.exists():
+        fail(f"{UNIFIED_SQLITE.name} not found at {UNIFIED_SQLITE}")
+        say("  Postgres now has NO narrative text: every detail page will", _YELLOW)
+        say("  show has_description=1 with an empty body. The reload itself", _YELLOW)
+        say("  succeeded — this step did not. Re-run it with the working DB", _YELLOW)
+        say("  present, or apply ufo-dedup/scripts/export_descriptions.py.", _YELLOW)
+        return False
+
+    sq = sqlite3.connect(f"file:{UNIFIED_SQLITE}?mode=ro", uri=True)
+    total = sq.execute(
+        "SELECT COUNT(*) FROM sighting "
+        "WHERE description IS NOT NULL AND description != ''"
+    ).fetchone()[0]
+    say(f"  source: {UNIFIED_SQLITE.name} ({total:,} rows with text)")
+
+    conn = psycopg.connect(url)
+    conn.autocommit = True
+    try:
+        cur = conn.cursor()
+        cur.execute("DROP TABLE IF EXISTS desc_restore")
+        cur.execute(
+            "CREATE TABLE desc_restore (id integer PRIMARY KEY, description text)"
+        )
+
+        # Stream SQLite -> COPY so a 300 MB CSV never has to exist on disk.
+        say("  staging text...")
+        with cur.copy("COPY desc_restore (id, description) FROM STDIN") as cp:
+            for row in sq.execute(
+                "SELECT id, description FROM sighting "
+                "WHERE description IS NOT NULL AND description != '' ORDER BY id"
+            ):
+                cp.write_row(row)
+        staged = cur.execute("SELECT COUNT(*) FROM desc_restore").fetchone()[0]
+        ok(f"staged {staged:,} rows ({elapsed(t0)})")
+
+        # Ids are copied verbatim across the SQLite/Postgres boundary, so a
+        # non-zero orphan count means these two files are from different
+        # builds and the text would land on the wrong sightings.
+        orphans = cur.execute(
+            "SELECT COUNT(*) FROM desc_restore d "
+            "LEFT JOIN sighting s ON s.id = d.id WHERE s.id IS NULL"
+        ).fetchone()[0]
+        if orphans:
+            fail(f"{orphans:,} staged ids do not exist in sighting")
+            say("  ufo_unified.db and ufo_public.db are from different "
+                "builds. Refusing to write text onto mismatched ids.", _YELLOW)
+            cur.execute("DROP TABLE IF EXISTS desc_restore")
+            return False
+        ok("every staged id matches a sighting (0 orphans)")
+
+        # Chunked, because the single-statement version of this update runs
+        # for 10+ minutes in IO wait and leaves enough dead tuples behind
+        # that /health's count query exceeds its 25s timeout and 503s.
+        lo, hi_max = cur.execute(
+            "SELECT MIN(id), MAX(id) FROM desc_restore"
+        ).fetchone()
+        say(f"  applying in chunks of {DESC_CHUNK:,} (expect ~15-20 min)...")
+        done = 0
+        chunk_no = 0
+        while lo is not None and lo <= hi_max:
+            cur.execute(
+                "WITH upd AS ("
+                "  UPDATE sighting s SET description = d.description "
+                "  FROM desc_restore d "
+                "  WHERE d.id = s.id AND d.id >= %s AND d.id < %s "
+                "    AND s.description IS DISTINCT FROM d.description "
+                "  RETURNING 1) SELECT COUNT(*) FROM upd",
+                (lo, lo + DESC_CHUNK),
+            )
+            done += cur.fetchone()[0]
+            chunk_no += 1
+            if chunk_no % 10 == 0:
+                cur.execute("VACUUM (ANALYZE) sighting")
+                say(f"    {done:,} / {staged:,} ({elapsed(t0)})")
+            lo += DESC_CHUNK
+
+        cur.execute("VACUUM (ANALYZE) sighting")
+        cur.execute("DROP TABLE IF EXISTS desc_restore")
+
+        final = cur.execute(
+            "SELECT COUNT(description) FROM sighting"
+        ).fetchone()[0]
+        if final != staged:
+            fail(f"expected {staged:,} descriptions, found {final:,}")
+            return False
+        ok(f"{final:,} descriptions restored ({elapsed(t0)})")
+        return True
+    finally:
+        sq.close()
+        conn.close()
+
+
 # =============================================================================
 # Main
 # =============================================================================
@@ -743,9 +875,12 @@ def main() -> int:
     step4_migrate(url)
     step5_readd_fk(url)
     ok_status = step6_verify(url)
+    # Runs even when verify failed: the data is already on PG either way,
+    # and leaving the corpus without narrative text is its own outage.
+    desc_ok = step7_restore_descriptions(url)
 
     print()
-    if ok_status:
+    if ok_status and desc_ok:
         banner("RELOAD COMPLETE ✓", _GREEN)
         say(f"  Total elapsed: {elapsed(t_total)}", _GREEN)
         say("", _GREEN)
@@ -753,6 +888,14 @@ def main() -> int:
         say("  toggle is now enabled and the marker count matches 396,165.", _GREEN)
         say("  The /api/points-bulk ETag invalidates automatically on next hit.", _GREEN)
         return 0
+    elif ok_status and not desc_ok:
+        banner("RELOAD COMPLETE — BUT NARRATIVE TEXT IS MISSING", _YELLOW)
+        say(f"  Total elapsed: {elapsed(t_total)}", _YELLOW)
+        say("  Every headline number matches, so the map and filters are", _YELLOW)
+        say("  fine. But sighting.description is empty, so every detail page", _YELLOW)
+        say("  will show has_description=1 with nothing under it.", _YELLOW)
+        say("  Fix step 7 and re-run before calling this done.", _YELLOW)
+        return 6
     else:
         banner("RELOAD FAILED — REVIEW VERIFY OUTPUT", _RED)
         say(f"  Elapsed: {elapsed(t_total)}", _RED)
