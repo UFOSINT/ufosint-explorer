@@ -1463,7 +1463,10 @@
     // v0.11.3 — color-by mode + dot size for ScatterplotLayer.
     // Set via setColorByMode() and setDotSize() from app.js.
     let _colorByMode = "default";   // "default" | "source" | "shape" | "color"
-    let _dotSizePixels = 2.5;       // radiusMinPixels — controlled by slider
+    // The default dot size is also the smallest: the slider can only
+    // enlarge dots. Keep in sync with #dot-size-slider's min/value.
+    const DOT_SIZE_DEFAULT = 2.5;
+    let _dotSizePixels = DOT_SIZE_DEFAULT;  // radiusMinPixels — controlled by slider
 
     // Color LUTs — categorical palettes for each color-by mode.
     // Source palette matches the existing --cat-N CSS variables.
@@ -1686,7 +1689,7 @@
     }
 
     function setDotSize(px) {
-        const v = Math.max(0.5, Math.min(15, Number(px) || 2.5));
+        const v = Math.max(DOT_SIZE_DEFAULT, Math.min(15, Number(px) || DOT_SIZE_DEFAULT));
         if (v === _dotSizePixels) return;
         _dotSizePixels = v;
         refreshActiveLayer();

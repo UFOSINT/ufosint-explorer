@@ -295,3 +295,32 @@ def test_methodology_badge_matches_the_chart_colour():
     assert f'style="background:{m.group(1)}">Capella<' in html, (
         "the methodology badge must use Capella's chart colour"
     )
+
+
+def test_other_surfaces_quote_the_headline_total():
+    """app.js, the MCP servers and the README also quote the corpus size.
+
+    These were missed by the v0.17 sweep and kept advertising 573,210:
+    the intro animation's fallback, the search loading ticker, the AI
+    chat system prompt, both MCP `instructions` strings, and the README.
+    """
+    html = INDEX.read_text(encoding="utf-8")
+    headline = re.search(
+        r"<title>[^<]*?([0-9]{3},[0-9]{3})[^<]*</title>", html
+    ).group(1)
+    bare = headline.replace(",", "")
+    for rel in ("static/app.js", "mcp_server.py", "mcp_http.py", "README.md"):
+        text = (ROOT / rel).read_text(encoding="utf-8")
+        assert headline in text or bare in text, f"{rel} never quotes {headline}"
+        for stale in ("573,210", "573210"):
+            assert stale not in text, f"{rel} still quotes the pre-v0.17 total"
+
+
+def test_mapped_count_agrees_between_index_and_app_py():
+    """The geocoded count in the JSON-LD must match llms.txt."""
+    html = INDEX.read_text(encoding="utf-8")
+    m = re.search(r'"geocoded_sightings", "value": (\d+)', html)
+    assert m
+    mapped = f"{int(m.group(1)):,}"
+    assert mapped in html.replace(m.group(0), ""), "methodology coverage line disagrees"
+    assert mapped in APP_PY.read_text(encoding="utf-8")
