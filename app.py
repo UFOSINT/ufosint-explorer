@@ -1021,7 +1021,7 @@ def llms_txt():
 
 > Interactive research platform for the Unified UFO Sightings Database — 702,572 sighting records from four UFO/UAP sources (UFOCAT, UPDB, UFO-search, Capella), deduplicated and cross-referenced. Free, read-only, no authentication required.
 
-The site provides a GPU-accelerated map of 493,879 geocoded sightings, timeline charts, emotion/sentiment analysis from 4 transformer models, and a full methodology section. All data is queryable via MCP tools or a REST API.
+The site provides a GPU-accelerated map of 493,845 geocoded sightings, timeline charts, emotion/sentiment analysis from 4 transformer models, and a full methodology section. All data is queryable via MCP tools or a REST API.
 
 ## For AI Agents / Bulk Analysis — DOWNLOAD THE SQLITE, DO NOT SCRAPE
 
@@ -1201,7 +1201,7 @@ def llms_full_txt():
         "## Data Overview",
         "",
         "- **Total sightings:** 702,572",
-        "- **Mapped (geocoded):** 493,879",
+        "- **Mapped (geocoded):** 493,845",
         "- **With emotion analysis:** 506,788",
         "- **Date range:** 1900 to 2026 (primary), with scattered records back to antiquity",
         "- **Sources:** UFOCAT, UPDB, UFO-search, Capella",
