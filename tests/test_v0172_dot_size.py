@@ -1,9 +1,9 @@
 """v0.17.2 — the smallest dot size is the default dot size.
 
-The Points SIZE slider used to start at 3 and go down to 1 while
-deck.js actually rendered 2.5px on load, so the slider misreported
-the current size and could shrink dots below the default. The default
-is now also the floor: the slider only enlarges dots.
+The Points SIZE slider used to start at 3 while deck.js actually
+rendered 2.5px on load, so the slider misreported the current size.
+The default and the floor are now both 1px: dots load at the smallest
+size and the slider only enlarges them.
 """
 from __future__ import annotations
 
