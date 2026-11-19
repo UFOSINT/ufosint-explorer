@@ -1465,7 +1465,7 @@
     let _colorByMode = "default";   // "default" | "source" | "shape" | "color"
     // The default dot size is also the smallest: the slider can only
     // enlarge dots. Keep in sync with #dot-size-slider's min/value.
-    const DOT_SIZE_DEFAULT = 2.5;
+    const DOT_SIZE_DEFAULT = 1;
     let _dotSizePixels = DOT_SIZE_DEFAULT;  // radiusMinPixels — controlled by slider
 
     // Color LUTs — categorical palettes for each color-by mode.
